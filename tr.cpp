@@ -222,7 +222,7 @@ struct node_comparer {
     {
         constexpr unsigned cbits = get_cbits<UInt, NDim>();
         constexpr unsigned ndigits = std::numeric_limits<UInt>::digits;
-        // TODO fixme clzl.
+        // TODO clzl, assert nonzero.
         assert(!((ndigits - 1u - unsigned(__builtin_clzl(n1))) % NDim));
         assert(!((ndigits - 1u - unsigned(__builtin_clzl(n2))) % NDim));
         const auto tl1 = static_cast<unsigned>((ndigits - 1u - unsigned(__builtin_clzl(n1))) / NDim);
@@ -267,12 +267,26 @@ int main()
 
     // Manual.
     // Let's pick a "random" particle.
-    const std::size_t pidx = 100;
+    const std::size_t pidx = nparts / 2;
     const auto code = std::get<0>(tree[pidx]);
     std::cout << "Code:" << std::bitset<64>(code) << '\n';
-    const auto tl = (unsigned(std::numeric_limits<std::uint64_t>::digits) - 1u - unsigned(__builtin_clzl(code))) / 3u;
+    auto get_tl = [](auto c) {
+        return (unsigned(std::numeric_limits<std::uint64_t>::digits) - 1u - unsigned(__builtin_clzl(c))) / 3u;
+    };
+    const auto tl = get_tl(code);
     std::cout << "Tree level: " << tl << '\n';
-    std::cout << "First octant: " << std::bitset<3>(((code >> ((tl - 1u) * 3u))) & (7u)) << '\n';
-    std::cout << "Second octant: " << std::bitset<3>(((code >> ((tl - 2u) * 3u))) & (7u)) << '\n';
-    std::cout << "Sixth octant: " << std::bitset<3>(((code >> ((tl - 6u) * 3u))) & (7u)) << '\n';
+    const auto f_oct = ((code >> ((tl - 1u) * 3u))) & 7u;
+    std::cout << "First octant: " << std::bitset<3>(f_oct) << '\n';
+    auto begin = tree.begin();
+    auto end = tree.end();
+    for (auto i = 1u; i < 8u; ++i) {
+        const auto bab = ((f_oct + i) % 8u);
+        auto it = std::lower_bound(begin, end, bab, [get_tl](const auto &t, const auto b) {
+            const auto c = std::get<0>(t);
+            const auto tl = get_tl(c);
+            return ((c >> ((tl - 1u) * 3u)) & 7u) < b;
+        });
+        std::cout << std::bitset<64>(std::get<0>(*it)) << '\n';
+        std::cout << std::get<1>(*it) << '\n';
+    }
 }
