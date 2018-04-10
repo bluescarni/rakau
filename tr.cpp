@@ -116,7 +116,7 @@ inline void get_particle_codes(F size, std::size_t nparts, PIt p_it, MIt m_it, C
         // Compute the code.
         p.first = me(disc_coord(*c_its)...);
         // Store the mass and the real coordinates.
-        p.second = std::make_tuple(*m_it, *c_its...);
+        p.second = std::tie(*m_it, *c_its...);
         // Increase the other iterators.
         ++m_it, (..., ++c_its);
     }
@@ -135,42 +135,44 @@ inline void get_particle_codes(F size, std::size_t nparts, PIt p_it, MIt m_it, C
     }
 }
 
-template <unsigned Level, std::size_t NDim>
+template <unsigned ParentLevel, std::size_t NDim>
 struct l_comparer {
     template <typename UInt>
     bool operator()(UInt code, UInt b) const
     {
+        static_assert(NDim < std::numeric_limits<UInt>::digits);
+        assert(b <= (UInt(1) << NDim));
         constexpr auto cbits = get_cbits<UInt, NDim>();
-        static_assert(cbits > Level);
-        static_assert((cbits - Level) / NDim <= std::numeric_limits<unsigned>::max());
-        return extract_bits<(NDim * (cbits - Level - 1u)), (NDim * (cbits - Level))>(code) < b;
+        static_assert(cbits > ParentLevel);
+        static_assert((cbits - ParentLevel) / NDim <= std::numeric_limits<unsigned>::max());
+        return extract_bits<(NDim * (cbits - ParentLevel - 1u)), (NDim * (cbits - ParentLevel))>(code) < b;
     }
 };
 
-template <unsigned Level, std::size_t NDim, typename UInt,
-          typename = std::integral_constant<bool, (get_cbits<UInt, NDim>() == Level)>>
+template <unsigned ParentLevel, std::size_t NDim, typename UInt,
+          typename = std::integral_constant<bool, (get_cbits<UInt, NDim>() == ParentLevel)>>
 struct tree_builder {
     template <typename Tree, typename PIt, typename MIt, typename... CIts>
-    void operator()(Tree &tree, UInt prev_node_code, PIt cbegin, PIt cend, MIt m_it, CIts... c_its) const
+    void operator()(Tree &tree, UInt parent_code, PIt cbegin, PIt cend, MIt m_it, CIts... c_its) const
     {
         static_assert(NDim == sizeof...(CIts));
         using code_t = typename std::iterator_traits<PIt>::value_type;
         using mass_t = typename std::iterator_traits<MIt>::value_type;
         static_assert(std::is_same_v<code_t, UInt>);
         static_assert(NDim < std::numeric_limits<code_t>::digits);
-        l_comparer<Level, NDim> lc;
+        l_comparer<ParentLevel, NDim> lc;
         for (code_t i = 0; i < (code_t(1) << NDim); ++i) {
             assert(cbegin == std::lower_bound(cbegin, cend, i, lc));
             auto it_end = std::lower_bound(cbegin, cend, static_cast<code_t>(i + 1u), lc);
             const auto npart = std::distance(cbegin, it_end);
             if (npart) {
-                const auto cur_node_code = static_cast<code_t>((prev_node_code << NDim) + i);
+                const auto cur_code = static_cast<code_t>((parent_code << NDim) + i);
                 const auto M = std::accumulate(m_it, m_it + npart, mass_t(0));
                 tree.emplace_back(
-                    cur_node_code, M,
+                    cur_code, M,
                     std::inner_product(m_it, m_it + npart, c_its, static_cast<decltype(*c_its * mass_t(0))>(0)) / M...);
                 if (npart > 1) {
-                    tree_builder<Level + 1u, NDim, UInt>{}(tree, cur_node_code, cbegin, it_end, m_it, c_its...);
+                    tree_builder<ParentLevel + 1u, NDim, UInt>{}(tree, cur_code, cbegin, it_end, m_it, c_its...);
                 }
             }
             std::advance(cbegin, npart);
@@ -180,8 +182,8 @@ struct tree_builder {
     }
 };
 
-template <unsigned Level, std::size_t NDim, typename UInt>
-struct tree_builder<Level, NDim, UInt, std::true_type> {
+template <unsigned ParentLevel, std::size_t NDim, typename UInt>
+struct tree_builder<ParentLevel, NDim, UInt, std::true_type> {
     template <typename Tree, typename PIt, typename MIt, typename... CIts>
     void operator()(Tree &, UInt, PIt, PIt, MIt, CIts...) const
     {
