@@ -135,23 +135,20 @@ inline void get_particle_codes(F size, std::size_t nparts, PIt p_it, MIt m_it, C
     }
 }
 
-template <unsigned ParentLevel, std::size_t NDim>
-struct l_comparer {
-    template <typename UInt>
-    bool operator()(UInt code, UInt b) const
-    {
-        static_assert(NDim < std::numeric_limits<UInt>::digits);
-        assert(b <= (UInt(1) << NDim));
-        constexpr auto cbits = get_cbits<UInt, NDim>();
-        static_assert(cbits > ParentLevel);
-        static_assert((cbits - ParentLevel) / NDim <= std::numeric_limits<unsigned>::max());
-        return extract_bits<(NDim * (cbits - ParentLevel - 1u)), (NDim * (cbits - ParentLevel))>(code) < b;
-    }
-};
-
 template <unsigned ParentLevel, std::size_t NDim, typename UInt,
           typename = std::integral_constant<bool, (get_cbits<UInt, NDim>() == ParentLevel)>>
 struct tree_builder {
+    struct comparer {
+        bool operator()(UInt code, UInt b) const
+        {
+            static_assert(NDim < std::numeric_limits<UInt>::digits);
+            assert(b <= (UInt(1) << NDim));
+            constexpr auto cbits = get_cbits<UInt, NDim>();
+            static_assert(cbits > ParentLevel);
+            static_assert((cbits - ParentLevel) / NDim <= std::numeric_limits<unsigned>::max());
+            return extract_bits<(NDim * (cbits - ParentLevel - 1u)), (NDim * (cbits - ParentLevel))>(code) < b;
+        }
+    };
     template <typename Tree, typename PIt, typename MIt, typename... CIts>
     void operator()(Tree &tree, UInt parent_code, PIt cbegin, PIt cend, MIt m_it, CIts... c_its) const
     {
@@ -160,10 +157,10 @@ struct tree_builder {
         using mass_t = typename std::iterator_traits<MIt>::value_type;
         static_assert(std::is_same_v<code_t, UInt>);
         static_assert(NDim < std::numeric_limits<code_t>::digits);
-        l_comparer<ParentLevel, NDim> lc;
+        comparer comp;
         for (code_t i = 0; i < (code_t(1) << NDim); ++i) {
-            assert(cbegin == std::lower_bound(cbegin, cend, i, lc));
-            auto it_end = std::lower_bound(cbegin, cend, static_cast<code_t>(i + 1u), lc);
+            assert(cbegin == std::lower_bound(cbegin, cend, i, comp));
+            auto it_end = std::lower_bound(cbegin, cend, static_cast<code_t>(i + 1u), comp);
             const auto npart = std::distance(cbegin, it_end);
             if (npart) {
                 const auto cur_code = static_cast<code_t>((parent_code << NDim) + i);
@@ -279,9 +276,11 @@ int main()
     std::cout << "First octant: " << std::bitset<3>(f_oct) << '\n';
     auto begin = tree.begin();
     auto end = tree.end();
-    for (auto i = 1u; i < 8u; ++i) {
-        const auto bab = ((f_oct + i) % 8u);
-        auto it = std::lower_bound(begin, end, bab, [get_tl](const auto &t, const auto b) {
+    for (auto i = 0u; i < 8u; ++i) {
+        if (i == f_oct) {
+            continue;
+        }
+        auto it = std::lower_bound(begin, end, i, [get_tl](const auto &t, const auto b) {
             const auto c = std::get<0>(t);
             const auto tl = get_tl(c);
             return ((c >> ((tl - 1u) * 3u)) & 7u) < b;
