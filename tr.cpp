@@ -50,21 +50,6 @@ struct morton_encoder<2u, std::uint64_t> {
     }
 };
 
-template <unsigned Start, unsigned End, typename UInt>
-inline UInt extract_bits(UInt n)
-{
-    static_assert(std::conjunction_v<std::is_integral<UInt>, std::is_unsigned<UInt>>,
-                  "UInt must be an unsigned integral type.");
-    static_assert(End > Start, "End must be greater than Start.");
-    static_assert(End <= unsigned(std::numeric_limits<UInt>::digits), "End must not be greater than the bit width.");
-    if constexpr (End - Start == unsigned(std::numeric_limits<UInt>::digits)) {
-        return n;
-    } else {
-        constexpr auto mask = static_cast<UInt>(((UInt(1) << (End - Start)) - 1u) << Start);
-        return static_cast<UInt>((n & mask) >> Start);
-    }
-}
-
 template <typename UInt, std::size_t NDim>
 constexpr unsigned get_cbits()
 {
@@ -138,29 +123,56 @@ inline void get_particle_codes(F size, std::size_t nparts, PIt p_it, MIt m_it, C
 template <unsigned ParentLevel, std::size_t NDim, typename UInt,
           typename = std::integral_constant<bool, (get_cbits<UInt, NDim>() == ParentLevel)>>
 struct tree_builder {
-    struct comparer {
-        bool operator()(UInt code, UInt b) const
-        {
-            static_assert(NDim < std::numeric_limits<UInt>::digits);
-            assert(b <= (UInt(1) << NDim));
-            constexpr auto cbits = get_cbits<UInt, NDim>();
-            static_assert(cbits > ParentLevel);
-            static_assert((cbits - ParentLevel) / NDim <= std::numeric_limits<unsigned>::max());
-            return extract_bits<(NDim * (cbits - ParentLevel - 1u)), (NDim * (cbits - ParentLevel))>(code) < b;
-        }
-    };
     template <typename Tree, typename PIt, typename MIt, typename... CIts>
     void operator()(Tree &tree, UInt parent_code, PIt cbegin, PIt cend, MIt m_it, CIts... c_its) const
     {
+        // Make sure NDim is consistent.
         static_assert(NDim == sizeof...(CIts));
+        // Shortcuts.
         using code_t = typename std::iterator_traits<PIt>::value_type;
         using mass_t = typename std::iterator_traits<MIt>::value_type;
+        constexpr auto cbits = get_cbits<UInt, NDim>();
+        // Make sure UInt is the same as the particle code type.
         static_assert(std::is_same_v<code_t, UInt>);
+        // We can have an empty parent node only at the root level. Otherwise,
+        // if we are here we must have some particles in the node.
+        assert(ParentLevel == 0u || cbegin != cend);
+        // On entry, the range [cbegin, cend) contains the codes of all the particles
+        // belonging to the parent node (the particles' properties are
+        // encoded in the other iterators). parent_code is the nodal code
+        // of the parent node.
+        //
+        // We want to iterate over the current children nodes
+        // (of which there might be up to 2**NDim). A child exists if
+        // it contains at least 1 particle. If it contains > 1 particles,
+        // it is an internal (i.e., non-leaf) node and we go deeper. If it contains 1 particle,
+        // it is a leaf node, we stop going deeper and move to its sibling.
+        //
+        // This is the node prefix: it is the nodal code without the most significant 1 bit.
+        const auto node_prefix = parent_code - (code_t(1) << (ParentLevel * NDim));
         static_assert(NDim < std::numeric_limits<code_t>::digits);
-        comparer comp;
         for (code_t i = 0; i < (code_t(1) << NDim); ++i) {
-            assert(cbegin == std::lower_bound(cbegin, cend, i, comp));
-            auto it_end = std::lower_bound(cbegin, cend, static_cast<code_t>(i + 1u), comp);
+            // Verify that cbegin is actually starting at the beginning of the
+            // current child node (see the next comment for an explanation).
+            assert(cbegin
+                   == std::lower_bound(cbegin, cend,
+                                       static_cast<code_t>((node_prefix << ((cbits - ParentLevel) * NDim))
+                                                           + (i << ((cbits - ParentLevel - 1u) * NDim)))));
+            // This call will determine the end of range containing the particles
+            // belonging to the current child node. Here we are basically constructing the
+            // code of the first possible particle in the *next* child node, which is made by
+            // (looking from MSB to LSB):
+            // - the current node prefix,
+            // - i + 1,
+            // - right-padding zeroes.
+            // Note that if we are in the last iteration of the for loop, concatenating
+            // the current node prefix with i + 1 will essentially bump up by one the node
+            // prefix (meaning that the first possible particle in the next child node
+            // actually belongs to the next parent node).
+            const auto it_end
+                = std::lower_bound(cbegin, cend,
+                                   static_cast<code_t>((node_prefix << ((cbits - ParentLevel) * NDim))
+                                                       + ((i + 1u) << ((cbits - ParentLevel - 1u) * NDim))));
             const auto npart = std::distance(cbegin, it_end);
             if (npart) {
                 const auto cur_code = static_cast<code_t>((parent_code << NDim) + i);
@@ -191,6 +203,7 @@ template <typename Tree, typename PIt, typename MIt, typename... CIts>
 inline void build_tree(Tree &tree, std::size_t nparts, PIt p_it, MIt m_it, CIts... c_its)
 {
     using code_t = typename std::iterator_traits<PIt>::value_type;
+    // Depth-first tree construction starting from the root (level 0, nodal code 1).
     tree_builder<0, sizeof...(CIts), code_t>{}(tree, code_t(1), p_it, p_it + nparts, m_it, c_its...);
 }
 
@@ -209,7 +222,7 @@ inline std::vector<F> get_uniform_particles(std::size_t n, F size)
     return retval;
 }
 
-static constexpr unsigned nparts = 600'000;
+static constexpr unsigned nparts = 10'000'000;
 static constexpr double bsize = 10.;
 
 template <std::size_t NDim>
