@@ -79,7 +79,7 @@ inline void get_particle_codes(F size, std::size_t nparts, PIt p_it, MIt m_it, C
         if (!std::isfinite(tmp)) {
             throw std::invalid_argument("Not finite!");
         }
-        // Check: don't end up outside the [0, factor[ range.
+        // Check: don't end up outside the [0, factor) range.
         if (tmp < F(0) || tmp >= F(factor)) {
             throw std::invalid_argument("Out of bounds!");
         }
@@ -148,12 +148,12 @@ struct tree_builder {
         // it is an internal (i.e., non-leaf) node and we go deeper. If it contains 1 particle,
         // it is a leaf node, we stop going deeper and move to its sibling.
         //
-        // This is the node prefix: it is the nodal code without the most significant 1 bit.
+        // This is the node prefix: it is the nodal code without the most significant bit.
         const auto node_prefix = parent_code - (code_t(1) << (ParentLevel * NDim));
-        static_assert(NDim < std::numeric_limits<code_t>::digits);
         for (code_t i = 0; i < (code_t(1) << NDim); ++i) {
             // Verify that cbegin is actually starting at the beginning of the
-            // current child node (see the next comment for an explanation).
+            // current child node, which could also be the end in case the node is empty
+            // (see the next comment for an explanation).
             assert(cbegin
                    == std::lower_bound(cbegin, cend,
                                        static_cast<code_t>((node_prefix << ((cbits - ParentLevel) * NDim))
@@ -173,17 +173,24 @@ struct tree_builder {
                 = std::lower_bound(cbegin, cend,
                                    static_cast<code_t>((node_prefix << ((cbits - ParentLevel) * NDim))
                                                        + ((i + 1u) << ((cbits - ParentLevel - 1u) * NDim))));
+            // Compute the number of particles.
             const auto npart = std::distance(cbegin, it_end);
             if (npart) {
+                // npart > 0, we have a node. Compute its nodal code by moving up the
+                // parent nodal code by NDim and adding the current child node index i.
                 const auto cur_code = static_cast<code_t>((parent_code << NDim) + i);
+                // Compute the total mass in the node.
                 const auto M = std::accumulate(m_it, m_it + npart, mass_t(0));
+                // Compute the COM of the node, and add the node to the tree.
                 tree.emplace_back(
                     cur_code, M,
                     std::inner_product(m_it, m_it + npart, c_its, static_cast<decltype(*c_its * mass_t(0))>(0)) / M...);
                 if (npart > 1) {
+                    // The node is an internal one, go deeper.
                     tree_builder<ParentLevel + 1u, NDim, UInt>{}(tree, cur_code, cbegin, it_end, m_it, c_its...);
                 }
             }
+            // Move to the next child node.
             std::advance(cbegin, npart);
             std::advance(m_it, npart);
             (..., std::advance(c_its, npart));
@@ -222,7 +229,7 @@ inline std::vector<F> get_uniform_particles(std::size_t n, F size)
     return retval;
 }
 
-static constexpr unsigned nparts = 10'000'000;
+static constexpr unsigned nparts = 60'000;
 static constexpr double bsize = 10.;
 
 template <std::size_t NDim>
@@ -244,6 +251,54 @@ struct node_comparer {
         const auto s_n1 = n1 << ((cbits - tl1) * NDim);
         const auto s_n2 = n2 << ((cbits - tl2) * NDim);
         return s_n1 < s_n2 || (s_n1 == s_n2 && tl1 < tl2);
+    }
+};
+
+template <typename F, unsigned ParentLevel, std::size_t NDim, typename UInt>
+struct particle_force {
+    template <typename TreeIt>
+    F operator()(double theta, UInt code, TreeIt begin, TreeIt end) const
+    {
+        constexpr unsigned cbits = get_cbits<UInt, NDim>();
+        // This is the nodal code of the node in which the particle is at the current level.
+        // We compute it via the following:
+        // - add an extra 1 bit in the MSB direction,
+        // - shift down the result depending on the current level.
+        const auto part_node_code
+            = static_cast<UInt>(((UInt(1) << (cbits * NDim)) + code) >> ((cbits - ParentLevel - 1u) * NDim));
+        // This is part_node_code with the least significant NDim bits zeroed out.
+        // We will use it to locate sibling nodes.
+        auto sib_code = static_cast<UInt>(part_node_code & ~((UInt(1) << NDim) - 1u));
+        // Now let's iterate over the sibling nodes.
+        node_comparer<NDim> nc;
+        for (UInt i = 0; i < (UInt(1) << NDim); ++i, ++sib_code) {
+            // Try to locate the current sibling node.
+            begin = std::lower_bound(begin, end, sib_code,
+                                     [nc](const auto &t, const auto &n) { return nc(std::get<0>(t), n); });
+            if (sib_code == part_node_code) {
+                // Don't do anything if the current sibling is the particle
+                // node itself.
+                std::cout << "Skipping particle node :" << part_node_code << '\n';
+                // NOTE: we *must* have located the node here, as this node
+                // is the one in which the particle is residing.
+                assert(begin != end);
+                assert(std::get<0>(*begin) == sib_code);
+                // Update begin to the next node (same as below).
+                ++begin;
+                continue;
+            }
+            if (begin != end && std::get<0>(*begin) == sib_code) {
+                // We found a lower bound, and it corresponds
+                // to the sibling node we were looking for.
+                std::cout << "Sibling nodal code: " << std::bitset<64>(std::get<0>(*begin)) << '\n';
+                // Since we found the node we were looking for,
+                // we can start the search in the next iteration from the next
+                // element of the tree. Note that we cannot be at end here,
+                // so ++begin is well defined.
+                ++begin;
+            }
+        }
+        return F(theta);
     }
 };
 
@@ -275,6 +330,13 @@ int main()
         return node_comparer<3>{}(std::get<0>(n1), std::get<0>(n2));
     }) << '\n';
 
+    // Let's pick a "random" particle.
+    const std::size_t pidx = nparts / 2;
+    const auto code = codes[pidx];
+    std::cout << "Selected particle code: " << std::bitset<64>(code) << '\n';
+    particle_force<double, 0, 3, std::uint64_t>{}(.5, code, tree.begin(), tree.end());
+
+#if 0
     // Manual.
     // Let's pick a "random" particle.
     const std::size_t pidx = nparts / 2;
@@ -301,4 +363,5 @@ int main()
         std::cout << std::bitset<64>(std::get<0>(*it)) << '\n';
         std::cout << std::get<1>(*it) << '\n';
     }
+#endif
 }
