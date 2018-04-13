@@ -16,6 +16,7 @@
 
 #include <array>
 #include <bitset>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <iostream>
@@ -229,8 +230,24 @@ inline std::vector<F> get_uniform_particles(std::size_t n, F size)
     return retval;
 }
 
-static constexpr unsigned nparts = 60'000;
+static constexpr unsigned nparts = 600'000;
 static constexpr double bsize = 10.;
+
+template <std::size_t NDim, typename UInt>
+inline unsigned tree_level(UInt n)
+{
+    // TODO clzl wrappers.
+#if !defined(NDEBUG)
+    constexpr unsigned cbits = get_cbits<UInt, NDim>();
+#endif
+    constexpr unsigned ndigits = std::numeric_limits<UInt>::digits;
+    assert(n);
+    assert(!((ndigits - 1u - unsigned(__builtin_clzl(n))) % NDim));
+    auto retval = static_cast<unsigned>((ndigits - 1u - unsigned(__builtin_clzl(n))) / NDim);
+    assert(cbits >= retval);
+    assert((cbits - retval) * NDim < ndigits);
+    return retval;
+}
 
 template <std::size_t NDim>
 struct node_comparer {
@@ -238,27 +255,31 @@ struct node_comparer {
     bool operator()(UInt n1, UInt n2) const
     {
         constexpr unsigned cbits = get_cbits<UInt, NDim>();
-        constexpr unsigned ndigits = std::numeric_limits<UInt>::digits;
-        // TODO clzl, assert nonzero.
-        assert(!((ndigits - 1u - unsigned(__builtin_clzl(n1))) % NDim));
-        assert(!((ndigits - 1u - unsigned(__builtin_clzl(n2))) % NDim));
-        const auto tl1 = static_cast<unsigned>((ndigits - 1u - unsigned(__builtin_clzl(n1))) / NDim);
-        const auto tl2 = static_cast<unsigned>((ndigits - 1u - unsigned(__builtin_clzl(n2))) / NDim);
-        assert(cbits >= tl1);
-        assert(cbits >= tl2);
-        assert((cbits - tl1) * NDim < ndigits);
-        assert((cbits - tl2) * NDim < ndigits);
+        const auto tl1 = tree_level<NDim>(n1);
+        const auto tl2 = tree_level<NDim>(n2);
         const auto s_n1 = n1 << ((cbits - tl1) * NDim);
         const auto s_n2 = n2 << ((cbits - tl2) * NDim);
         return s_n1 < s_n2 || (s_n1 == s_n2 && tl1 < tl2);
     }
 };
 
-template <typename F, unsigned ParentLevel, std::size_t NDim, typename UInt>
-struct particle_force {
+template <unsigned ParentLevel, std::size_t NDim, typename UInt,
+          typename = std::integral_constant<bool, (get_cbits<UInt, NDim>() == ParentLevel)>>
+struct particle_acc {
+    // Some metaprogramming to establish the mass, radius**2 and acceleration types.
     template <typename TreeIt>
-    F operator()(double theta, UInt code, TreeIt begin, TreeIt end) const
+    using mass_t = decltype(std::get<1>(*std::declval<const TreeIt &>()));
+    template <typename... Coords>
+    using radius2_t = decltype((... + (std::declval<const Coords &>() * std::declval<const Coords &>())));
+    template <typename TreeIt, typename... Coords>
+    using acc_t = decltype(std::declval<const mass_t<TreeIt> &>() / std::declval<const radius2_t<Coords...> &>());
+    template <typename F, typename TreeIt, typename... Coords>
+    acc_t<TreeIt, Coords...> operator()(const F &dsize, double theta, UInt code, TreeIt begin, TreeIt end,
+                                        const Coords &... coords) const
     {
+        // Verify consistency of dimensions.
+        static_assert(sizeof...(Coords) == NDim);
+        static_assert(std::tuple_size_v<std::remove_reference_t<decltype(*begin)>> == NDim + 2u);
         constexpr unsigned cbits = get_cbits<UInt, NDim>();
         // This is the nodal code of the node in which the particle is at the current level.
         // We compute it via the following:
@@ -269,6 +290,12 @@ struct particle_force {
         // This is part_node_code with the least significant NDim bits zeroed out.
         // We will use it to locate sibling nodes.
         auto sib_code = static_cast<UInt>(part_node_code & ~((UInt(1) << NDim) - 1u));
+        // This will eventually become the iterator pointing to the node
+        // hosting the particle at the current level. It will be established
+        // in the loop below.
+        auto part_node_it = end;
+        // Init the return value.
+        acc_t<TreeIt, Coords...> retval(0);
         // Now let's iterate over the sibling nodes.
         node_comparer<NDim> nc;
         for (UInt i = 0; i < (UInt(1) << NDim); ++i, ++sib_code) {
@@ -278,19 +305,22 @@ struct particle_force {
             if (sib_code == part_node_code) {
                 // Don't do anything if the current sibling is the particle
                 // node itself.
-                std::cout << "Skipping particle node :" << part_node_code << '\n';
+                // std::cout << "Skipping particle node :" << part_node_code << '\n';
                 // NOTE: we *must* have located the node here, as this node
                 // is the one in which the particle is residing.
                 assert(begin != end);
                 assert(std::get<0>(*begin) == sib_code);
+                // Record the iterator.
+                part_node_it = begin;
                 // Update begin to the next node (same as below).
                 ++begin;
                 continue;
             }
             if (begin != end && std::get<0>(*begin) == sib_code) {
                 // We found a lower bound, and it corresponds
-                // to the sibling node we were looking for.
-                std::cout << "Sibling nodal code: " << std::bitset<64>(std::get<0>(*begin)) << '\n';
+                // to the sibling node we are looking for.
+                // std::cout << "Sibling nodal code: " << std::bitset<64>(std::get<0>(*begin)) << '\n';
+                retval += acc_from_node<ParentLevel>{}(dsize, theta, begin, end, coords...);
                 // Since we found the node we were looking for,
                 // we can start the search in the next iteration from the next
                 // element of the tree. Note that we cannot be at end here,
@@ -298,8 +328,117 @@ struct particle_force {
                 ++begin;
             }
         }
-        return F(theta);
+        assert(part_node_it != end);
+        // Check if the node containing the particle at the current level is a leaf.
+        if (part_node_it == end
+            || tree_level<NDim>(std::get<0>(*part_node_it)) >= tree_level<NDim>(std::get<0>(*(part_node_it + 1)))) {
+            // TODO fixme for multiple particles in a leaf.
+            return retval;
+        }
+        // Go one level deeper in the particle's current node.
+        retval += particle_acc<ParentLevel + 1u, NDim, UInt>{}(dsize, theta, code, part_node_it, end, coords...);
+        return retval;
     }
+    // Euclidean distance**2 between a particle (with coordinates in the tuple t1) and the COM of a node
+    // (with coordinates starting from index 2 of the tuple t2).
+    template <typename T1, typename T2, typename std::size_t... I>
+    static auto tuple_dist2(const T1 &t1, const T2 &t2, const std::index_sequence<I...> &)
+    {
+        return (... + ((std::get<I>(t1) - std::get<I + 2u>(t2)) * (std::get<I>(t1) - std::get<I + 2u>(t2))));
+    }
+    template <unsigned PLevel, typename = void>
+    struct acc_from_node {
+        template <typename F, typename TreeIt, typename... Coords>
+        acc_t<TreeIt, Coords...> operator()(const F &dsize, double theta, TreeIt node_it, TreeIt end,
+                                            const Coords &... coords) const
+        {
+            // Determine the distance**2 between the particle and the COM of the node.
+            const auto dist2
+                = tuple_dist2(std::tie(coords...), *node_it, std::make_index_sequence<sizeof...(Coords)>{});
+            if (node_it + 1 == end
+                || tree_level<NDim>(std::get<0>(*node_it)) >= tree_level<NDim>(std::get<0>(*(node_it + 1)))) {
+                // This is either the last node of the tree, or its tree level is not less than the tree level
+                // of the next node: a leaf node.
+                // std::cout << "Leaf node.\n";
+                // The acceleration is M / r**2.
+                return std::get<1>(*node_it) / dist2;
+            }
+            // std::cout << "Internal node.\n";
+            // Determine the size of the node.
+            const auto node_size = dsize / (UInt(1) << (PLevel + 1u));
+            // std::cout << "Node size: " << node_size << '\n';
+            // Check the BH acceptance criterion.
+            if ((node_size * node_size) / dist2 < theta * theta) {
+                // We can approximate the acceleration with the COM of the
+                // current node.
+                return std::get<1>(*node_it) / dist2;
+            }
+            // We need to go deeper in the tree.
+            acc_t<TreeIt, Coords...> retval(0);
+            // Compute the first possible code of a child node.
+            auto child_code = static_cast<UInt>(std::get<0>(*node_it) << NDim);
+            // We can now bump up the node iterator because we know this node has at least 1 child.
+            ++node_it;
+            node_comparer<NDim> nc;
+            for (UInt i = 0; i < (UInt(1) << NDim); ++i, ++child_code) {
+                // Try to locate the current child.
+                node_it = std::lower_bound(node_it, end, child_code,
+                                           [nc](const auto &t, const auto &n) { return nc(std::get<0>(t), n); });
+                if (node_it != end && std::get<0>(*node_it) == child_code) {
+                    // We found a child node, let's proceed to the computation of the force.
+                    retval += acc_from_node<PLevel + 1u>{}(dsize, theta, node_it, end, coords...);
+                }
+            }
+            return retval;
+        }
+    };
+    template <typename T>
+    struct acc_from_node<get_cbits<UInt, NDim>(), T> {
+        template <typename F, typename TreeIt, typename... Coords>
+        acc_t<TreeIt, Coords...> operator()(const F &, double, TreeIt, TreeIt, const Coords &...) const
+        {
+            return acc_t<TreeIt, Coords...>(0);
+        }
+    };
+};
+
+template <unsigned ParentLevel, std::size_t NDim, typename UInt>
+struct particle_acc<ParentLevel, NDim, UInt, std::true_type> {
+    // Some metaprogramming to establish the mass, radius**2 and acceleration types.
+    template <typename TreeIt>
+    using mass_t = decltype(std::get<1>(*std::declval<const TreeIt &>()));
+    template <typename... Coords>
+    using radius2_t = decltype((... + (std::declval<const Coords &>() * std::declval<const Coords &>())));
+    template <typename TreeIt, typename... Coords>
+    using acc_t = decltype(std::declval<const mass_t<TreeIt> &>() / std::declval<const radius2_t<Coords...> &>());
+    template <typename F, typename TreeIt, typename... Coords>
+    acc_t<TreeIt, Coords...> operator()(const F &, double, UInt, TreeIt, TreeIt, const Coords &...) const
+    {
+        return acc_t<TreeIt, Coords...>(0);
+    }
+};
+
+class simple_timer
+{
+public:
+    simple_timer() : m_start(std::chrono::high_resolution_clock::now()) {}
+    double elapsed() const
+    {
+        return static_cast<double>(
+            std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::high_resolution_clock::now() - m_start)
+                .count());
+    }
+    ~simple_timer()
+    {
+        std::cout << "Elapsed time: "
+                  << std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::high_resolution_clock::now()
+                                                                           - m_start)
+                         .count()
+                  << u8"μs\n";
+    }
+
+private:
+    const std::chrono::high_resolution_clock::time_point m_start;
 };
 
 int main()
@@ -331,10 +470,34 @@ int main()
     }) << '\n';
 
     // Let's pick a "random" particle.
-    const std::size_t pidx = nparts / 2;
+    const std::size_t pidx = nparts / 3;
     const auto code = codes[pidx];
     std::cout << "Selected particle code: " << std::bitset<64>(code) << '\n';
-    particle_force<double, 0, 3, std::uint64_t>{}(.5, code, tree.begin(), tree.end());
+    {
+        simple_timer st;
+        std::cout << particle_acc<0, 3, std::uint64_t>{}(
+                         bsize, .5, code, tree.begin(), tree.end(), *(parts.begin() + nparts + pidx),
+                         *(parts.begin() + nparts * 2 + pidx), *(parts.begin() + nparts * 3 + pidx))
+                  << '\n';
+    }
+    {
+        simple_timer st;
+        double tot_acc = 0.;
+        const auto x0 = *(parts.begin() + nparts + pidx);
+        const auto y0 = *(parts.begin() + 2 * nparts + pidx);
+        const auto z0 = *(parts.begin() + 3 * nparts + pidx);
+        for (std::size_t i = 0; i < nparts; ++i) {
+            if (i == pidx) {
+                continue;
+            }
+            const auto m = *(parts.begin() + i);
+            const auto x = *(parts.begin() + nparts + i);
+            const auto y = *(parts.begin() + 2 * nparts + i);
+            const auto z = *(parts.begin() + 3 * nparts + i);
+            tot_acc += m / ((x - x0) * (x - x0) + (y - y0) * (y - y0) + (z - z0) * (z - z0));
+        }
+        std::cout << tot_acc << '\n';
+    }
 
 #if 0
     // Manual.
