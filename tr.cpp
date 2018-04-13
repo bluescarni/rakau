@@ -152,28 +152,21 @@ struct tree_builder {
         // This is the node prefix: it is the nodal code without the most significant bit.
         const auto node_prefix = parent_code - (code_t(1) << (ParentLevel * NDim));
         for (code_t i = 0; i < (code_t(1) << NDim); ++i) {
-            // Verify that cbegin is actually starting at the beginning of the
-            // current child node, which could also be the end in case the node is empty
-            // (see the next comment for an explanation).
-            assert(cbegin
-                   == std::lower_bound(cbegin, cend,
-                                       static_cast<code_t>((node_prefix << ((cbits - ParentLevel) * NDim))
-                                                           + (i << ((cbits - ParentLevel - 1u) * NDim)))));
-            // This call will determine the end of range containing the particles
-            // belonging to the current child node. Here we are basically constructing the
-            // code of the first possible particle in the *next* child node, which is made by
-            // (looking from MSB to LSB):
-            // - the current node prefix,
-            // - i + 1,
-            // - right-padding zeroes.
-            // Note that if we are in the last iteration of the for loop, concatenating
-            // the current node prefix with i + 1 will essentially bump up by one the node
-            // prefix (meaning that the first possible particle in the next child node
-            // actually belongs to the next parent node).
-            const auto it_end
-                = std::lower_bound(cbegin, cend,
-                                   static_cast<code_t>((node_prefix << ((cbits - ParentLevel) * NDim))
-                                                       + ((i + 1u) << ((cbits - ParentLevel - 1u) * NDim))));
+            // Compute the first and last possible codes for the current child node.
+            // They both start with (from MSB to LSB):
+            // - current node prefix,
+            // - i.
+            // The first possible code then contains all zeros, the last possible
+            // codes contains all ones.
+            const auto p_first = static_cast<code_t>((node_prefix << ((cbits - ParentLevel) * NDim))
+                                                     + (i << ((cbits - ParentLevel - 1u) * NDim)));
+            const auto p_last
+                = static_cast<code_t>(p_first + ((code_t(1) << ((cbits - ParentLevel - 1u) * NDim)) - 1u));
+            // Verify that cbegin contains the first value equal to or greater than p_first.
+            assert(cbegin == std::lower_bound(cbegin, cend, p_first));
+            // Determine the end of the child node: it_end will point to the first value greater
+            // than the largest possible code for the current child node.
+            const auto it_end = std::upper_bound(cbegin, cend, p_last);
             // Compute the number of particles.
             const auto npart = std::distance(cbegin, it_end);
             if (npart) {
@@ -230,7 +223,7 @@ inline std::vector<F> get_uniform_particles(std::size_t n, F size)
     return retval;
 }
 
-static constexpr unsigned nparts = 600'000;
+static constexpr unsigned nparts = 10'000;
 static constexpr double bsize = 10.;
 
 template <std::size_t NDim, typename UInt>
