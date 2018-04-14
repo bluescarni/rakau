@@ -223,7 +223,7 @@ inline std::vector<F> get_uniform_particles(std::size_t n, F size)
     return retval;
 }
 
-static constexpr unsigned nparts = 10'000;
+static constexpr unsigned nparts = 1'000'000;
 static constexpr double bsize = 10.;
 
 template <std::size_t NDim, typename UInt>
@@ -439,8 +439,11 @@ int main()
     std::cout.precision(40);
     auto parts = get_uniform_particles<3>(nparts, bsize);
     std::vector<std::uint64_t> codes(nparts);
-    get_particle_codes(bsize, nparts, codes.begin(), parts.begin(), parts.begin() + nparts, parts.begin() + 2u * nparts,
-                       parts.begin() + 3u * nparts);
+    {
+        simple_timer st;
+        get_particle_codes(bsize, nparts, codes.begin(), parts.begin(), parts.begin() + nparts,
+                           parts.begin() + 2u * nparts, parts.begin() + 3u * nparts);
+    }
     std::cout << "Done sorting.\n\n";
     std::cout.flush();
     std::cout << "Code: " << std::bitset<64>(codes.back()) << '\n';
@@ -450,8 +453,11 @@ int main()
     std::cout << "z coord: " << *(parts.begin() + 4 * nparts - 1) << '\n';
     std::cout.flush();
     std::vector<std::tuple<std::uint64_t, double, double, double, double>> tree;
-    build_tree(tree, nparts, codes.cbegin(), parts.cbegin(), parts.cbegin() + nparts, parts.cbegin() + 2u * nparts,
-               parts.cbegin() + 3u * nparts);
+    {
+        simple_timer st;
+        build_tree(tree, nparts, codes.cbegin(), parts.cbegin(), parts.cbegin() + nparts, parts.cbegin() + 2u * nparts,
+                   parts.cbegin() + 3u * nparts);
+    }
     std::cout << "Tree size: " << tree.size() << '\n';
     std::cout << "First few: \n";
     for (auto it = tree.cbegin(); it != tree.cbegin() + 10; ++it) {
@@ -465,11 +471,13 @@ int main()
     // Let's pick a "random" particle.
     const std::size_t pidx = nparts / 3;
     const auto code = codes[pidx];
-    std::cout << "Selected particle code: " << std::bitset<64>(code) << '\n';
+    std::cout << "Selected particle code      : " << std::bitset<64>(code) << '\n';
+    std::cout << "Next Selected particle code : " << std::bitset<64>(codes[pidx + 1u]) << '\n';
+    std::cout << "Next2 Selected particle code: " << std::bitset<64>(codes[pidx + 2u]) << '\n';
     {
         simple_timer st;
         std::cout << particle_acc<0, 3, std::uint64_t>{}(
-                         bsize, .5, code, tree.begin(), tree.end(), *(parts.begin() + nparts + pidx),
+                         bsize, .75, code, tree.begin(), tree.end(), *(parts.begin() + nparts + pidx),
                          *(parts.begin() + nparts * 2 + pidx), *(parts.begin() + nparts * 3 + pidx))
                   << '\n';
     }
