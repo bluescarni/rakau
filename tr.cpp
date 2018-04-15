@@ -149,15 +149,15 @@ struct tree_builder {
         // it is an internal (i.e., non-leaf) node and we go deeper. If it contains 1 particle,
         // it is a leaf node, we stop going deeper and move to its sibling.
         //
-        // This is the node prefix: it is the nodal code without the most significant bit.
+        // This is the node prefix: it is the nodal code of the parent without the most significant bit.
         const auto node_prefix = parent_code - (code_t(1) << (ParentLevel * NDim));
         for (code_t i = 0; i < (code_t(1) << NDim); ++i) {
             // Compute the first and last possible codes for the current child node.
             // They both start with (from MSB to LSB):
             // - current node prefix,
             // - i.
-            // The first possible code then contains all zeros, the last possible
-            // codes contains all ones.
+            // The first possible code is then right-padded with all zeroes, the last possible
+            // code is right-padded with ones.
             const auto p_first = static_cast<code_t>((node_prefix << ((cbits - ParentLevel) * NDim))
                                                      + (i << ((cbits - ParentLevel - 1u) * NDim)));
             const auto p_last
