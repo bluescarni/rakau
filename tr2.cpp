@@ -139,6 +139,7 @@ inline void get_particle_codes(const typename std::iterator_traits<PIt>::value_t
 template <typename T, std::size_t... N>
 inline void increase_tuple_elements(T &tup, const std::index_sequence<N...> &)
 {
+    // TODO: overflow checking?
     (..., ++std::get<N>(tup));
 }
 
@@ -325,6 +326,127 @@ inline auto build_tree(CIt begin, CIt end, PIt p_it)
     return retval;
 }
 
+template <unsigned ParentLevel, std::size_t NDim, typename UInt,
+          typename = std::integral_constant<bool, (get_cbits<UInt, NDim>() == ParentLevel)>>
+struct particle_acc {
+    template <typename Tree, typename PIt>
+    auto operator()(const Tree &tree, const typename std::iterator_traits<PIt>::value_type &dsize,
+                    const typename std::iterator_traits<PIt>::value_type &theta, UInt code, UInt begin, UInt end,
+                    PIt p_it) const
+    {
+        // Shortcuts.
+        using float_t = typename std::iterator_traits<PIt>::value_type;
+        constexpr unsigned cbits = get_cbits<UInt, NDim>();
+        // This is the nodal code of the node in which the particle is at the current level.
+        // We compute it via the following:
+        // - add an extra 1 bit in the MSB direction,
+        // - shift down the result depending on the current level.
+        const auto part_node_code
+            = static_cast<UInt>(((UInt(1) << (cbits * NDim)) + code) >> ((cbits - ParentLevel - 1u) * NDim));
+        // This will eventually become the index pointing to the node
+        // hosting the particle at the current level. It will be established
+        // in the loop below.
+        auto part_node_idx = end;
+        // Init the return value.
+        float_t retval(0);
+        for (auto idx = begin; idx != end;
+             // NOTE: when incrementing idx, we need to add 1 to the
+             // total number of children in order to point to the next sibling.
+             idx += tree.first[idx * 2u + 1u] + 1u) {
+            // Get the nodal code of the current sibling.
+            const auto cur_node_code = tree.first[idx * 2u];
+            if (part_node_code == cur_node_code) {
+                // We are in the sibling that contains the particle. Store
+                // its index and don't do anything, just move to the next
+                // sibling.
+                part_node_idx = idx;
+            } else {
+                // Compute the acceleration from the current sibling node.
+                retval += acc_from_node<ParentLevel>{}(tree, dsize, theta, idx, idx + tree.first[idx * 2u + 1u] + 1u,
+                                                       p_it);
+            }
+        }
+        // We must have set part_node_idx to something other than end
+        // in the loop above.
+        assert(part_node_idx != end);
+        // Check if the node containing the particle at the current level is a leaf.
+        if (!tree.first[part_node_idx * 2u + 1u]) {
+            // The particle's node has no children.
+            // TODO fixme for multiple particles in a leaf.
+            return retval;
+        }
+        // Go one level deeper in the particle's current node. The new indices range must start from the position
+        // immediately past part_node_idx (i.e., the first children node) and have a size equal to the number
+        // of children.
+        retval += particle_acc<ParentLevel + 1u, NDim, UInt>{}(tree, dsize, theta, code, part_node_idx + 1u,
+                                                               part_node_idx + 1u + tree.first[part_node_idx * 2u + 1u],
+                                                               p_it);
+        return retval;
+    }
+    template <unsigned PLevel, typename = void>
+    struct acc_from_node {
+        template <typename Tree, typename PIt>
+        auto operator()(const Tree &tree, const typename std::iterator_traits<PIt>::value_type &dsize,
+                        const typename std::iterator_traits<PIt>::value_type &theta, UInt begin, UInt end,
+                        PIt p_it) const
+        {
+            using float_t = typename std::iterator_traits<PIt>::value_type;
+            // Determine the distance**2 between the particle and the COM of the node.
+            float_t dist2(0);
+            for (std::size_t j = 1; j < NDim + 1u; ++j) {
+                // Curent node COM coordinate.
+                const auto &node_x = tree.second[begin * (NDim + 1u) + j];
+                dist2 += (*(p_it + j) - node_x) * (*(p_it + j) - node_x);
+            }
+            // Check if the current node is a leaf.
+            if (end == begin + 1u) {
+                // The current node has no children, as the next node is a sibling.
+                // The acceleration is M / dist2.
+                // TODO what happens if this leaf node has more than 1 particle?
+                // Direct sum or just do the COM?
+                return tree.second[begin * (NDim + 1u)] / dist2;
+            }
+            // Determine the size of the node.
+            const auto node_size = dsize / (UInt(1) << (PLevel + 1u));
+            // Check the BH acceptance criterion.
+            if ((node_size * node_size) / dist2 < theta * theta) {
+                // We can approximate the acceleration with the COM of the
+                // current node.
+                return tree.second[begin * (NDim + 1u)] / dist2;
+            }
+            // We need to go deeper in the tree.
+            float_t retval(0);
+            // We can now bump up the index because we know this node has at least 1 child.
+            for (++begin; begin != end; begin += tree.first[begin * 2u + 1u] + 1u) {
+                retval += acc_from_node<PLevel + 1u>{}(tree, dsize, theta, begin,
+                                                       begin + tree.first[begin * 2u + 1u] + 1u, p_it);
+            }
+            return retval;
+        }
+    };
+    template <typename T>
+    struct acc_from_node<get_cbits<UInt, NDim>(), T> {
+        template <typename Tree, typename PIt>
+        auto operator()(const Tree &, const typename std::iterator_traits<PIt>::value_type &,
+                        const typename std::iterator_traits<PIt>::value_type &, UInt, UInt, PIt) const
+        {
+            using float_t = typename std::iterator_traits<PIt>::value_type;
+            return float_t(0);
+        }
+    };
+};
+
+template <unsigned ParentLevel, std::size_t NDim, typename UInt>
+struct particle_acc<ParentLevel, NDim, UInt, std::true_type> {
+    template <typename Tree, typename PIt>
+    auto operator()(const Tree &, const typename std::iterator_traits<PIt>::value_type &,
+                    const typename std::iterator_traits<PIt>::value_type &, UInt, UInt, UInt, PIt) const
+    {
+        using float_t = typename std::iterator_traits<PIt>::value_type;
+        return float_t(0);
+    }
+};
+
 #include <bitset>
 #include <chrono>
 #include <iostream>
@@ -353,7 +475,7 @@ private:
     const std::chrono::high_resolution_clock::time_point m_start;
 };
 
-static constexpr std::size_t nparts = 1'000'000;
+static constexpr std::size_t nparts = 600'000;
 static constexpr auto bsize = 10.;
 
 static std::mt19937 rng;
@@ -382,9 +504,10 @@ int main()
         simple_timer st;
         get_particle_codes<3>(bsize, codes.begin(), codes.end(), parts.begin());
     }
+    decltype(build_tree<3>(codes.begin(), codes.end(), parts.begin())) tree;
     {
         simple_timer st;
-        auto tree = build_tree<3>(codes.begin(), codes.end(), parts.begin());
+        tree = build_tree<3>(codes.begin(), codes.end(), parts.begin());
         std::cout << "Tree size: " << tree.first.size() << '\n';
         std::cout << tree.first[0] << '\n';
         std::cout << tree.first[1] << '\n';
@@ -392,5 +515,29 @@ int main()
         std::cout << tree.second[1] << '\n';
         std::cout << tree.second[2] << '\n';
         std::cout << tree.second[3] << '\n';
+    }
+    {
+        simple_timer st;
+        double ret = 0;
+        for (std::size_t i = 0; i < 1; ++i) {
+            const auto code = codes[i];
+            ret += particle_acc<0, 3, std::uint64_t>{}(tree, bsize, 0.1, code, 0, tree.first.size() / 2u,
+                                                       parts.begin() + i * 4u);
+        }
+        std::cout << "Total: " << ret << '\n';
+    }
+    {
+        simple_timer st;
+        double ret = 0.;
+        const auto x0 = parts[1];
+        const auto y0 = parts[2];
+        const auto z0 = parts[3];
+        for (std::size_t i = 1; i < nparts; ++i) {
+            const auto x = parts[i * 4 + 1];
+            const auto y = parts[i * 4 + 2];
+            const auto z = parts[i * 4 + 3];
+            ret += parts[i * 4] / ((x0 - x) * (x0 - x) + (y0 - y) * (y0 - y) + (z0 - z) * (z0 - z));
+        }
+        std::cout << "Total: " << ret << '\n';
     }
 }
