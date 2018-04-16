@@ -4,6 +4,8 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <deque>
+#include <initializer_list>
 #include <iterator>
 #include <limits>
 #include <stdexcept>
@@ -134,11 +136,19 @@ inline void get_particle_codes(const typename std::iterator_traits<PIt>::value_t
     }
 }
 
+// Helper to increase all elements in a tuple.
+template <typename T, std::size_t... N>
+inline void increase_tuple_elements(T &tup, const std::index_sequence<N...> &)
+{
+    (..., ++std::get<N>(tup));
+}
+
 template <unsigned ParentLevel, std::size_t NDim, typename UInt,
           typename = std::integral_constant<bool, (get_cbits<UInt, NDim>() == ParentLevel)>>
 struct tree_builder {
-    template <typename Tree, typename CIt, typename PIt>
-    void operator()(Tree &tree, UInt parent_code, CIt begin, CIt end, PIt p_it) const
+    template <typename Tree, typename CTuple, typename CIt, typename PIt>
+    void operator()(Tree &tree, std::deque<UInt> &children_count, CTuple &ct, UInt parent_code, CIt begin, CIt end,
+                    PIt p_it) const
     {
         // Shortcuts.
         using code_t = typename std::iterator_traits<CIt>::value_type;
@@ -212,11 +222,21 @@ struct tree_builder {
                     com[j] /= com[0];
                 }
                 // Add the node to the tree.
-                tree.first.emplace_back(cur_code);
+                // NOTE: the children count in the node gets inited to zero, it will
+                // be copied over from the deque later.
+                tree.first.insert(tree.first.end(), {cur_code, code_t(0)});
                 tree.second.insert(tree.second.end(), com.begin(), com.end());
+                // Add a counter to the deque. The newly-added node has zero children initially.
+                children_count.emplace_back(0);
+                // Increase the children count of the parents.
+                increase_tuple_elements(ct, std::make_index_sequence<std::tuple_size_v<CTuple>>{});
                 if (npart > 1) {
+                    // Add a new element to the children counter tuple, pointing to
+                    // the value we just added to the deque.
+                    auto new_ct = std::tuple_cat(ct, std::tie(children_count.back()));
                     // The node is an internal one, go deeper.
-                    tree_builder<ParentLevel + 1u, NDim, UInt>{}(tree, cur_code, begin, it_end, p_it);
+                    tree_builder<ParentLevel + 1u, NDim, UInt>{}(tree, children_count, new_ct, cur_code, begin, it_end,
+                                                                 p_it);
                 }
             }
             // Move to the next child node.
@@ -229,8 +249,8 @@ struct tree_builder {
 
 template <unsigned ParentLevel, std::size_t NDim, typename UInt>
 struct tree_builder<ParentLevel, NDim, UInt, std::true_type> {
-    template <typename Tree, typename CIt, typename PIt>
-    void operator()(Tree &, UInt, CIt, CIt, PIt) const
+    template <typename Tree, typename CTuple, typename CIt, typename PIt>
+    void operator()(Tree &, std::deque<UInt> &, CTuple &, UInt, CIt, CIt, PIt) const
     {
     }
 };
@@ -241,8 +261,27 @@ inline auto build_tree(CIt begin, CIt end, PIt p_it)
     using code_t = typename std::iterator_traits<CIt>::value_type;
     using float_t = typename std::iterator_traits<PIt>::value_type;
     std::pair<std::vector<code_t>, std::vector<float_t>> retval;
+    // The structure to keep track of the children count. This
+    // has to be a deque (rather than a vector) because we need
+    // to keep references to elements in it as we grow it.
+    static thread_local std::deque<code_t> children_count;
+    children_count.resize(0);
+    children_count.emplace_back(0);
+    // The initial tuple containing the children counters for the parents
+    // of a node.
+    auto c_tuple = std::tie(children_count.back());
     // Depth-first tree construction starting from the root (level 0, nodal code 1).
-    tree_builder<0, NDim, code_t>{}(retval, 1, begin, end, p_it);
+    tree_builder<0, NDim, code_t>{}(retval, children_count, c_tuple, 1, begin, end, p_it);
+    // Double check the return value.
+    assert(!(retval.first.size() % 2u));
+    assert(!(retval.second.size() % (NDim + 1u)));
+    assert(retval.first.size() / 2u == retval.second.size() / (NDim + 1u));
+    assert(retval.first.size() / 2u == children_count.size() - 1u);
+    // Copy over the children count.
+    auto c_it = retval.first.begin();
+    for (auto it = children_count.begin() + 1; it != children_count.end(); ++it, c_it += 2) {
+        *(c_it + 1) = *it;
+    }
     return retval;
 }
 
@@ -308,6 +347,7 @@ int main()
         auto tree = build_tree<3>(codes.begin(), codes.end(), parts.begin());
         std::cout << "Tree size: " << tree.first.size() << '\n';
         std::cout << tree.first[0] << '\n';
+        std::cout << tree.first[1] << '\n';
         std::cout << tree.second[0] << '\n';
         std::cout << tree.second[1] << '\n';
         std::cout << tree.second[2] << '\n';
