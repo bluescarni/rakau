@@ -109,7 +109,6 @@ inline void get_particle_codes(const typename std::iterator_traits<PIt>::value_t
     static_assert(NDim < std::numeric_limits<std::size_t>::max());
     static thread_local std::vector<std::pair<code_t, std::array<float_t, NDim + 1u>>> tmp;
     tmp.resize(0);
-    // TODO reserve.
     // The encoder object.
     morton_encoder<NDim, code_t> me;
     // Check that it's safe to add (NDim + 1u) to the mass/coords iterator.
