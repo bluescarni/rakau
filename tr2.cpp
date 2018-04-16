@@ -143,6 +143,38 @@ inline void increase_tuple_elements(T &tup, const std::index_sequence<N...> &)
     (..., ++std::get<N>(tup));
 }
 
+// Small helper to get the tree level of a nodal code.
+template <std::size_t NDim, typename UInt>
+inline unsigned tree_level(UInt n)
+{
+    // TODO clzl wrappers.
+#if !defined(NDEBUG)
+    constexpr unsigned cbits = get_cbits<UInt, NDim>();
+#endif
+    constexpr unsigned ndigits = std::numeric_limits<UInt>::digits;
+    assert(n);
+    assert(!((ndigits - 1u - unsigned(__builtin_clzl(n))) % NDim));
+    auto retval = static_cast<unsigned>((ndigits - 1u - unsigned(__builtin_clzl(n))) / NDim);
+    assert(cbits >= retval);
+    assert((cbits - retval) * NDim < ndigits);
+    return retval;
+}
+
+// Small functor to compare nodal codes.
+template <std::size_t NDim>
+struct node_comparer {
+    template <typename UInt>
+    bool operator()(UInt n1, UInt n2) const
+    {
+        constexpr unsigned cbits = get_cbits<UInt, NDim>();
+        const auto tl1 = tree_level<NDim>(n1);
+        const auto tl2 = tree_level<NDim>(n2);
+        const auto s_n1 = n1 << ((cbits - tl1) * NDim);
+        const auto s_n2 = n2 << ((cbits - tl2) * NDim);
+        return s_n1 < s_n2 || (s_n1 == s_n2 && tl1 < tl2);
+    }
+};
+
 template <unsigned ParentLevel, std::size_t NDim, typename UInt,
           typename = std::integral_constant<bool, (get_cbits<UInt, NDim>() == ParentLevel)>>
 struct tree_builder {
@@ -282,6 +314,15 @@ inline auto build_tree(CIt begin, CIt end, PIt p_it)
     for (auto it = children_count.begin() + 1; it != children_count.end(); ++it, c_it += 2) {
         *(c_it + 1) = *it;
     }
+#if !defined(NDEBUG)
+    // Check that the tree is sorted wrt the nodal code.
+    if (retval.first.size()) {
+        node_comparer<NDim> nc;
+        for (decltype(retval.first.size()) i = 0; i < retval.first.size() - 2u; i += 2u) {
+            assert(nc(retval.first[i], retval.first[i + 2u]));
+        }
+    }
+#endif
     return retval;
 }
 
