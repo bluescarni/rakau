@@ -33,7 +33,7 @@ struct morton_encoder<3, std::uint64_t> {
         assert(z < (1ul << 21));
         assert(!(::m3D_e_sLUT<std::uint64_t, std::uint32_t>(x, y, z) >> 63u));
         assert((::morton3D_64_encode(x, y, z) == ::m3D_e_sLUT<std::uint64_t, std::uint32_t>(x, y, z)));
-        return ::m3D_e_sLUT<std::uint64_t, std::uint32_t>(x, y, z);
+        return ::m3D_e_sLUT<std::uint64_t, std::uint32_t>(std::uint32_t(x), std::uint32_t(y), std::uint32_t(z));
     }
 };
 
@@ -67,14 +67,14 @@ constexpr bool size_iter_check(UInt N)
     return N <= static_cast<udiff_t>(std::numeric_limits<diff_t>::max());
 }
 
-template <std::size_t NDim, typename PIt, typename CIt>
-inline void get_particle_codes(const typename std::iterator_traits<PIt>::value_type &size, PIt begin, PIt end, CIt c_it)
+template <std::size_t NDim, typename CIt, typename PIt>
+inline void get_particle_codes(const typename std::iterator_traits<PIt>::value_type &size, CIt begin, CIt end, PIt p_it)
 {
     using code_t = typename std::iterator_traits<CIt>::value_type;
     using float_t = typename std::iterator_traits<PIt>::value_type;
     static_assert(get_cbits<code_t, NDim>() < std::numeric_limits<code_t>::digits);
     constexpr code_t factor = code_t(1) << get_cbits<code_t, NDim>();
-    // Function to discretise the input floating-point coordinates starting at it
+    // Function to discretise the input floating-point coordinates starting at 'it'
     // into a box of a given size.
     auto disc_coords = [&size](PIt it) {
         std::array<code_t, NDim> retval;
@@ -112,10 +112,11 @@ inline void get_particle_codes(const typename std::iterator_traits<PIt>::value_t
     morton_encoder<NDim, code_t> me;
     // Check that it's safe to add (NDim + 1u) to the mass/coords iterator.
     static_assert(size_iter_check<PIt>(NDim + 1u));
-    for (auto it = begin; it != end; it += (NDim + 1u)) {
+    auto p_it_copy = p_it;
+    for (auto it = begin; it != end; ++it, p_it_copy += NDim + 1u) {
         tmp.emplace_back();
-        tmp.back().first = me(disc_coords(it + 1).begin());
-        std::copy(it, it + (NDim + 1u), tmp.back().second.begin());
+        tmp.back().first = me(disc_coords(p_it_copy + 1).begin());
+        std::copy(p_it_copy, p_it_copy + (NDim + 1u), tmp.back().second.begin());
     }
     // Now let's sort.
     boost::sort::spreadsort::integer_sort(
@@ -124,20 +125,20 @@ inline void get_particle_codes(const typename std::iterator_traits<PIt>::value_t
     // Copy over the data.
     for (const auto &p : tmp) {
         // Write the code to the output iter.
-        *c_it = p.first;
+        *begin = p.first;
         // Copy mass and coordinates.
-        std::copy(p.second.begin(), p.second.end(), begin);
+        std::copy(p.second.begin(), p.second.end(), p_it);
         // Increase the iterators.
-        ++c_it;
-        begin += (NDim + 1u);
+        ++begin;
+        p_it += NDim + 1u;
     }
 }
 
-template <unsigned Level, std::size_t NDim, typename UInt,
-          typename = std::integral_constant<bool, (get_cbits<UInt, NDim>() == Level)>>
+template <unsigned ParentLevel, std::size_t NDim, typename UInt,
+          typename = std::integral_constant<bool, (get_cbits<UInt, NDim>() == ParentLevel)>>
 struct tree_builder {
-    template <typename Tree, typename PIt, typename CIt>
-    void operator()(Tree &tree, PIt begin, PIt end, CIt c_it) const
+    template <typename Tree, typename CIt, typename PIt>
+    void operator()(Tree &tree, UInt parent_code, CIt begin, CIt end, PIt p_it) const
     {
         // Shortcuts.
         using code_t = typename std::iterator_traits<CIt>::value_type;
@@ -145,31 +146,103 @@ struct tree_builder {
         constexpr auto cbits = get_cbits<UInt, NDim>();
         // Make sure UInt is the same as the particle code type.
         static_assert(std::is_same_v<code_t, UInt>);
-        for (; begin != end; begin += (NDim + 1u), ++c_it) {
-            *c_it >> (cbits * NDim - Level);
+        // We can have an empty parent node only at the root level. Otherwise,
+        // if we are here we must have some particles in the node.
+        assert(ParentLevel == 0u || begin != end);
+        // On entry, the ranges [begin, end) and [p_it, ...) contain
+        // the codes, masses and positions of all the particles
+        // belonging to the parent node. parent_code is the nodal code
+        // of the parent node.
+        //
+        // We want to iterate over the current children nodes
+        // (of which there might be up to 2**NDim). A child exists if
+        // it contains at least 1 particle. If it contains > 1 particles,
+        // it is an internal (i.e., non-leaf) node and we go deeper. If it contains 1 particle,
+        // it is a leaf node, we stop going deeper and move to its sibling.
+        //
+        // This is the node prefix: it is the nodal code of the parent without the most significant bit.
+        const auto node_prefix = parent_code - (code_t(1) << (ParentLevel * NDim));
+        // Temporary structure that we will use to compute the COM. It contains
+        // the total mass and the position of the COM.
+        std::array<float_t, NDim + 1u> com;
+        for (code_t i = 0; i < (code_t(1) << NDim); ++i) {
+            // Compute the first and last possible codes for the current child node.
+            // They both start with (from MSB to LSB):
+            // - current node prefix,
+            // - i.
+            // The first possible code is then right-padded with all zeroes, the last possible
+            // code is right-padded with ones.
+            const auto p_first = static_cast<code_t>((node_prefix << ((cbits - ParentLevel) * NDim))
+                                                     + (i << ((cbits - ParentLevel - 1u) * NDim)));
+            const auto p_last
+                = static_cast<code_t>(p_first + ((code_t(1) << ((cbits - ParentLevel - 1u) * NDim)) - 1u));
+            // Verify that begin contains the first value equal to or greater than p_first.
+            assert(begin == std::lower_bound(begin, end, p_first));
+            // Determine the end of the child node: it_end will point to the first value greater
+            // than the largest possible code for the current child node.
+            const auto it_end = std::upper_bound(begin, end, p_last);
+            // Compute the number of particles.
+            using part_count_t = decltype(std::distance(begin, it_end));
+            const auto npart = std::distance(begin, it_end);
+            // TODO runtime check instead of assert.
+            assert(npart >= 0);
+            if (npart) {
+                // npart > 0, we have a node. Compute its nodal code by moving up the
+                // parent nodal code by NDim and adding the current child node index i.
+                const auto cur_code = static_cast<code_t>((parent_code << NDim) + i);
+                // Init the COM with the properties of the first particle.
+                auto it = p_it;
+                com[0] = *it;
+                for (std::size_t j = 1; j < NDim + 1u; ++j) {
+                    com[j] = *it * *(it + j);
+                }
+                // Move to the second particle.
+                it += NDim + 1u;
+                // Do the rest.
+                for (part_count_t i = 1; i < npart; ++i, it += NDim + 1u) {
+                    // Update total mass.
+                    com[0] += *it;
+                    // Update the COM position.
+                    for (std::size_t j = 1; j < NDim + 1u; ++j) {
+                        com[j] += *it * *(it + j);
+                    }
+                }
+                // Do the final division for the COM.
+                for (std::size_t j = 1; j < NDim + 1u; ++j) {
+                    com[j] /= com[0];
+                }
+                // Add the node to the tree.
+                tree.first.emplace_back(cur_code);
+                tree.second.insert(tree.second.end(), com.begin(), com.end());
+                if (npart > 1) {
+                    // The node is an internal one, go deeper.
+                    tree_builder<ParentLevel + 1u, NDim, UInt>{}(tree, cur_code, begin, it_end, p_it);
+                }
+            }
+            // Move to the next child node.
+            // TODO: overflow checks?
+            std::advance(begin, npart);
+            std::advance(p_it, npart * (NDim + 1u));
         }
     }
 };
 
-template <std::size_t NDim, typename PIt, typename CIt>
-inline auto build_tree(PIt begin, PIt end, CIt c_it)
+template <unsigned ParentLevel, std::size_t NDim, typename UInt>
+struct tree_builder<ParentLevel, NDim, UInt, std::true_type> {
+    template <typename Tree, typename CIt, typename PIt>
+    void operator()(Tree &, UInt, CIt, CIt, PIt) const
+    {
+    }
+};
+
+template <std::size_t NDim, typename CIt, typename PIt>
+inline auto build_tree(CIt begin, CIt end, PIt p_it)
 {
     using code_t = typename std::iterator_traits<CIt>::value_type;
     using float_t = typename std::iterator_traits<PIt>::value_type;
     std::pair<std::vector<code_t>, std::vector<float_t>> retval;
-    if (begin == end) {
-        // Special case the empty tree.
-        return retval;
-    }
-    // Fill in the first node with the first particle.
-    retval.first.emplace_back(1);
-    static_assert(NDim < std::numeric_limits<std::size_t>::max());
-    static_assert(size_iter_check<PIt>(NDim + 1u));
-    retval.second.insert(retval.second.end(), begin, begin + (NDim + 1u));
-    // Update the iterators.
-    begin += (NDim + 1u), ++c_it;
-    // Build the rest of the tree, starting from the root.
-    tree_builder<0, NDim, code_t>{}(retval, begin, end, c_it);
+    // Depth-first tree construction starting from the root (level 0, nodal code 1).
+    tree_builder<0, NDim, code_t>{}(retval, 1, begin, end, p_it);
     return retval;
 }
 
@@ -202,7 +275,7 @@ private:
 };
 
 static constexpr std::size_t nparts = 1'000'000;
-static constexpr double bsize = 10.;
+static constexpr auto bsize = 10.;
 
 static std::mt19937 rng;
 
@@ -214,7 +287,7 @@ inline std::vector<F> get_uniform_particles(std::size_t n, F size)
     std::uniform_real_distribution<F> mdist(F(0), F(1));
     // Positions distribution.
     std::uniform_real_distribution<F> rdist(-size / F(2), size / F(2));
-    for (auto it = retval.begin(); it != retval.end(); it += (NDim + 1u)) {
+    for (auto it = retval.begin(); it != retval.end(); it += NDim + 1u) {
         *it = mdist(rng);
         std::generate_n(it + 1, NDim, [&rdist]() { return rdist(rng); });
     }
@@ -228,13 +301,16 @@ int main()
     std::vector<std::uint64_t> codes(nparts);
     {
         simple_timer st;
-        get_particle_codes<3>(bsize, parts.begin(), parts.end(), codes.begin());
+        get_particle_codes<3>(bsize, codes.begin(), codes.end(), parts.begin());
     }
     {
         simple_timer st;
-        auto tree = build_tree<3>(parts.begin(), parts.end(), codes.begin());
+        auto tree = build_tree<3>(codes.begin(), codes.end(), parts.begin());
+        std::cout << "Tree size: " << tree.first.size() << '\n';
         std::cout << tree.first[0] << '\n';
         std::cout << tree.second[0] << '\n';
+        std::cout << tree.second[1] << '\n';
+        std::cout << tree.second[2] << '\n';
         std::cout << tree.second[3] << '\n';
     }
 }
