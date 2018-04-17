@@ -60,7 +60,7 @@ constexpr unsigned get_cbits()
 }
 
 // Check that the input UInt N is representable
-// by the difference typeof the iterator type It.
+// by the difference type of the iterator type It.
 template <typename It, typename UInt>
 constexpr bool size_iter_check(UInt N)
 {
@@ -453,6 +453,8 @@ struct particle_acc<ParentLevel, NDim, UInt, std::true_type> {
 #include <iostream>
 #include <random>
 
+#include <boost/math/constants/constants.hpp>
+
 class simple_timer
 {
 public:
@@ -496,10 +498,47 @@ inline std::vector<F> get_uniform_particles(std::size_t n, F size)
     return retval;
 }
 
+// See: http://www.artcompsci.org/kali/vol/plummer/ch03.html
+template <typename F>
+inline std::vector<F> get_plummer_sphere(std::size_t n, F size)
+{
+    std::vector<F> retval(n * 4u);
+    // Uniform [0, 1) dist.
+    std::uniform_real_distribution<F> udist(F(0), F(1));
+    // Particle mass is always 1/n.
+    const F mass = F(1) / F(n);
+    for (auto it = retval.begin(); it != retval.end();) {
+        // Generate a random radius.
+        const F r = F(1) / std::sqrt(std::pow(udist(rng), F(-2) / F(3)) - F(1));
+        // Generate random u/v for sphere picking.
+        const F u = udist(rng);
+        const F v = udist(rng);
+        // Long.
+        const F lon
+            = std::clamp(F(2) * boost::math::constants::pi<F>() * u, F(0), F(2) * boost::math::constants::pi<F>());
+        // Lat.
+        const F lat = std::acos(std::clamp(F(2) * v - F(1), F(-1), F(1)));
+        // Compute x, y, z.
+        const F x = r * std::cos(lon) * std::sin(lat);
+        const F y = r * std::sin(lon) * std::sin(lat);
+        const F z = r * std::cos(lat);
+        if (x >= -size / F(2) && x < size / F(2) && y >= -size / F(2) && y < size / F(2) && z >= -size / F(2)
+            && z < size / F(2)) {
+            *it = mass;
+            *(it + 1) = x;
+            *(it + 2) = y;
+            *(it + 3) = z;
+            it += 4u;
+        }
+    }
+    return retval;
+}
+
 int main()
 {
     std::cout.precision(40);
-    auto parts = get_uniform_particles<3>(nparts, bsize);
+    // auto parts = get_uniform_particles<3>(nparts, bsize);
+    auto parts = get_plummer_sphere(nparts, bsize);
     std::vector<std::uint64_t> codes(nparts);
     {
         simple_timer st;
@@ -519,7 +558,7 @@ int main()
     }
     {
         simple_timer st;
-        constexpr unsigned nthreads = 16;
+        constexpr unsigned nthreads = 8;
         std::vector<std::future<double>> vf;
         for (auto n = 0u; n < nthreads; ++n) {
             vf.emplace_back(std::async(
