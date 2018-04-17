@@ -331,7 +331,7 @@ template <unsigned ParentLevel, std::size_t NDim, typename UInt,
 struct particle_acc {
     template <typename Tree, typename PIt>
     auto operator()(const Tree &tree, const typename std::iterator_traits<PIt>::value_type &dsize,
-                    const typename std::iterator_traits<PIt>::value_type &theta, UInt code, UInt begin, UInt end,
+                    const typename std::iterator_traits<PIt>::value_type &theta2, UInt code, UInt begin, UInt end,
                     PIt p_it) const
     {
         // Shortcuts.
@@ -362,7 +362,7 @@ struct particle_acc {
                 part_node_idx = idx;
             } else {
                 // Compute the acceleration from the current sibling node.
-                retval += acc_from_node<ParentLevel>{}(tree, dsize, theta, idx, idx + tree.first[idx * 2u + 1u] + 1u,
+                retval += acc_from_node<ParentLevel>{}(tree, dsize, theta2, idx, idx + tree.first[idx * 2u + 1u] + 1u,
                                                        p_it);
             }
         }
@@ -378,7 +378,7 @@ struct particle_acc {
         // Go one level deeper in the particle's current node. The new indices range must start from the position
         // immediately past part_node_idx (i.e., the first children node) and have a size equal to the number
         // of children.
-        retval += particle_acc<ParentLevel + 1u, NDim, UInt>{}(tree, dsize, theta, code, part_node_idx + 1u,
+        retval += particle_acc<ParentLevel + 1u, NDim, UInt>{}(tree, dsize, theta2, code, part_node_idx + 1u,
                                                                part_node_idx + 1u + tree.first[part_node_idx * 2u + 1u],
                                                                p_it);
         return retval;
@@ -387,7 +387,7 @@ struct particle_acc {
     struct acc_from_node {
         template <typename Tree, typename PIt>
         auto operator()(const Tree &tree, const typename std::iterator_traits<PIt>::value_type &dsize,
-                        const typename std::iterator_traits<PIt>::value_type &theta, UInt begin, UInt end,
+                        const typename std::iterator_traits<PIt>::value_type &theta2, UInt begin, UInt end,
                         PIt p_it) const
         {
             using float_t = typename std::iterator_traits<PIt>::value_type;
@@ -409,7 +409,7 @@ struct particle_acc {
             // Determine the size of the node.
             const auto node_size = dsize / (UInt(1) << (PLevel + 1u));
             // Check the BH acceptance criterion.
-            if ((node_size * node_size) / dist2 < theta * theta) {
+            if ((node_size * node_size) / dist2 < theta2) {
                 // We can approximate the acceleration with the COM of the
                 // current node.
                 return tree.second[begin * (NDim + 1u)] / dist2;
@@ -418,7 +418,7 @@ struct particle_acc {
             float_t retval(0);
             // We can now bump up the index because we know this node has at least 1 child.
             for (++begin; begin != end; begin += tree.first[begin * 2u + 1u] + 1u) {
-                retval += acc_from_node<PLevel + 1u>{}(tree, dsize, theta, begin,
+                retval += acc_from_node<PLevel + 1u>{}(tree, dsize, theta2, begin,
                                                        begin + tree.first[begin * 2u + 1u] + 1u, p_it);
             }
             return retval;
@@ -449,6 +449,7 @@ struct particle_acc<ParentLevel, NDim, UInt, std::true_type> {
 
 #include <bitset>
 #include <chrono>
+#include <future>
 #include <iostream>
 #include <random>
 
@@ -475,8 +476,8 @@ private:
     const std::chrono::high_resolution_clock::time_point m_start;
 };
 
-static constexpr std::size_t nparts = 600'000;
-static constexpr auto bsize = 10.;
+static constexpr std::size_t nparts = 2'800'000;
+static constexpr auto bsize = 10.f;
 
 static std::mt19937 rng;
 
@@ -487,7 +488,7 @@ inline std::vector<F> get_uniform_particles(std::size_t n, F size)
     // Mass distribution.
     std::uniform_real_distribution<F> mdist(F(0), F(1));
     // Positions distribution.
-    std::uniform_real_distribution<F> rdist(-size / F(2), size / F(2));
+    std::uniform_real_distribution<F> rdist(-size / F(2) + F(.01) * size, size / F(2) - F(.01) * size);
     for (auto it = retval.begin(); it != retval.end(); it += NDim + 1u) {
         *it = mdist(rng);
         std::generate_n(it + 1, NDim, [&rdist]() { return rdist(rng); });
@@ -518,13 +519,34 @@ int main()
     }
     {
         simple_timer st;
+        constexpr unsigned nthreads = 16;
+        std::vector<std::future<double>> vf;
+        for (auto n = 0u; n < nthreads; ++n) {
+            vf.emplace_back(std::async(
+                [&](unsigned n) {
+                    double ret = 0;
+                    for (std::size_t i = nparts / nthreads * n; i < nparts / nthreads * (n + 1u); ++i) {
+                        const auto code = codes[i];
+                        ret += particle_acc<0, 3, std::uint64_t>{}(tree, bsize, 0.75f * 0.75f, code, 0,
+                                                                   tree.first.size() / 2u, parts.begin() + i * 4u);
+                    }
+                    return ret;
+                },
+                n));
+        }
         double ret = 0;
-        for (std::size_t i = 0; i < 1; ++i) {
-            const auto code = codes[i];
-            ret += particle_acc<0, 3, std::uint64_t>{}(tree, bsize, 0.1, code, 0, tree.first.size() / 2u,
-                                                       parts.begin() + i * 4u);
+        for (auto &f : vf) {
+            ret += f.get();
         }
         std::cout << "Total: " << ret << '\n';
+
+        // double ret = 0;
+        // for (std::size_t i = 0; i < nparts; ++i) {
+        //     const auto code = codes[i];
+        //     ret += particle_acc<0, 3, std::uint64_t>{}(tree, bsize, 0.75f, code, 0, tree.first.size() / 2u,
+        //                                                parts.begin() + i * 4u);
+        // }
+        // std::cout << "Total: " << ret << '\n';
     }
     {
         simple_timer st;
