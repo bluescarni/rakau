@@ -510,20 +510,20 @@ inline std::vector<F> get_plummer_sphere(std::size_t n, F size)
     for (auto it = retval.begin(); it != retval.end();) {
         // Generate a random radius.
         const F r = F(1) / std::sqrt(std::pow(udist(rng), F(-2) / F(3)) - F(1));
-        // Generate random u/v for sphere picking.
-        const F u = udist(rng);
-        const F v = udist(rng);
-        // Long.
+        // Generate random u, v for sphere picking.
+        const F u = udist(rng), v = udist(rng);
+        // Longitude.
         const F lon
             = std::clamp(F(2) * boost::math::constants::pi<F>() * u, F(0), F(2) * boost::math::constants::pi<F>());
-        // Lat.
-        const F lat = std::acos(std::clamp(F(2) * v - F(1), F(-1), F(1)));
+        // Colatitude.
+        const F colat = std::acos(std::clamp(F(2) * v - F(1), F(-1), F(1)));
         // Compute x, y, z.
-        const F x = r * std::cos(lon) * std::sin(lat);
-        const F y = r * std::sin(lon) * std::sin(lat);
-        const F z = r * std::cos(lat);
+        const F x = r * std::cos(lon) * std::sin(colat);
+        const F y = r * std::sin(lon) * std::sin(colat);
+        const F z = r * std::cos(colat);
         if (x >= -size / F(2) && x < size / F(2) && y >= -size / F(2) && y < size / F(2) && z >= -size / F(2)
             && z < size / F(2)) {
+            // Assign mass and coordinates only if we fall into the domain. Otherwise, try again.
             *it = mass;
             *(it + 1) = x;
             *(it + 2) = y;
