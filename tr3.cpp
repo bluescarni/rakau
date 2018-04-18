@@ -53,15 +53,24 @@ struct morton_encoder<2, std::uint64_t> {
     }
 };
 
+template <typename UInt, std::size_t NDim>
+constexpr unsigned get_cbits()
+{
+    constexpr unsigned nbits = std::numeric_limits<UInt>::digits;
+    static_assert(nbits > NDim, "The number of bits must be greater than the number of dimensions.");
+    return static_cast<unsigned>(nbits / NDim - !(nbits % NDim));
+}
+
+template <typename UInt, std::size_t NDim>
+inline constexpr unsigned cbits = get_cbits<UInt, NDim>();
+
 } // namespace detail
 
 template <typename UInt, typename F, std::size_t NDim>
 class tree
 {
-    // cbits setup.
-    static constexpr unsigned nbits = static_cast<unsigned>(std::numeric_limits<UInt>::digits);
-    static_assert(nbits > NDim);
-    static constexpr unsigned cbits = static_cast<unsigned>(nbits / NDim - !(nbits % NDim));
+    // cbits shortcut.
+    static constexpr unsigned cbits = detail::cbits<UInt, NDim>;
     // Main vector type.
     template <typename T>
     using v_type = std::vector<T>;
@@ -74,12 +83,17 @@ private:
 
 public:
     template <typename It>
-    explicit tree(const F &box_size, It m_it, std::array<It, NDim> c_it, size_type N) : m_box_size(box_size)
+    explicit tree(const F &box_size, It m_it, std::array<It, NDim> c_it, size_type N, size_type max_leaf_n)
+        : m_box_size(box_size), m_max_leaf_n(max_leaf_n)
     {
         // Check the box size.
         if (!std::isfinite(box_size) || box_size <= F(0)) {
             throw std::invalid_argument("the box size must be a finite positive value, but it is "
                                         + std::to_string(box_size) + " instead");
+        }
+        // Check the max_leaf_n param.
+        if (!max_leaf_n) {
+            throw std::invalid_argument("the maximum number of particles per leaf must be nonzero");
         }
         // Get out soon if there's nothing to do.
         if (!N) {
@@ -165,10 +179,12 @@ public:
             }
             m_codes[i] = v_ind[i].first;
         }
+        // Now let's proceed to the tree construction.
     }
 
 private:
     F m_box_size;
+    size_type m_max_leaf_n;
     v_type<F> m_masses;
     std::array<v_type<F>, NDim> m_coords;
     v_type<UInt> m_codes;
@@ -183,5 +199,5 @@ int main()
     const double xs[] = {1, 2, 3};
     const double ys[] = {4, -1, -2};
     const double zs[] = {-3, -4, 0};
-    tree<std::uint64_t, double, 3> t(10., masses, {xs, ys, zs}, 3);
+    tree<std::uint64_t, double, 3> t(10., masses, {xs, ys, zs}, 3, 1);
 }
