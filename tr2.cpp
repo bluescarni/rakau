@@ -478,7 +478,7 @@ private:
     const std::chrono::high_resolution_clock::time_point m_start;
 };
 
-static constexpr std::size_t nparts = 2'800'000;
+static constexpr std::size_t nparts = 1'000'000;
 static constexpr auto bsize = 10.f;
 
 static std::mt19937 rng;
