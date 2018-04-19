@@ -238,20 +238,20 @@ struct particle_acc {
     {
         for (; begin != end; ++begin) {
             assert(begin != pidx);
-            F dist3(0);
+            F dist2(0);
             for (std::size_t j = 0; j < NDim; ++j) {
-                dist3 += (tree.m_coords[j][begin] - tree.m_coords[j][pidx])
+                dist2 += (tree.m_coords[j][begin] - tree.m_coords[j][pidx])
                          * (tree.m_coords[j][begin] - tree.m_coords[j][pidx]);
             }
-            dist3 = std::sqrt(dist3);
-            dist3 = dist3 * dist3 * dist3;
+            const F dist = std::sqrt(dist2);
+            const F dist3 = dist * dist2;
             for (std::size_t j = 0; j < NDim; ++j) {
                 out[j] += (tree.m_masses[begin] * (tree.m_coords[j][begin] - tree.m_coords[j][pidx])) / dist3;
             }
         }
     }
     template <typename F, typename Tree, typename SizeType>
-    void operator()(std::array<F, NDim> &out, const Tree &tree, const F &theta2, UInt code, SizeType pidx,
+    void operator()(std::array<F, NDim> &out, const Tree &tree, const F &theta, UInt code, SizeType pidx,
                     SizeType begin, SizeType end) const
     {
         assert(code == tree.m_codes[pidx]);
@@ -277,7 +277,7 @@ struct particle_acc {
                     // Internal node, go one level deeper. The new indices range must
                     // start from the position immediately past idx (i.e., the first children node) and have a size
                     // equal to the number of children.
-                    particle_acc<ParentLevel + 1u, NDim, UInt>{}(out, tree, theta2, code, pidx, idx + 1u,
+                    particle_acc<ParentLevel + 1u, NDim, UInt>{}(out, tree, theta, code, pidx, idx + 1u,
                                                                  idx + 1u + n_children);
                 } else {
                     // The particle's node has no children, hence it is *the* leaf node
@@ -294,61 +294,66 @@ struct particle_acc {
                 }
             } else {
                 // Compute the acceleration from the current sibling node.
-                // retval += acc_from_node<ParentLevel>{}(tree, dsize, theta2, idx, idx + tree.first[idx * 2u + 1u] +
-                // 1u,
-                //                                        p_it);
+                acc_from_node<ParentLevel>{}(out, tree, theta, code, pidx, idx, idx + 1u + n_children);
             }
         }
     }
     template <unsigned PLevel, typename = void>
     struct acc_from_node {
-        template <typename Tree, typename PIt>
-        auto operator()(const Tree &tree, const typename std::iterator_traits<PIt>::value_type &dsize,
-                        const typename std::iterator_traits<PIt>::value_type &theta2, UInt begin, UInt end,
-                        PIt p_it) const
+        template <typename F, typename Tree, typename SizeType>
+        void operator()(std::array<F, NDim> &out, const Tree &tree, const F &theta, UInt code, SizeType pidx,
+                        SizeType begin, SizeType end) const
         {
-            using float_t = typename std::iterator_traits<PIt>::value_type;
-            // Determine the distance**2 between the particle and the COM of the node.
-            float_t dist2(0);
-            for (std::size_t j = 1; j < NDim + 1u; ++j) {
-                // Curent node COM coordinate.
-                const auto &node_x = tree.second[begin * (NDim + 1u) + j];
-                dist2 += (*(p_it + j) - node_x) * (*(p_it + j) - node_x);
+            // Determine the distance**2, distance and distance**3 between the particle and the COM of the node.
+            F dist2(0);
+            for (std::size_t j = 0; j < NDim; ++j) {
+                // Current node COM coordinate.
+                const auto &node_x = std::get<3>(tree.m_tree[begin])[j];
+                // Current part coordinate.
+                const auto &part_x = tree.m_coords[j][pidx];
+                dist2 += (node_x - part_x) * (node_x - part_x);
             }
+            const F dist = std::sqrt(dist2);
+            const F dist3 = dist2 * dist;
             // Check if the current node is a leaf.
-            if (end == begin + 1u) {
-                // The current node has no children, as the next node is a sibling.
-                // The acceleration is M / dist2.
-                // TODO what happens if this leaf node has more than 1 particle?
-                // Direct sum or just do the COM?
-                return tree.second[begin * (NDim + 1u)] / dist2;
+            const auto n_children = std::get<1>(tree.m_tree[begin])[2];
+            if (!n_children) {
+                // Leaf node, compute the acceleration.
+                const auto leaf_begin = std::get<1>(tree.m_tree[begin])[0];
+                const auto leaf_end = std::get<1>(tree.m_tree[begin])[1];
+                add_acc_from_range(out, tree, leaf_begin, leaf_end, pidx);
+                return;
             }
             // Determine the size of the node.
-            const auto node_size = dsize / (UInt(1) << (PLevel + 1u));
+            const auto node_size = tree.m_box_size / (UInt(1) << (PLevel + 1u));
             // Check the BH acceptance criterion.
-            if ((node_size * node_size) / dist2 < theta2) {
+            if (node_size / dist < theta) {
                 // We can approximate the acceleration with the COM of the
                 // current node.
-                return tree.second[begin * (NDim + 1u)] / dist2;
+                const auto &com_mass = std::get<2>(tree.m_tree[begin]);
+                for (std::size_t j = 0; j < NDim; ++j) {
+                    const auto &node_x = std::get<3>(tree.m_tree[begin])[j];
+                    const auto &part_x = tree.m_coords[j][pidx];
+                    out[j] += (com_mass * (node_x - part_x)) / dist3;
+                }
+                return;
             }
             // We need to go deeper in the tree.
-            float_t retval(0);
             // We can now bump up the index because we know this node has at least 1 child.
-            for (++begin; begin != end; begin += tree.first[begin * 2u + 1u] + 1u) {
-                retval += acc_from_node<PLevel + 1u>{}(tree, dsize, theta2, begin,
-                                                       begin + tree.first[begin * 2u + 1u] + 1u, p_it);
+            for (++begin; begin != end; begin += std::get<1>(tree.m_tree[begin])[2] + 1u) {
+                acc_from_node<PLevel + 1u>{}(out, tree, theta, code, pidx, begin,
+                                             begin + std::get<1>(tree.m_tree[begin])[2] + 1u);
             }
-            return retval;
         }
     };
     template <typename T>
-    struct acc_from_node<get_cbits<UInt, NDim>(), T> {
-        template <typename Tree, typename PIt>
-        auto operator()(const Tree &, const typename std::iterator_traits<PIt>::value_type &,
-                        const typename std::iterator_traits<PIt>::value_type &, UInt, UInt, PIt) const
+    struct acc_from_node<cbits_v<UInt, NDim>, T> {
+        template <typename F, typename Tree, typename SizeType>
+        void operator()(std::array<F, NDim> &, const Tree &, const F &, UInt, SizeType, SizeType, SizeType) const
         {
-            using float_t = typename std::iterator_traits<PIt>::value_type;
-            return float_t(0);
+            // We should never get here: if use all cbits, the deepest node will be a leaf
+            // and we will have handled the case earlier.
+            assert(false);
         }
     };
 };
@@ -588,7 +593,6 @@ public:
     template <typename OutIt>
     void compute_accelerations(OutIt out_it, const F &theta) const
     {
-        const F theta2 = theta * theta;
         std::array<F, NDim> tmp;
         for (size_type i = 0; i < m_codes.size(); ++i) {
             // Init the acc vector to zero.
@@ -596,7 +600,7 @@ public:
                 c = F(0);
             }
             // Write the acceleration into tmp.
-            particle_acc<0, NDim, UInt>{}(tmp, *this, theta2, m_codes[i], i, size_type(0), size_type(m_tree.size()));
+            particle_acc<0, NDim, UInt>{}(tmp, *this, theta, m_codes[i], i, size_type(0), size_type(m_tree.size()));
             // Copy the result to the output iterator.
             for (const auto &c : tmp) {
                 *out_it++ = c;
