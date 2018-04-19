@@ -1,9 +1,13 @@
 #include <algorithm>
 #include <array>
+#include <bitset>
 #include <cassert>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <deque>
+#include <initializer_list>
+#include <iostream>
 #include <iterator>
 #include <limits>
 #include <stdexcept>
@@ -62,16 +66,63 @@ constexpr unsigned get_cbits()
 }
 
 template <typename UInt, std::size_t NDim>
-inline constexpr unsigned cbits = get_cbits<UInt, NDim>();
+inline constexpr unsigned cbits_v = get_cbits<UInt, NDim>();
+
+template <typename T, std::size_t... N>
+inline void increase_children_count(T &tup, const std::index_sequence<N...> &)
+{
+    auto inc = [](auto &n) {
+        if (n == std::numeric_limits<std::remove_reference_t<decltype(n)>>::max()) {
+            throw std::overflow_error(
+                "overflow error when incrementing the children count during the construction of a tree");
+        }
+        ++n;
+    };
+    (void)inc;
+    (..., inc(std::get<N>(tup)));
+}
+
+// Small helper to get the tree level of a nodal code.
+template <std::size_t NDim, typename UInt>
+inline unsigned tree_level(UInt n)
+{
+    // TODO clzl wrappers.
+#if !defined(NDEBUG)
+    constexpr unsigned cbits = cbits_v<UInt, NDim>;
+#endif
+    constexpr unsigned ndigits = std::numeric_limits<UInt>::digits;
+    assert(n);
+    assert(!((ndigits - 1u - unsigned(__builtin_clzl(n))) % NDim));
+    auto retval = static_cast<unsigned>((ndigits - 1u - unsigned(__builtin_clzl(n))) / NDim);
+    assert(cbits >= retval);
+    assert((cbits - retval) * NDim < ndigits);
+    return retval;
+}
+
+// Small functor to compare nodal codes.
+template <std::size_t NDim>
+struct node_comparer {
+    template <typename UInt>
+    bool operator()(UInt n1, UInt n2) const
+    {
+        constexpr unsigned cbits = cbits_v<UInt, NDim>;
+        const auto tl1 = tree_level<NDim>(n1);
+        const auto tl2 = tree_level<NDim>(n2);
+        const auto s_n1 = n1 << ((cbits - tl1) * NDim);
+        const auto s_n2 = n2 << ((cbits - tl2) * NDim);
+        return s_n1 < s_n2 || (s_n1 == s_n2 && tl1 < tl2);
+    }
+};
 
 template <unsigned ParentLevel, std::size_t NDim, typename UInt, typename F,
-          typename = std::integral_constant<bool, (cbits<UInt, NDim> == ParentLevel)>>
+          typename = std::integral_constant<bool, (cbits_v<UInt, NDim> == ParentLevel)>>
 struct tree_builder {
-    template <typename Tree, typename CIt, typename SizeType>
-    void operator()(Tree &tree, UInt parent_code, CIt begin, CIt end, CIt top, SizeType max_leaf_n) const
+    template <typename Tree, typename Deque, typename CTuple, typename CIt, typename SizeType>
+    void operator()(Tree &tree, Deque &children_count, CTuple &ct, UInt parent_code, CIt begin, CIt end, CIt top,
+                    SizeType max_leaf_n) const
     {
         // Shortcut.
-        constexpr auto cbits = detail::cbits<UInt, NDim>;
+        constexpr auto cbits = cbits_v<UInt, NDim>;
         // We should never be invoking this on an empty range.
         assert(begin != end);
         // Double check max_leaf_n.
@@ -115,24 +166,35 @@ struct tree_builder {
                 const auto cur_code = static_cast<UInt>((parent_code << NDim) + i);
                 // Add the node to the tree.
                 tree.emplace_back(cur_code,
-                                  std::array<SizeType, 2>{static_cast<SizeType>(std::distance(top, begin)),
-                                                          static_cast<SizeType>(std::distance(top, it_end))},
+                                  std::array<SizeType, 3>{static_cast<SizeType>(std::distance(top, begin)),
+                                                          static_cast<SizeType>(std::distance(top, it_end)),
+                                                          // NOTE: the children count gets inited to zero. It will
+                                                          // be filled in later.
+                                                          SizeType(0)},
                                   std::array<F, NDim>{});
+                // Add a counter to the deque. The newly-added node has zero children initially.
+                children_count.emplace_back(0);
+                // Increase the children count of the parents.
+                increase_children_count(ct, std::make_index_sequence<std::tuple_size_v<CTuple>>{});
                 if (static_cast<std::make_unsigned_t<decltype(std::distance(begin, it_end))>>(npart) > max_leaf_n) {
+                    // Add a new element to the children counter tuple, pointing to
+                    // the value we just added to the deque.
+                    auto new_ct = std::tuple_cat(ct, std::tie(children_count.back()));
                     // The node is an internal one, go deeper.
-                    tree_builder<ParentLevel + 1u, NDim, UInt, F>{}(tree, cur_code, begin, it_end, top, max_leaf_n);
+                    tree_builder<ParentLevel + 1u, NDim, UInt, F>{}(tree, children_count, new_ct, cur_code, begin,
+                                                                    it_end, top, max_leaf_n);
                 }
             }
             // Move to the next child node.
-            std::advance(begin, npart);
+            begin += npart;
         }
     }
 };
 
 template <unsigned ParentLevel, std::size_t NDim, typename UInt, typename F>
 struct tree_builder<ParentLevel, NDim, UInt, F, std::true_type> {
-    template <typename Tree, typename CIt, typename SizeType>
-    void operator()(Tree &, UInt, CIt, CIt, CIt, SizeType) const
+    template <typename Tree, typename Deque, typename CTuple, typename CIt, typename SizeType>
+    void operator()(Tree &, Deque &, CTuple &, UInt, CIt, CIt, CIt, SizeType) const
     {
     }
 };
@@ -143,13 +205,56 @@ template <typename UInt, typename F, std::size_t NDim>
 class tree
 {
     // cbits shortcut.
-    static constexpr unsigned cbits = detail::cbits<UInt, NDim>;
+    static constexpr unsigned cbits = cbits_v<UInt, NDim>;
     // Main vector type.
     template <typename T>
     using v_type = std::vector<T>;
 
 public:
     using size_type = typename v_type<F>::size_type;
+
+private:
+    static auto &get_v_ind()
+    {
+        static thread_local v_type<std::pair<UInt, size_type>> v_ind;
+        return v_ind;
+    }
+    void build_tree()
+    {
+        // NOTE: in the tree builder code, we will be moving around in the codes
+        // vector using random access iterators. Thus, we must ensure the difference
+        // type of the iterator can represent the size of the codes vector.
+        using it_diff_t = typename std::iterator_traits<decltype(m_codes.begin())>::difference_type;
+        using it_udiff_t = std::make_unsigned_t<it_diff_t>;
+        if (m_codes.size() > static_cast<it_udiff_t>(std::numeric_limits<it_diff_t>::max())) {
+            throw std::overflow_error("the number of particles (" + std::to_string(m_codes.size())
+                                      + ") is too large, and it results in an overflow condition");
+        }
+        // The structure to keep track of the children count. This
+        // has to be a deque (rather than a vector) because we need
+        // to keep references to elements in it as we grow it.
+        static thread_local std::deque<UInt> children_count;
+        children_count.resize(0);
+        // The initial tuple containing the children counters for the parents
+        // of a node.
+        auto c_tuple = std::tie();
+        tree_builder<0, NDim, UInt, F>{}(m_tree, children_count, c_tuple, 1, m_codes.begin(), m_codes.end(),
+                                         m_codes.begin(), m_max_leaf_n);
+        // Check the result.
+        assert(children_count.size() == m_tree.size());
+        // Check the tree is sorted according to the nodal code comparison.
+        assert(std::is_sorted(m_tree.begin(), m_tree.end(), [](const auto &t1, const auto &t2) {
+            node_comparer<NDim> nc;
+            return nc(std::get<0>(t1), std::get<0>(t2));
+        }));
+        // Copy over the children count.
+        auto tree_it = m_tree.begin();
+        for (auto it = children_count.begin(); it != children_count.end(); ++it, ++tree_it) {
+            std::get<1>(*tree_it)[2] = *it;
+        }
+    }
+
+public:
     template <typename It>
     explicit tree(const F &box_size, It m_it, std::array<It, NDim> c_it, size_type N, size_type max_leaf_n)
         : m_box_size(box_size), m_max_leaf_n(max_leaf_n)
@@ -231,11 +336,11 @@ public:
             [](const auto &p, unsigned offset) { return static_cast<UInt>(p.first >> offset); },
             [](const auto &p1, const auto &p2) { return p1.first < p2.first; });
         // Now let's write the masses, coords and the codes in the correct order.
-        // NOTE: we will need to index into It up to N - 1. If the difference type
-        // of the iterator cannot represent N - 1, we will run into overflow.
+        // NOTE: we will need to index into It, so make sure its difference type
+        // can represent the total number of particles.
         using it_diff_t = typename std::iterator_traits<It>::difference_type;
         using it_udiff_t = std::make_unsigned_t<it_diff_t>;
-        if (N - 1u > static_cast<it_udiff_t>(std::numeric_limits<it_diff_t>::max())) {
+        if (N > static_cast<it_udiff_t>(std::numeric_limits<it_diff_t>::max())) {
             throw std::overflow_error("the number of particles (" + std::to_string(N)
                                       + ") is too large, and it results in an overflow condition");
         }
@@ -248,14 +353,28 @@ public:
             m_codes[i] = v_ind[i].first;
         }
         // Now let's proceed to the tree construction.
-        tree_builder<0, NDim, UInt, F>{}(m_tree, 1, m_codes.begin(), m_codes.end(), m_codes.begin(), max_leaf_n);
+        build_tree();
     }
-
-private:
-    static auto &get_v_ind()
+    friend std::ostream &operator<<(std::ostream &os, const tree &t)
     {
-        static thread_local v_type<std::pair<UInt, size_type>> v_ind;
-        return v_ind;
+        static_assert(unsigned(std::numeric_limits<UInt>::digits) <= std::numeric_limits<std::size_t>::max());
+        os << "Total number of particles: " << t.m_codes.size() << '\n';
+        os << "Total number of nodes    : " << t.m_tree.size() << "\n\n";
+        os << "First few nodes:\n";
+        constexpr unsigned max_nodes = 20;
+        auto i = 0u;
+        for (const auto &tup : t.m_tree) {
+            if (i > max_nodes) {
+                break;
+            }
+            os << std::bitset<std::numeric_limits<UInt>::digits>(std::get<0>(tup)) << '|' << std::get<1>(tup)[0] << ','
+               << std::get<1>(tup)[1] << ',' << std::get<1>(tup)[2] << '\n';
+            ++i;
+        }
+        if (i > max_nodes) {
+            std::cout << "...\n";
+        }
+        return os;
     }
 
 private:
@@ -264,7 +383,7 @@ private:
     v_type<F> m_masses;
     std::array<v_type<F>, NDim> m_coords;
     v_type<UInt> m_codes;
-    v_type<std::tuple<UInt, std::array<size_type, 2>, std::array<F, NDim>>> m_tree;
+    v_type<std::tuple<UInt, std::array<size_type, 3>, std::array<F, NDim>>> m_tree;
 };
 
 #include <iostream>
@@ -275,5 +394,5 @@ int main()
     const double xs[] = {1, 2, 3};
     const double ys[] = {4, -1, -2};
     const double zs[] = {-3, -4, 0};
-    tree<std::uint64_t, double, 3> t(10., masses, {xs, ys, zs}, 3, 1);
+    std::cout << tree<std::uint64_t, double, 3>(10., masses, {xs, ys, zs}, 3, 1) << '\n';
 }
