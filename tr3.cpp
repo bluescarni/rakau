@@ -644,7 +644,7 @@ inline std::vector<F> get_plummer_sphere(std::size_t n, F size)
     std::uniform_real_distribution<F> udist(F(0), F(1));
     // Particle mass is always 1/n.
     std::fill(retval.begin(), retval.begin() + n, F(1) / F(n));
-    for (std::size_t i = 0; i < n; ++i) {
+    for (std::size_t i = 0; i < n;) {
         // Generate a random radius.
         const F r = F(1) / std::sqrt(std::pow(udist(rng), F(-2) / F(3)) - F(1));
         // Generate random u, v for sphere picking.
@@ -664,6 +664,7 @@ inline std::vector<F> get_plummer_sphere(std::size_t n, F size)
             *(retval.begin() + n + i) = x;
             *(retval.begin() + 2 * n + i) = y;
             *(retval.begin() + 3 * n + i) = z;
+            ++i;
         }
     }
     return retval;
