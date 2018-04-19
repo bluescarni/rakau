@@ -64,6 +64,79 @@ constexpr unsigned get_cbits()
 template <typename UInt, std::size_t NDim>
 inline constexpr unsigned cbits = get_cbits<UInt, NDim>();
 
+template <unsigned ParentLevel, std::size_t NDim, typename UInt, typename F,
+          typename = std::integral_constant<bool, (cbits<UInt, NDim> == ParentLevel)>>
+struct tree_builder {
+    template <typename Tree, typename CIt, typename SizeType>
+    void operator()(Tree &tree, UInt parent_code, CIt begin, CIt end, CIt top, SizeType max_leaf_n) const
+    {
+        // Shortcut.
+        constexpr auto cbits = detail::cbits<UInt, NDim>;
+        // We should never be invoking this on an empty range.
+        assert(begin != end);
+        // Double check max_leaf_n.
+        assert(max_leaf_n);
+        // On entry, the range [begin, end) contains the codes
+        // of all the particles belonging to the parent node.
+        // parent_code is the nodal code of the parent node.
+        // top is the beginning of the full list of codes (used
+        // to compute the offsets of the code iterators).
+        // max_leaf_n is the maximum number of particles per leaf.
+        //
+        // We want to iterate over the current children nodes
+        // (of which there might be up to 2**NDim). A child exists if
+        // it contains at least 1 particle. If it contains > max_leaf_n particles,
+        // it is an internal (i.e., non-leaf) node and we go deeper. If it contains <= max_leaf_n
+        // particles, it is a leaf node, we stop going deeper and move to its sibling.
+        //
+        // This is the node prefix: it is the nodal code of the parent without the most significant bit.
+        const auto node_prefix = parent_code - (UInt(1) << (ParentLevel * NDim));
+        for (UInt i = 0; i < (UInt(1) << NDim); ++i) {
+            // Compute the first and last possible codes for the current child node.
+            // They both start with (from MSB to LSB):
+            // - current node prefix,
+            // - i.
+            // The first possible code is then right-padded with all zeroes, the last possible
+            // code is right-padded with ones.
+            const auto p_first = static_cast<UInt>((node_prefix << ((cbits - ParentLevel) * NDim))
+                                                   + (i << ((cbits - ParentLevel - 1u) * NDim)));
+            const auto p_last = static_cast<UInt>(p_first + ((UInt(1) << ((cbits - ParentLevel - 1u) * NDim)) - 1u));
+            // Verify that begin contains the first value equal to or greater than p_first.
+            assert(begin == std::lower_bound(begin, end, p_first));
+            // Determine the end of the child node: it_end will point to the first value greater
+            // than the largest possible code for the current child node.
+            const auto it_end = std::upper_bound(begin, end, p_last);
+            // Compute the number of particles.
+            const auto npart = std::distance(begin, it_end);
+            assert(npart >= 0);
+            if (npart) {
+                // npart > 0, we have a node. Compute its nodal code by moving up the
+                // parent nodal code by NDim and adding the current child node index i.
+                const auto cur_code = static_cast<UInt>((parent_code << NDim) + i);
+                // Add the node to the tree.
+                tree.emplace_back(cur_code,
+                                  std::array<SizeType, 2>{static_cast<SizeType>(std::distance(top, begin)),
+                                                          static_cast<SizeType>(std::distance(top, it_end))},
+                                  std::array<F, NDim>{});
+                if (static_cast<std::make_unsigned_t<decltype(std::distance(begin, it_end))>>(npart) > max_leaf_n) {
+                    // The node is an internal one, go deeper.
+                    tree_builder<ParentLevel + 1u, NDim, UInt, F>{}(tree, cur_code, begin, it_end, top, max_leaf_n);
+                }
+            }
+            // Move to the next child node.
+            std::advance(begin, npart);
+        }
+    }
+};
+
+template <unsigned ParentLevel, std::size_t NDim, typename UInt, typename F>
+struct tree_builder<ParentLevel, NDim, UInt, F, std::true_type> {
+    template <typename Tree, typename CIt, typename SizeType>
+    void operator()(Tree &, UInt, CIt, CIt, CIt, SizeType) const
+    {
+    }
+};
+
 } // namespace detail
 
 template <typename UInt, typename F, std::size_t NDim>
@@ -77,11 +150,6 @@ class tree
 
 public:
     using size_type = typename v_type<F>::size_type;
-
-private:
-    using tree_type = v_type<std::tuple<UInt, std::array<size_type, 2>, std::array<F, NDim>>>;
-
-public:
     template <typename It>
     explicit tree(const F &box_size, It m_it, std::array<It, NDim> c_it, size_type N, size_type max_leaf_n)
         : m_box_size(box_size), m_max_leaf_n(max_leaf_n)
@@ -141,7 +209,7 @@ public:
         // Determine the particles' codes, and store them in a temporary vector for indirect
         // sorting. Remember also the original coord iters for later use.
         auto old_c_it = c_it;
-        static thread_local v_type<std::pair<UInt, size_type>> v_ind;
+        auto &v_ind = get_v_ind();
         v_ind.resize(boost::numeric_cast<decltype(v_ind.size())>(N));
         for (size_type i = 0; i < N; ++i) {
             // Write the coords in the temp structure.
@@ -180,6 +248,14 @@ public:
             m_codes[i] = v_ind[i].first;
         }
         // Now let's proceed to the tree construction.
+        tree_builder<0, NDim, UInt, F>{}(m_tree, 1, m_codes.begin(), m_codes.end(), m_codes.begin(), max_leaf_n);
+    }
+
+private:
+    static auto &get_v_ind()
+    {
+        static thread_local v_type<std::pair<UInt, size_type>> v_ind;
+        return v_ind;
     }
 
 private:
@@ -188,7 +264,7 @@ private:
     v_type<F> m_masses;
     std::array<v_type<F>, NDim> m_coords;
     v_type<UInt> m_codes;
-    tree_type m_tree;
+    v_type<std::tuple<UInt, std::array<size_type, 2>, std::array<F, NDim>>> m_tree;
 };
 
 #include <iostream>
