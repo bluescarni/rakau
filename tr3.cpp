@@ -230,59 +230,75 @@ struct tree_builder<ParentLevel, NDim, UInt, F, std::true_type> {
 template <unsigned ParentLevel, std::size_t NDim, typename UInt,
           typename = std::integral_constant<bool, (cbits_v<UInt, NDim> == ParentLevel)>>
 struct particle_acc {
-    template <typename Tree, typename PIt>
-    auto operator()(const Tree &tree, const typename std::iterator_traits<PIt>::value_type &dsize,
-                    const typename std::iterator_traits<PIt>::value_type &theta2, UInt code, UInt begin, UInt end,
-                    PIt p_it) const
+    // Add to out the acceleration induced by the particles in the [begin, end) range onto
+    // the particle at index pidx.
+    template <typename F, typename Tree, typename SizeType>
+    static void add_acc_from_range(std::array<F, NDim> &out, const Tree &tree, SizeType begin, SizeType end,
+                                   SizeType pidx)
     {
-        // Shortcuts.
-        using float_t = typename std::iterator_traits<PIt>::value_type;
-        constexpr unsigned cbits = get_cbits<UInt, NDim>();
+        for (; begin != end; ++begin) {
+            assert(begin != pidx);
+            F dist3(0);
+            for (std::size_t j = 0; j < NDim; ++j) {
+                dist3 += (tree.m_coords[j][begin] - tree.m_coords[j][pidx])
+                         * (tree.m_coords[j][begin] - tree.m_coords[j][pidx]);
+            }
+            dist3 = std::sqrt(dist3);
+            dist3 = dist3 * dist3 * dist3;
+            for (std::size_t j = 0; j < NDim; ++j) {
+                out[j] += (tree.m_masses[begin] * (tree.m_coords[j][begin] - tree.m_coords[j][pidx])) / dist3;
+            }
+        }
+    }
+    template <typename F, typename Tree, typename SizeType>
+    void operator()(std::array<F, NDim> &out, const Tree &tree, const F &theta2, UInt code, SizeType pidx,
+                    SizeType begin, SizeType end) const
+    {
+        assert(code == tree.m_codes[pidx]);
+        constexpr unsigned cbits = cbits_v<UInt, NDim>;
         // This is the nodal code of the node in which the particle is at the current level.
         // We compute it via the following:
         // - add an extra 1 bit in the MSB direction,
         // - shift down the result depending on the current level.
         const auto part_node_code
             = static_cast<UInt>(((UInt(1) << (cbits * NDim)) + code) >> ((cbits - ParentLevel - 1u) * NDim));
-        // This will eventually become the index pointing to the node
-        // hosting the particle at the current level. It will be established
-        // in the loop below.
-        auto part_node_idx = end;
-        // Init the return value.
-        float_t retval(0);
         for (auto idx = begin; idx != end;
              // NOTE: when incrementing idx, we need to add 1 to the
              // total number of children in order to point to the next sibling.
-             idx += tree.first[idx * 2u + 1u] + 1u) {
+             idx += std::get<1>(tree.m_tree[idx])[2] + 1u) {
             // Get the nodal code of the current sibling.
-            const auto cur_node_code = tree.first[idx * 2u];
+            const auto cur_node_code = std::get<0>(tree.m_tree[idx]);
+            // Get the number of children of the current sibling.
+            const auto n_children = std::get<1>(tree.m_tree[idx])[2];
             if (part_node_code == cur_node_code) {
-                // We are in the sibling that contains the particle. Store
-                // its index and don't do anything, just move to the next
-                // sibling.
-                part_node_idx = idx;
+                // We are in the sibling that contains the particle. Check if it is a leaf
+                // or an internal node.
+                if (n_children) {
+                    // Internal node, go one level deeper. The new indices range must
+                    // start from the position immediately past idx (i.e., the first children node) and have a size
+                    // equal to the number of children.
+                    particle_acc<ParentLevel + 1u, NDim, UInt>{}(out, tree, theta2, code, pidx, idx + 1u,
+                                                                 idx + 1u + n_children);
+                } else {
+                    // The particle's node has no children, hence it is *the* leaf node
+                    // containing the target particle.
+                    const auto leaf_begin = std::get<1>(tree.m_tree[idx])[0];
+                    const auto leaf_end = std::get<1>(tree.m_tree[idx])[1];
+                    // Double check the particle's code is indeed in the leaf node.
+                    assert(pidx >= leaf_begin && pidx < leaf_end);
+                    // Add the acceleration from the leaf node. We split it
+                    // in two parts as we want to avoid adding the acceleration
+                    // from the particle itself.
+                    add_acc_from_range(out, tree, leaf_begin, pidx, pidx);
+                    add_acc_from_range(out, tree, pidx + 1u, leaf_end, pidx);
+                }
             } else {
                 // Compute the acceleration from the current sibling node.
-                retval += acc_from_node<ParentLevel>{}(tree, dsize, theta2, idx, idx + tree.first[idx * 2u + 1u] + 1u,
-                                                       p_it);
+                // retval += acc_from_node<ParentLevel>{}(tree, dsize, theta2, idx, idx + tree.first[idx * 2u + 1u] +
+                // 1u,
+                //                                        p_it);
             }
         }
-        // We must have set part_node_idx to something other than end
-        // in the loop above.
-        assert(part_node_idx != end);
-        // Check if the node containing the particle at the current level is a leaf.
-        if (!tree.first[part_node_idx * 2u + 1u]) {
-            // The particle's node has no children.
-            // TODO fixme for multiple particles in a leaf.
-            return retval;
-        }
-        // Go one level deeper in the particle's current node. The new indices range must start from the position
-        // immediately past part_node_idx (i.e., the first children node) and have a size equal to the number
-        // of children.
-        retval += particle_acc<ParentLevel + 1u, NDim, UInt>{}(tree, dsize, theta2, code, part_node_idx + 1u,
-                                                               part_node_idx + 1u + tree.first[part_node_idx * 2u + 1u],
-                                                               p_it);
-        return retval;
     }
     template <unsigned PLevel, typename = void>
     struct acc_from_node {
@@ -339,12 +355,9 @@ struct particle_acc {
 
 template <unsigned ParentLevel, std::size_t NDim, typename UInt>
 struct particle_acc<ParentLevel, NDim, UInt, std::true_type> {
-    template <typename Tree, typename PIt>
-    auto operator()(const Tree &, const typename std::iterator_traits<PIt>::value_type &,
-                    const typename std::iterator_traits<PIt>::value_type &, UInt, UInt, UInt, PIt) const
+    template <typename F, typename Tree, typename SizeType>
+    void operator()(std::array<F, NDim> &, const Tree &, const F &, UInt, SizeType, SizeType, SizeType) const
     {
-        using float_t = typename std::iterator_traits<PIt>::value_type;
-        return float_t(0);
     }
 };
 
@@ -566,9 +579,29 @@ public:
         }
         return os;
     }
+
+private:
+    template <unsigned, std::size_t, typename, typename>
+    friend struct particle_acc;
+
+public:
     template <typename OutIt>
-    void compute_accelerations(OutIt out_it)
+    void compute_accelerations(OutIt out_it, const F &theta) const
     {
+        const F theta2 = theta * theta;
+        std::array<F, NDim> tmp;
+        for (size_type i = 0; i < m_codes.size(); ++i) {
+            // Init the acc vector to zero.
+            for (auto &c : tmp) {
+                c = F(0);
+            }
+            // Write the acceleration into tmp.
+            particle_acc<0, NDim, UInt>{}(tmp, *this, theta2, m_codes[i], i, size_type(0), size_type(m_tree.size()));
+            // Copy the result to the output iterator.
+            for (const auto &c : tmp) {
+                *out_it++ = c;
+            }
+        }
     }
 
 private:
@@ -638,10 +671,12 @@ inline std::vector<F> get_plummer_sphere(std::size_t n, F size)
 
 int main()
 {
-    auto parts = get_uniform_particles<3>(nparts, bsize);
-    // auto parts = get_plummer_sphere(nparts, bsize);
-    std::cout << tree<std::uint64_t, float, 3>(
-                     bsize, parts.begin(),
-                     {parts.begin() + nparts, parts.begin() + 2 * nparts, parts.begin() + 3 * nparts}, nparts, 16)
-              << '\n';
+    // auto parts = get_uniform_particles<3>(nparts, bsize);
+    auto parts = get_plummer_sphere(nparts, bsize);
+    tree<std::uint64_t, float, 3> t(bsize, parts.begin(),
+                                    {parts.begin() + nparts, parts.begin() + 2 * nparts, parts.begin() + 3 * nparts},
+                                    nparts, 16);
+    std::cout << t << '\n';
+    std::vector<float> accs(nparts * 3);
+    t.compute_accelerations(accs.begin(), 0.75f);
 }
