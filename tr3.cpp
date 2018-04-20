@@ -269,17 +269,25 @@ struct particle_acc {
             out[2] += xsimd::hadd(zacc);
         }
 #endif
+        // Local arrays to store the target particle's coords
+        // and the diff between the range's particles coordinates and the
+        // target particle coordinates.
+        std::array<F, NDim> pcoords, diffs;
+        for (std::size_t j = 0; j < NDim; ++j) {
+            pcoords[j] = tree.m_coords[j][pidx];
+        }
         for (; begin != end; ++begin) {
             assert(begin != pidx);
             F dist2(0);
             for (std::size_t j = 0; j < NDim; ++j) {
-                dist2 += (tree.m_coords[j][begin] - tree.m_coords[j][pidx])
-                         * (tree.m_coords[j][begin] - tree.m_coords[j][pidx]);
+                diffs[j] = tree.m_coords[j][begin] - pcoords[j];
+                dist2 += diffs[j] * diffs[j];
             }
             const F dist = std::sqrt(dist2);
             const F dist3 = dist * dist2;
+            const F m_dist3 = tree.m_masses[begin] / dist3;
             for (std::size_t j = 0; j < NDim; ++j) {
-                out[j] += (tree.m_masses[begin] * (tree.m_coords[j][begin] - tree.m_coords[j][pidx])) / dist3;
+                out[j] += m_dist3 * diffs[j];
             }
         }
     }
@@ -337,14 +345,18 @@ struct particle_acc {
         void operator()(std::array<F, NDim> &out, const Tree &tree, const F &theta, UInt code, SizeType pidx,
                         SizeType begin, SizeType end) const
         {
+            // Local array to store the difference between the node's COM coordinates
+            // and the particle coordinates.
+            std::array<F, NDim> diffs;
             // Determine the distance**2, distance and distance**3 between the particle and the COM of the node.
             F dist2(0);
             for (std::size_t j = 0; j < NDim; ++j) {
                 // Current node COM coordinate.
-                const auto &node_x = std::get<3>(tree.m_tree[begin])[j];
+                const F &node_x = std::get<3>(tree.m_tree[begin])[j];
                 // Current part coordinate.
-                const auto &part_x = tree.m_coords[j][pidx];
-                dist2 += (node_x - part_x) * (node_x - part_x);
+                const F &part_x = tree.m_coords[j][pidx];
+                diffs[j] = node_x - part_x;
+                dist2 += diffs[j] * diffs[j];
             }
             const F dist = std::sqrt(dist2);
             const F dist3 = dist2 * dist;
@@ -352,22 +364,20 @@ struct particle_acc {
             const auto n_children = std::get<1>(tree.m_tree[begin])[2];
             if (!n_children) {
                 // Leaf node, compute the acceleration.
-                const auto leaf_begin = std::get<1>(tree.m_tree[begin])[0];
-                const auto leaf_end = std::get<1>(tree.m_tree[begin])[1];
-                add_acc_from_range(out, tree, leaf_begin, leaf_end, pidx);
+                add_acc_from_range(out, tree, std::get<1>(tree.m_tree[begin])[0], std::get<1>(tree.m_tree[begin])[1],
+                                   pidx);
                 return;
             }
             // Determine the size of the node.
-            const auto node_size = tree.m_box_size / (UInt(1) << (PLevel + 1u));
+            const F node_size = tree.m_box_size / (UInt(1) << (PLevel + 1u));
             // Check the BH acceptance criterion.
             if (node_size / dist < theta) {
                 // We can approximate the acceleration with the COM of the
                 // current node.
-                const auto &com_mass = std::get<2>(tree.m_tree[begin]);
+                // NOTE: this is the mass of the COM divided by dist**3.
+                const F com_mass_dist3 = std::get<2>(tree.m_tree[begin]) / dist3;
                 for (std::size_t j = 0; j < NDim; ++j) {
-                    const auto &node_x = std::get<3>(tree.m_tree[begin])[j];
-                    const auto &part_x = tree.m_coords[j][pidx];
-                    out[j] += (com_mass * (node_x - part_x)) / dist3;
+                    out[j] += com_mass_dist3 * diffs[j];
                 }
                 return;
             }
