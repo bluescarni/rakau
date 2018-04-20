@@ -238,6 +238,7 @@ struct particle_acc {
     static void add_acc_from_range(std::array<F, NDim> &out, const Tree &tree, SizeType begin, SizeType end,
                                    SizeType pidx)
     {
+#if 0
         using b_type = xsimd::simd_type<F>;
         constexpr std::size_t inc = b_type::size;
         const auto size = end - begin;
@@ -267,6 +268,7 @@ struct particle_acc {
             out[1] += xsimd::hadd(yacc);
             out[2] += xsimd::hadd(zacc);
         }
+#endif
         for (; begin != end; ++begin) {
             assert(begin != pidx);
             F dist2(0);
