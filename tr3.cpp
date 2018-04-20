@@ -414,6 +414,7 @@ struct particle_acc<ParentLevel, NDim, UInt, std::true_type> {
 template <typename UInt, typename F, std::size_t NDim>
 class tree
 {
+    static_assert(NDim);
     // cbits shortcut.
     static constexpr unsigned cbits = cbits_v<UInt, NDim>;
     // Main vector type.
@@ -465,6 +466,11 @@ private:
         auto tree_it = m_tree.begin();
         for (auto it = children_count.begin(); it != children_count.end(); ++it, ++tree_it) {
             std::get<1>(*tree_it)[2] = *it;
+        }
+        // Check that size_type can represent the size of the tree.
+        if (m_tree.size() > std::numeric_limits<size_type>::max()) {
+            throw std::overflow_error("the size of the tree (" + std::to_string(m_tree.size())
+                                      + ") is too large, and it results in an overflow condition");
         }
     }
     void build_tree_properties()
