@@ -406,6 +406,9 @@ struct particle_acc<ParentLevel, NDim, UInt, std::true_type> {
     template <typename F, typename Tree, typename SizeType>
     void operator()(std::array<F, NDim> &, const Tree &, const F &, UInt, SizeType, SizeType, SizeType) const
     {
+        // Same as above: we would end up here only if the leaf node containing the target
+        // particle had children, but that is impossible.
+        assert(false);
     }
 };
 
