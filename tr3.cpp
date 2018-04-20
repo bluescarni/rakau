@@ -232,36 +232,12 @@ struct tree_builder<ParentLevel, NDim, UInt, F, std::true_type> {
 template <unsigned ParentLevel, std::size_t NDim, typename UInt,
           typename = std::integral_constant<bool, (cbits_v<UInt, NDim> == ParentLevel)>>
 struct particle_acc {
-    // static float hsum_ps_sse3(__m128 v)
-    // {
-    //     __m128 shuf = _mm_movehdup_ps(v); // broadcast elements 3,1 to 2,0
-    //     __m128 sums = _mm_add_ps(v, shuf);
-    //     shuf = _mm_movehl_ps(shuf, sums); // high half -> low half
-    //     sums = _mm_add_ss(sums, shuf);
-    //     return _mm_cvtss_f32(sums);
-    // }
-    static float foo_sum(__m256 x)
-    {
-        __m128 hi = _mm256_extractf128_ps(x, 1);
-        __m128 lo = _mm256_extractf128_ps(x, 0);
-        lo = _mm_add_ps(hi, lo);
-        hi = _mm_movehl_ps(hi, lo);
-        lo = _mm_add_ps(hi, lo);
-        hi = _mm_shuffle_ps(lo, lo, 1);
-        lo = _mm_add_ss(hi, lo);
-        return _mm_cvtss_f32(lo);
-        // __m128 vlow = _mm256_castps256_ps128(v);
-        // __m128 vhigh = _mm256_extractf128_ps(v, 1); // high 128
-        // vlow = _mm_add_ps(vlow, vhigh);             // add the low 128
-        // return hsum_ps_sse3(vlow);
-    }
     // Add to out the acceleration induced by the particles in the [begin, end) range onto
     // the particle at index pidx.
     template <typename F, typename Tree, typename SizeType>
     static void add_acc_from_range(std::array<F, NDim> &out, const Tree &tree, SizeType begin, SizeType end,
                                    SizeType pidx)
     {
-#if 0
         using b_type = xsimd::simd_type<F>;
         constexpr std::size_t inc = b_type::size;
         const auto size = end - begin;
@@ -271,7 +247,6 @@ struct particle_acc {
         auto ydata = tree.m_coords[1].data();
         auto zdata = tree.m_coords[2].data();
         auto mdata = tree.m_masses.data();
-        // std::array<F, inc> tmp0, tmp1, tmp2;
         const auto x0 = xdata[pidx], y0 = ydata[pidx], z0 = zdata[pidx];
         for (; begin != vec_end; begin += inc) {
             b_type xvec = xsimd::load_unaligned(xdata + begin);
@@ -288,23 +263,10 @@ struct particle_acc {
             b_type xacc = diff_x * m_dist3;
             b_type yacc = diff_y * m_dist3;
             b_type zacc = diff_z * m_dist3;
-            out[0] = foo_sum(xacc);
-            out[1] = foo_sum(yacc);
-            out[2] = foo_sum(zacc);
-            // xsimd::store_unaligned(tmp0.data(), xacc);
-            // for (std::size_t j = 0; j < inc; ++j) {
-            //     out[0] += tmp0[j];
-            // }
-            // xsimd::store_unaligned(tmp1.data(), yacc);
-            // for (std::size_t j = 0; j < inc; ++j) {
-            //     out[1] += tmp1[j];
-            // }
-            // xsimd::store_unaligned(tmp2.data(), zacc);
-            // for (std::size_t j = 0; j < inc; ++j) {
-            //     out[2] += tmp2[j];
-            // }
+            out[0] += xsimd::hadd(xacc);
+            out[1] += xsimd::hadd(yacc);
+            out[2] += xsimd::hadd(zacc);
         }
-#endif
         for (; begin != end; ++begin) {
             assert(begin != pidx);
             F dist2(0);
