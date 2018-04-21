@@ -141,191 +141,6 @@ struct node_comparer {
         return s_n1 < s_n2 || (s_n1 == s_n2 && tl1 < tl2);
     }
 };
-
-template <unsigned Level, std::size_t NDim, typename UInt,
-          typename = std::integral_constant<bool, (Level == cbits_v<UInt, NDim> + 1u)>>
-struct particle_acc {
-    // Add to out the acceleration induced by the particles in the [begin, end) range onto
-    // the particle at index pidx.
-    template <typename F, typename Tree, typename SizeType>
-    static void add_acc_from_range(std::array<F, NDim> &out, const Tree &tree, SizeType begin, SizeType end,
-                                   SizeType pidx)
-    {
-#if 0
-        using b_type = xsimd::simd_type<F>;
-        constexpr std::size_t inc = b_type::size;
-        const auto size = end - begin;
-        const auto vec_size = static_cast<SizeType>(size - size % inc);
-        const auto vec_end = begin + vec_size;
-        auto xdata = tree.m_coords[0].data();
-        auto ydata = tree.m_coords[1].data();
-        auto zdata = tree.m_coords[2].data();
-        auto mdata = tree.m_masses.data();
-        const auto x0 = xdata[pidx], y0 = ydata[pidx], z0 = zdata[pidx];
-        for (; begin != vec_end; begin += inc) {
-            b_type xvec = xsimd::load_unaligned(xdata + begin);
-            b_type diff_x = xvec - x0;
-            b_type yvec = xsimd::load_unaligned(ydata + begin);
-            b_type diff_y = yvec - y0;
-            b_type zvec = xsimd::load_unaligned(zdata + begin);
-            b_type diff_z = zvec - z0;
-            b_type dist2 = diff_x * diff_x + diff_y * diff_y + diff_z * diff_z;
-            b_type dist = xsimd::sqrt(dist2);
-            b_type dist3 = dist2 * dist;
-            b_type mvec = xsimd::load_unaligned(mdata + begin);
-            b_type m_dist3 = mvec / dist3;
-            b_type xacc = diff_x * m_dist3;
-            b_type yacc = diff_y * m_dist3;
-            b_type zacc = diff_z * m_dist3;
-            out[0] += xsimd::hadd(xacc);
-            out[1] += xsimd::hadd(yacc);
-            out[2] += xsimd::hadd(zacc);
-        }
-#endif
-        // Local arrays to store the target particle's coords
-        // and the diff between the range's particles coordinates and the
-        // target particle coordinates.
-        std::array<F, NDim> pcoords, diffs;
-        for (std::size_t j = 0; j < NDim; ++j) {
-            pcoords[j] = tree.m_coords[j][pidx];
-        }
-        for (; begin != end; ++begin) {
-            assert(begin != pidx);
-            F dist2(0);
-            for (std::size_t j = 0; j < NDim; ++j) {
-                diffs[j] = tree.m_coords[j][begin] - pcoords[j];
-                dist2 += diffs[j] * diffs[j];
-            }
-            const F dist = std::sqrt(dist2);
-            const F dist3 = dist * dist2;
-            const F m_dist3 = tree.m_masses[begin] / dist3;
-            for (std::size_t j = 0; j < NDim; ++j) {
-                out[j] += m_dist3 * diffs[j];
-            }
-        }
-    }
-    template <typename F, typename Tree, typename SizeType>
-    void operator()(std::array<F, NDim> &out, const Tree &tree, const F &theta, UInt code, SizeType pidx,
-                    SizeType begin, SizeType end) const
-    {
-        assert(code == tree.m_codes[pidx]);
-        constexpr unsigned cbits = cbits_v<UInt, NDim>;
-        // This is the nodal code of the node in which the particle is at the current level.
-        // We compute it via the following:
-        // - add an extra 1 bit in the MSB direction,
-        // - shift down the result depending on the current level.
-        const auto part_node_code = static_cast<UInt>(((UInt(1) << (cbits * NDim)) + code) >> ((cbits - Level) * NDim));
-        for (auto idx = begin; idx != end;
-             // NOTE: when incrementing idx, we need to add 1 to the
-             // total number of children in order to point to the next sibling.
-             idx += get<1>(tree.m_tree[idx])[2] + 1u) {
-            // Get the nodal code of the current sibling.
-            const auto cur_node_code = get<0>(tree.m_tree[idx]);
-            // Get the number of children of the current sibling.
-            const auto n_children = get<1>(tree.m_tree[idx])[2];
-            if (part_node_code == cur_node_code) {
-                // We are in the sibling that contains the particle. Check if it is a leaf
-                // or an internal node.
-                if (n_children) {
-                    // Internal node, go one level deeper. The new indices range must
-                    // start from the position immediately past idx (i.e., the first children node) and have a size
-                    // equal to the number of children.
-                    particle_acc<Level + 1u, NDim, UInt>{}(out, tree, theta, code, pidx, idx + 1u,
-                                                           idx + 1u + n_children);
-                } else {
-                    // The particle's node has no children, hence it is *the* leaf node
-                    // containing the target particle.
-                    const auto leaf_begin = get<1>(tree.m_tree[idx])[0];
-                    const auto leaf_end = get<1>(tree.m_tree[idx])[1];
-                    // Double check the particle's code is indeed in the leaf node.
-                    assert(pidx >= leaf_begin && pidx < leaf_end);
-                    // Add the acceleration from the leaf node. We split it
-                    // in two parts as we want to avoid adding the acceleration
-                    // from the particle itself.
-                    add_acc_from_range(out, tree, leaf_begin, pidx, pidx);
-                    add_acc_from_range(out, tree, pidx + 1u, leaf_end, pidx);
-                }
-            } else {
-                // Compute the acceleration from the current sibling node.
-                acc_from_node<Level>{}(out, tree, theta, code, pidx, idx, idx + 1u + n_children);
-            }
-        }
-    }
-    template <unsigned SLevel, typename = void>
-    struct acc_from_node {
-        template <typename F, typename Tree, typename SizeType>
-        void operator()(std::array<F, NDim> &out, const Tree &tree, const F &theta, UInt code, SizeType pidx,
-                        SizeType begin, SizeType end) const
-        {
-            // SLevel cannot be zero, as the root node always contains the target particle
-            // and thus it has no siblings.
-            assert(SLevel);
-            // Local array to store the difference between the node's COM coordinates
-            // and the particle coordinates.
-            std::array<F, NDim> diffs;
-            // Determine the distance**2, distance and distance**3 between the particle and the COM of the node.
-            F dist2(0);
-            for (std::size_t j = 0; j < NDim; ++j) {
-                // Current node COM coordinate.
-                const F &node_x = get<3>(tree.m_tree[begin])[j];
-                // Current part coordinate.
-                const F &part_x = tree.m_coords[j][pidx];
-                diffs[j] = node_x - part_x;
-                dist2 += diffs[j] * diffs[j];
-            }
-            const F dist = std::sqrt(dist2);
-            const F dist3 = dist2 * dist;
-            // Check if the current node is a leaf.
-            const auto n_children = get<1>(tree.m_tree[begin])[2];
-            if (!n_children) {
-                // Leaf node, compute the acceleration.
-                add_acc_from_range(out, tree, get<1>(tree.m_tree[begin])[0], get<1>(tree.m_tree[begin])[1], pidx);
-                return;
-            }
-            // Determine the size of the node.
-            const F node_size = tree.m_box_size / (UInt(1) << SLevel);
-            // Check the BH acceptance criterion.
-            if (node_size / dist < theta) {
-                // We can approximate the acceleration with the COM of the
-                // current node.
-                // NOTE: this is the mass of the COM divided by dist**3.
-                const F com_mass_dist3 = get<2>(tree.m_tree[begin]) / dist3;
-                for (std::size_t j = 0; j < NDim; ++j) {
-                    out[j] += com_mass_dist3 * diffs[j];
-                }
-                return;
-            }
-            // We need to go deeper in the tree.
-            // We can now bump up the index because we know this node has at least 1 child.
-            for (++begin; begin != end; begin += get<1>(tree.m_tree[begin])[2] + 1u) {
-                acc_from_node<SLevel + 1u>{}(out, tree, theta, code, pidx, begin,
-                                             begin + get<1>(tree.m_tree[begin])[2] + 1u);
-            }
-        }
-    };
-    template <typename T>
-    struct acc_from_node<cbits_v<UInt, NDim> + 1u, T> {
-        template <typename F, typename Tree, typename SizeType>
-        void operator()(std::array<F, NDim> &, const Tree &, const F &, UInt, SizeType, SizeType, SizeType) const
-        {
-            // We should never get here: if we use all cbits, the deepest node will be a leaf
-            // and we will have handled the case earlier.
-            assert(false);
-        }
-    };
-};
-
-template <unsigned Level, std::size_t NDim, typename UInt>
-struct particle_acc<Level, NDim, UInt, std::true_type> {
-    template <typename F, typename Tree, typename SizeType>
-    void operator()(std::array<F, NDim> &, const Tree &, const F &, UInt, SizeType, SizeType, SizeType) const
-    {
-        // Same as above: we would end up here only if the leaf node containing the target
-        // particle had children, but that is impossible.
-        assert(false);
-    }
-};
-
 } // namespace detail
 
 template <typename UInt, typename F, std::size_t NDim>
@@ -644,14 +459,186 @@ public:
     }
 
 private:
-    template <unsigned, std::size_t, typename, typename>
-    friend struct particle_acc;
+    // Add to out the acceleration induced by the particles in the [begin, end) range onto
+    // the particle at index pidx.
+    void add_acc_from_range(std::array<F, NDim> &out, size_type begin, size_type end, size_type pidx) const
+    {
+#if 0
+        using b_type = xsimd::simd_type<F>;
+        constexpr std::size_t inc = b_type::size;
+        const auto size = end - begin;
+        const auto vec_size = static_cast<size_type>(size - size % inc);
+        const auto vec_end = begin + vec_size;
+        auto xdata = m_coords[0].data();
+        auto ydata = m_coords[1].data();
+        auto zdata = m_coords[2].data();
+        auto mdata = m_masses.data();
+        const auto x0 = xdata[pidx], y0 = ydata[pidx], z0 = zdata[pidx];
+        for (; begin != vec_end; begin += inc) {
+            b_type xvec = xsimd::load_unaligned(xdata + begin);
+            b_type diff_x = xvec - x0;
+            b_type yvec = xsimd::load_unaligned(ydata + begin);
+            b_type diff_y = yvec - y0;
+            b_type zvec = xsimd::load_unaligned(zdata + begin);
+            b_type diff_z = zvec - z0;
+            b_type dist2 = diff_x * diff_x + diff_y * diff_y + diff_z * diff_z;
+            b_type dist = xsimd::sqrt(dist2);
+            b_type dist3 = dist2 * dist;
+            b_type mvec = xsimd::load_unaligned(mdata + begin);
+            b_type m_dist3 = mvec / dist3;
+            b_type xacc = diff_x * m_dist3;
+            b_type yacc = diff_y * m_dist3;
+            b_type zacc = diff_z * m_dist3;
+            out[0] += xsimd::hadd(xacc);
+            out[1] += xsimd::hadd(yacc);
+            out[2] += xsimd::hadd(zacc);
+        }
+#endif
+        // Local arrays to store the target particle's coords
+        // and the diff between the range's particles coordinates and the
+        // target particle coordinates.
+        std::array<F, NDim> pcoords, diffs;
+        for (std::size_t j = 0; j < NDim; ++j) {
+            pcoords[j] = m_coords[j][pidx];
+        }
+        for (; begin != end; ++begin) {
+            assert(begin != pidx);
+            F dist2(0);
+            for (std::size_t j = 0; j < NDim; ++j) {
+                diffs[j] = m_coords[j][begin] - pcoords[j];
+                dist2 += diffs[j] * diffs[j];
+            }
+            const F dist = std::sqrt(dist2);
+            const F dist3 = dist * dist2;
+            const F m_dist3 = m_masses[begin] / dist3;
+            for (std::size_t j = 0; j < NDim; ++j) {
+                out[j] += m_dist3 * diffs[j];
+            }
+        }
+    }
+    template <unsigned SLevel>
+    void scalar_acc_from_node(std::array<F, NDim> &out, const F &theta, UInt code, size_type pidx, size_type begin,
+                              size_type end) const
+    {
+        if constexpr (SLevel < cbits_v<UInt, NDim> + 1u) {
+            // SLevel cannot be zero: the root node has no siblings and, even if it is a leaf node,
+            // that case will be handled elsewhere.
+            assert(SLevel);
+            // Local array to store the difference between the node's COM coordinates
+            // and the particle coordinates.
+            std::array<F, NDim> diffs;
+            // Determine the distance**2, distance and distance**3 between the particle and the COM of the node.
+            F dist2(0);
+            for (std::size_t j = 0; j < NDim; ++j) {
+                // Current node COM coordinate.
+                const F &node_x = get<3>(m_tree[begin])[j];
+                // Current part coordinate.
+                const F &part_x = m_coords[j][pidx];
+                diffs[j] = node_x - part_x;
+                dist2 += diffs[j] * diffs[j];
+            }
+            const F dist = std::sqrt(dist2);
+            const F dist3 = dist2 * dist;
+            // Check if the current node is a leaf.
+            const auto n_children = get<1>(m_tree[begin])[2];
+            if (!n_children) {
+                // Leaf node, compute the acceleration.
+                add_acc_from_range(out, get<1>(m_tree[begin])[0], get<1>(m_tree[begin])[1], pidx);
+                return;
+            }
+            // Determine the size of the node.
+            const F node_size = m_box_size / (UInt(1) << SLevel);
+            // Check the BH acceptance criterion.
+            if (node_size / dist < theta) {
+                // We can approximate the acceleration with the COM of the
+                // current node.
+                // NOTE: this is the mass of the COM divided by dist**3.
+                const F com_mass_dist3 = get<2>(m_tree[begin]) / dist3;
+                for (std::size_t j = 0; j < NDim; ++j) {
+                    out[j] += com_mass_dist3 * diffs[j];
+                }
+                return;
+            }
+            // We need to go deeper in the tree.
+            // We can now bump up the index because we know this node has at least 1 child.
+            for (++begin; begin != end; begin += get<1>(m_tree[begin])[2] + 1u) {
+                scalar_acc_from_node<SLevel + 1u>(out, theta, code, pidx, begin, begin + get<1>(m_tree[begin])[2] + 1u);
+            }
+        } else {
+            // GCC warnings.
+            (void)code;
+            (void)pidx;
+            (void)begin;
+            (void)end;
+            // We should never get here: if we use all cbits, the deepest node will be a leaf
+            // and we will have handled the case earlier.
+            assert(false);
+        }
+    }
+    template <unsigned Level>
+    void scalar_acc(std::array<F, NDim> &out, const F &theta, UInt code, size_type pidx, size_type begin,
+                    size_type end) const
+    {
+        assert(code == m_codes[pidx]);
+        constexpr unsigned cbits = cbits_v<UInt, NDim>;
+        if constexpr (Level < cbits + 1u) {
+            // This is the nodal code of the node in which the particle is at the current level.
+            // We compute it via the following:
+            // - add an extra 1 bit in the MSB direction,
+            // - shift down the result depending on the current level.
+            const auto part_node_code
+                = static_cast<UInt>(((UInt(1) << (cbits * NDim)) + code) >> ((cbits - Level) * NDim));
+            for (auto idx = begin; idx != end;
+                 // NOTE: when incrementing idx, we need to add 1 to the
+                 // total number of children in order to point to the next sibling.
+                 idx += get<1>(m_tree[idx])[2] + 1u) {
+                // Get the nodal code of the current sibling.
+                const auto cur_node_code = get<0>(m_tree[idx]);
+                // Get the number of children of the current sibling.
+                const auto n_children = get<1>(m_tree[idx])[2];
+                if (part_node_code == cur_node_code) {
+                    // We are in the sibling that contains the particle. Check if it is a leaf
+                    // or an internal node.
+                    if (n_children) {
+                        // Internal node, go one level deeper. The new indices range must
+                        // start from the position immediately past idx (i.e., the first children node) and have a size
+                        // equal to the number of children.
+                        scalar_acc<Level + 1u>(out, theta, code, pidx, idx + 1u, idx + 1u + n_children);
+                    } else {
+                        // The particle's node has no children, hence it is *the* leaf node
+                        // containing the target particle.
+                        const auto leaf_begin = get<1>(m_tree[idx])[0];
+                        const auto leaf_end = get<1>(m_tree[idx])[1];
+                        // Double check the particle's code is indeed in the leaf node.
+                        assert(pidx >= leaf_begin && pidx < leaf_end);
+                        // Add the acceleration from the leaf node. We split it
+                        // in two parts as we want to avoid adding the acceleration
+                        // from the particle itself.
+                        add_acc_from_range(out, leaf_begin, pidx, pidx);
+                        add_acc_from_range(out, pidx + 1u, leaf_end, pidx);
+                    }
+                } else {
+                    // Compute the acceleration from the current sibling node.
+                    scalar_acc_from_node<Level>(out, theta, code, pidx, idx, idx + 1u + n_children);
+                }
+            }
+        } else {
+            // GCC warnings.
+            (void)code;
+            (void)pidx;
+            (void)begin;
+            (void)end;
+            // We would end up here only if the leaf node containing the target
+            // particle had children, but that is impossible.
+            assert(false);
+        }
+    }
 
 public:
     template <typename OutIt>
-    void compute_accelerations(OutIt out_it, const F &theta) const
+    void scalar_accs(OutIt out_it, const F &theta) const
     {
-        simple_timer st("acc computation");
+        simple_timer st("scalar acc computation");
         std::array<F, NDim> tmp;
         for (size_type i = 0; i < m_codes.size(); ++i) {
             // Init the acc vector to zero.
@@ -659,7 +646,7 @@ public:
                 c = F(0);
             }
             // Write the acceleration into tmp.
-            particle_acc<0, NDim, UInt>{}(tmp, *this, theta, m_codes[i], i, size_type(0), size_type(m_tree.size()));
+            scalar_acc<0>(tmp, theta, m_codes[i], i, size_type(0), size_type(m_tree.size()));
             // Copy the result to the output iterator.
             for (const auto &c : tmp) {
                 *out_it++ = c;
@@ -742,6 +729,6 @@ int main()
                                     nparts, 1);
     std::cout << t << '\n';
     std::vector<float> accs(nparts * 3);
-    t.compute_accelerations(accs.begin(), 0.75f);
+    t.scalar_accs(accs.begin(), 0.75f);
     std::cout << accs[0] << ", " << accs[1] << ", " << accs[2] << '\n';
 }
