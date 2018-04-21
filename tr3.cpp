@@ -107,7 +107,7 @@ inline void increase_children_count(T &tup, const std::index_sequence<N...> &)
         ++n;
     };
     (void)inc;
-    (..., inc(std::get<N>(tup)));
+    (..., inc(get<N>(tup)));
 }
 
 // Small helper to get the tree level of a nodal code.
@@ -306,11 +306,11 @@ struct particle_acc {
         for (auto idx = begin; idx != end;
              // NOTE: when incrementing idx, we need to add 1 to the
              // total number of children in order to point to the next sibling.
-             idx += std::get<1>(tree.m_tree[idx])[2] + 1u) {
+             idx += get<1>(tree.m_tree[idx])[2] + 1u) {
             // Get the nodal code of the current sibling.
-            const auto cur_node_code = std::get<0>(tree.m_tree[idx]);
+            const auto cur_node_code = get<0>(tree.m_tree[idx]);
             // Get the number of children of the current sibling.
-            const auto n_children = std::get<1>(tree.m_tree[idx])[2];
+            const auto n_children = get<1>(tree.m_tree[idx])[2];
             if (part_node_code == cur_node_code) {
                 // We are in the sibling that contains the particle. Check if it is a leaf
                 // or an internal node.
@@ -323,8 +323,8 @@ struct particle_acc {
                 } else {
                     // The particle's node has no children, hence it is *the* leaf node
                     // containing the target particle.
-                    const auto leaf_begin = std::get<1>(tree.m_tree[idx])[0];
-                    const auto leaf_end = std::get<1>(tree.m_tree[idx])[1];
+                    const auto leaf_begin = get<1>(tree.m_tree[idx])[0];
+                    const auto leaf_end = get<1>(tree.m_tree[idx])[1];
                     // Double check the particle's code is indeed in the leaf node.
                     assert(pidx >= leaf_begin && pidx < leaf_end);
                     // Add the acceleration from the leaf node. We split it
@@ -352,7 +352,7 @@ struct particle_acc {
             F dist2(0);
             for (std::size_t j = 0; j < NDim; ++j) {
                 // Current node COM coordinate.
-                const F &node_x = std::get<3>(tree.m_tree[begin])[j];
+                const F &node_x = get<3>(tree.m_tree[begin])[j];
                 // Current part coordinate.
                 const F &part_x = tree.m_coords[j][pidx];
                 diffs[j] = node_x - part_x;
@@ -361,11 +361,10 @@ struct particle_acc {
             const F dist = std::sqrt(dist2);
             const F dist3 = dist2 * dist;
             // Check if the current node is a leaf.
-            const auto n_children = std::get<1>(tree.m_tree[begin])[2];
+            const auto n_children = get<1>(tree.m_tree[begin])[2];
             if (!n_children) {
                 // Leaf node, compute the acceleration.
-                add_acc_from_range(out, tree, std::get<1>(tree.m_tree[begin])[0], std::get<1>(tree.m_tree[begin])[1],
-                                   pidx);
+                add_acc_from_range(out, tree, get<1>(tree.m_tree[begin])[0], get<1>(tree.m_tree[begin])[1], pidx);
                 return;
             }
             // Determine the size of the node.
@@ -375,7 +374,7 @@ struct particle_acc {
                 // We can approximate the acceleration with the COM of the
                 // current node.
                 // NOTE: this is the mass of the COM divided by dist**3.
-                const F com_mass_dist3 = std::get<2>(tree.m_tree[begin]) / dist3;
+                const F com_mass_dist3 = get<2>(tree.m_tree[begin]) / dist3;
                 for (std::size_t j = 0; j < NDim; ++j) {
                     out[j] += com_mass_dist3 * diffs[j];
                 }
@@ -383,9 +382,9 @@ struct particle_acc {
             }
             // We need to go deeper in the tree.
             // We can now bump up the index because we know this node has at least 1 child.
-            for (++begin; begin != end; begin += std::get<1>(tree.m_tree[begin])[2] + 1u) {
+            for (++begin; begin != end; begin += get<1>(tree.m_tree[begin])[2] + 1u) {
                 acc_from_node<PLevel + 1u>{}(out, tree, theta, code, pidx, begin,
-                                             begin + std::get<1>(tree.m_tree[begin])[2] + 1u);
+                                             begin + get<1>(tree.m_tree[begin])[2] + 1u);
             }
         }
     };
@@ -460,15 +459,15 @@ private:
         // Check the tree is sorted according to the nodal code comparison.
         assert(std::is_sorted(m_tree.begin(), m_tree.end(), [](const auto &t1, const auto &t2) {
             node_comparer<NDim> nc;
-            return nc(std::get<0>(t1), std::get<0>(t2));
+            return nc(get<0>(t1), get<0>(t2));
         }));
         // Check that all the nodes contain at least 1 element.
-        assert(std::all_of(m_tree.begin(), m_tree.end(),
-                           [](const auto &tup) { return std::get<1>(tup)[1] > std::get<1>(tup)[0]; }));
+        assert(
+            std::all_of(m_tree.begin(), m_tree.end(), [](const auto &tup) { return get<1>(tup)[1] > get<1>(tup)[0]; }));
         // Copy over the children count.
         auto tree_it = m_tree.begin();
         for (auto it = children_count.begin(); it != children_count.end(); ++it, ++tree_it) {
-            std::get<1>(*tree_it)[2] = *it;
+            get<1>(*tree_it)[2] = *it;
         }
         // Check that size_type can represent the size of the tree.
         if (m_tree.size() > std::numeric_limits<size_type>::max()) {
@@ -481,8 +480,8 @@ private:
         simple_timer st("tree properties");
         for (auto &tup : m_tree) {
             // Get the indices and the size for the current node.
-            const auto begin = std::get<1>(tup)[0];
-            const auto end = std::get<1>(tup)[1];
+            const auto begin = get<1>(tup)[0];
+            const auto end = get<1>(tup)[1];
             assert(end > begin);
             const auto size = end - begin;
             // Compute the total mass.
@@ -495,10 +494,10 @@ private:
                 for (std::remove_const_t<decltype(size)> i = 0; i < size; ++i) {
                     acc += m_ptr[i] * c_ptr[i];
                 }
-                std::get<3>(tup)[j] = acc / tot_mass;
+                get<3>(tup)[j] = acc / tot_mass;
             }
             // Store the total mass.
-            std::get<2>(tup) = tot_mass;
+            get<2>(tup) = tot_mass;
         }
     }
 
@@ -620,10 +619,10 @@ public:
             if (i > max_nodes) {
                 break;
             }
-            os << std::bitset<std::numeric_limits<UInt>::digits>(std::get<0>(tup)) << '|' << std::get<1>(tup)[0] << ','
-               << std::get<1>(tup)[1] << ',' << std::get<1>(tup)[2] << "|" << std::get<2>(tup) << "|[";
+            os << std::bitset<std::numeric_limits<UInt>::digits>(get<0>(tup)) << '|' << get<1>(tup)[0] << ','
+               << get<1>(tup)[1] << ',' << get<1>(tup)[2] << "|" << get<2>(tup) << "|[";
             for (std::size_t j = 0; j < NDim; ++j) {
-                os << std::get<3>(tup)[j];
+                os << get<3>(tup)[j];
                 if (j + 1u < NDim) {
                     os << ", ";
                 }
