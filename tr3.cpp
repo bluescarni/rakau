@@ -359,8 +359,8 @@ private:
             //
             // We want to iterate over the current children nodes
             // (of which there might be up to 2**NDim). A child exists if
-            // it contains at least 1 particle. If it contains > max_leaf_n particles,
-            // it is an internal (i.e., non-leaf) node and we go deeper. If it contains <= max_leaf_n
+            // it contains at least 1 particle. If it contains > m_max_leaf_n particles,
+            // it is an internal (i.e., non-leaf) node and we go deeper. If it contains <= m_max_leaf_n
             // particles, it is a leaf node, we stop going deeper and move to its sibling.
             //
             // This is the node prefix: it is the nodal code of the parent without the most significant bit.
@@ -415,6 +415,13 @@ private:
                 // Move to the next child node.
                 begin += npart;
             }
+        } else {
+            // NOTE: if we end up here, it means we walked through all the recursion levels
+            // and we cannot go any deeper. This will be a children with a number of particles
+            // greater than m_max_leaf_n.
+            // GCC warnings about unused params.
+            (void)parent_code;
+            (void)end;
         }
     }
     void build_tree()
@@ -509,7 +516,7 @@ public:
         // freely between the size types of the masses/coords and codes vectors.
         m_codes.resize(boost::numeric_cast<decltype(m_codes.size())>(N));
         // Get out soon if there's nothing to do.
-        if (!m_codes.size()) {
+        if (!N) {
             return;
         }
         // Function to discretise the input NDim floating-point coordinates starting at 'it'
