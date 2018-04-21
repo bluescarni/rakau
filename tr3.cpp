@@ -394,7 +394,7 @@ struct particle_acc {
         template <typename F, typename Tree, typename SizeType>
         void operator()(std::array<F, NDim> &, const Tree &, const F &, UInt, SizeType, SizeType, SizeType) const
         {
-            // We should never get here: if use all cbits, the deepest node will be a leaf
+            // We should never get here: if we use all cbits, the deepest node will be a leaf
             // and we will have handled the case earlier.
             assert(false);
         }
