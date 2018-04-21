@@ -142,8 +142,8 @@ struct node_comparer {
     }
 };
 
-template <unsigned ParentLevel, std::size_t NDim, typename UInt,
-          typename = std::integral_constant<bool, (cbits_v<UInt, NDim> == ParentLevel)>>
+template <unsigned Level, std::size_t NDim, typename UInt,
+          typename = std::integral_constant<bool, (Level == cbits_v<UInt, NDim> + 1u)>>
 struct particle_acc {
     // Add to out the acceleration induced by the particles in the [begin, end) range onto
     // the particle at index pidx.
@@ -214,8 +214,7 @@ struct particle_acc {
         // We compute it via the following:
         // - add an extra 1 bit in the MSB direction,
         // - shift down the result depending on the current level.
-        const auto part_node_code
-            = static_cast<UInt>(((UInt(1) << (cbits * NDim)) + code) >> ((cbits - ParentLevel - 1u) * NDim));
+        const auto part_node_code = static_cast<UInt>(((UInt(1) << (cbits * NDim)) + code) >> ((cbits - Level) * NDim));
         for (auto idx = begin; idx != end;
              // NOTE: when incrementing idx, we need to add 1 to the
              // total number of children in order to point to the next sibling.
@@ -231,8 +230,8 @@ struct particle_acc {
                     // Internal node, go one level deeper. The new indices range must
                     // start from the position immediately past idx (i.e., the first children node) and have a size
                     // equal to the number of children.
-                    particle_acc<ParentLevel + 1u, NDim, UInt>{}(out, tree, theta, code, pidx, idx + 1u,
-                                                                 idx + 1u + n_children);
+                    particle_acc<Level + 1u, NDim, UInt>{}(out, tree, theta, code, pidx, idx + 1u,
+                                                           idx + 1u + n_children);
                 } else {
                     // The particle's node has no children, hence it is *the* leaf node
                     // containing the target particle.
@@ -248,16 +247,19 @@ struct particle_acc {
                 }
             } else {
                 // Compute the acceleration from the current sibling node.
-                acc_from_node<ParentLevel>{}(out, tree, theta, code, pidx, idx, idx + 1u + n_children);
+                acc_from_node<Level>{}(out, tree, theta, code, pidx, idx, idx + 1u + n_children);
             }
         }
     }
-    template <unsigned PLevel, typename = void>
+    template <unsigned SLevel, typename = void>
     struct acc_from_node {
         template <typename F, typename Tree, typename SizeType>
         void operator()(std::array<F, NDim> &out, const Tree &tree, const F &theta, UInt code, SizeType pidx,
                         SizeType begin, SizeType end) const
         {
+            // SLevel cannot be zero, as the root node always contains the target particle
+            // and thus it has no siblings.
+            assert(SLevel);
             // Local array to store the difference between the node's COM coordinates
             // and the particle coordinates.
             std::array<F, NDim> diffs;
@@ -281,7 +283,7 @@ struct particle_acc {
                 return;
             }
             // Determine the size of the node.
-            const F node_size = tree.m_box_size / (UInt(1) << (PLevel + 1u));
+            const F node_size = tree.m_box_size / (UInt(1) << SLevel);
             // Check the BH acceptance criterion.
             if (node_size / dist < theta) {
                 // We can approximate the acceleration with the COM of the
@@ -296,13 +298,13 @@ struct particle_acc {
             // We need to go deeper in the tree.
             // We can now bump up the index because we know this node has at least 1 child.
             for (++begin; begin != end; begin += get<1>(tree.m_tree[begin])[2] + 1u) {
-                acc_from_node<PLevel + 1u>{}(out, tree, theta, code, pidx, begin,
+                acc_from_node<SLevel + 1u>{}(out, tree, theta, code, pidx, begin,
                                              begin + get<1>(tree.m_tree[begin])[2] + 1u);
             }
         }
     };
     template <typename T>
-    struct acc_from_node<cbits_v<UInt, NDim>, T> {
+    struct acc_from_node<cbits_v<UInt, NDim> + 1u, T> {
         template <typename F, typename Tree, typename SizeType>
         void operator()(std::array<F, NDim> &, const Tree &, const F &, UInt, SizeType, SizeType, SizeType) const
         {
@@ -313,8 +315,8 @@ struct particle_acc {
     };
 };
 
-template <unsigned ParentLevel, std::size_t NDim, typename UInt>
-struct particle_acc<ParentLevel, NDim, UInt, std::true_type> {
+template <unsigned Level, std::size_t NDim, typename UInt>
+struct particle_acc<Level, NDim, UInt, std::true_type> {
     template <typename F, typename Tree, typename SizeType>
     void operator()(std::array<F, NDim> &, const Tree &, const F &, UInt, SizeType, SizeType, SizeType) const
     {
@@ -427,6 +429,8 @@ private:
     void build_tree()
     {
         simple_timer st("node building");
+        // Make sure this is not invoked on an empty tree.
+        assert(m_codes.size());
         // NOTE: in the tree builder code, we will be moving around in the codes
         // vector using random access iterators. Thus, we must ensure the difference
         // type of the iterator can represent the size of the codes vector.
@@ -441,9 +445,21 @@ private:
         // to keep references to elements in it as we grow it.
         static thread_local std::deque<size_type> children_count;
         children_count.resize(0);
+        // Add the counter for the root node.
+        children_count.emplace_back(0);
         // The initial tuple containing the children counters for the parents
         // of a node.
-        auto c_tuple = std::tie();
+        auto c_tuple = std::tie(children_count.back());
+        // Add the root node.
+        m_tree.emplace_back(1,
+                            std::array<size_type, 3>{size_type(0), size_type(m_codes.size()),
+                                                     // NOTE: the children count gets inited to zero. It
+                                                     // will be filled in later.
+                                                     size_type(0)},
+                            // NOTE: make sure mass and coords are initialised in a known state (i.e.,
+                            // zero for C++ floating-point).
+                            0, std::array<F, NDim>{});
+        // Build the rest.
         build_tree_impl<0>(children_count, c_tuple, 1, m_codes.begin(), m_codes.end());
         // Check the result.
         assert(children_count.size() == m_tree.size());
