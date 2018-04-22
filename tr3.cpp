@@ -28,6 +28,11 @@
 inline namespace detail
 {
 
+template <typename... Args>
+inline void ignore_args(const Args &...)
+{
+}
+
 class simple_timer
 {
 public:
@@ -106,7 +111,7 @@ inline void increase_children_count(T &tup, const std::index_sequence<N...> &)
         }
         ++n;
     };
-    (void)inc;
+    ignore_args(inc);
     (..., inc(get<N>(tup)));
 }
 
@@ -237,8 +242,7 @@ private:
             // and we cannot go any deeper. This will be a children with a number of particles
             // greater than m_max_leaf_n.
             // GCC warnings about unused params.
-            (void)parent_code;
-            (void)end;
+            ignore_args(parent_code, end);
         }
     }
     void build_tree()
@@ -573,10 +577,7 @@ private:
             }
         } else {
             // GCC warnings.
-            (void)code;
-            (void)pidx;
-            (void)begin;
-            (void)end;
+            ignore_args(code, pidx, begin, end);
             // We should never get here: if we use all cbits, the deepest node will be a leaf
             // and we will have handled the case earlier.
             assert(false);
@@ -631,10 +632,7 @@ private:
             }
         } else {
             // GCC warnings.
-            (void)code;
-            (void)pidx;
-            (void)begin;
-            (void)end;
+            ignore_args(code, pidx, begin, end);
             // We would end up here only if the leaf node containing the target
             // particle had children, but that is impossible.
             assert(false);
