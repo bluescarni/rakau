@@ -144,7 +144,7 @@ struct node_comparer {
 
 template <unsigned Level, std::size_t NDim, typename UInt,
           typename = std::integral_constant<bool, (Level == cbits_v<UInt, NDim> + 1u)>>
-struct scalar_acc {
+struct particle_acc {
     // Add to out the acceleration induced by the particles in the [begin, end) range onto
     // the particle at index pidx.
     template <typename F, typename Tree, typename SizeType>
@@ -230,7 +230,8 @@ struct scalar_acc {
                     // Internal node, go one level deeper. The new indices range must
                     // start from the position immediately past idx (i.e., the first children node) and have a size
                     // equal to the number of children.
-                    scalar_acc<Level + 1u, NDim, UInt>{}(out, tree, theta, code, pidx, idx + 1u, idx + 1u + n_children);
+                    particle_acc<Level + 1u, NDim, UInt>{}(out, tree, theta, code, pidx, idx + 1u,
+                                                           idx + 1u + n_children);
                 } else {
                     // The particle's node has no children, hence it is *the* leaf node
                     // containing the target particle.
@@ -315,7 +316,7 @@ struct scalar_acc {
 };
 
 template <unsigned Level, std::size_t NDim, typename UInt>
-struct scalar_acc<Level, NDim, UInt, std::true_type> {
+struct particle_acc<Level, NDim, UInt, std::true_type> {
     template <typename F, typename Tree, typename SizeType>
     void operator()(std::array<F, NDim> &, const Tree &, const F &, UInt, SizeType, SizeType, SizeType) const
     {
@@ -644,13 +645,13 @@ public:
 
 private:
     template <unsigned, std::size_t, typename, typename>
-    friend struct scalar_acc;
+    friend struct particle_acc;
 
 public:
     template <typename OutIt>
-    void scalar_accs(OutIt out_it, const F &theta) const
+    void compute_accelerations(OutIt out_it, const F &theta) const
     {
-        simple_timer st("scalar_accs computation");
+        simple_timer st("acc computation");
         std::array<F, NDim> tmp;
         for (size_type i = 0; i < m_codes.size(); ++i) {
             // Init the acc vector to zero.
@@ -658,7 +659,7 @@ public:
                 c = F(0);
             }
             // Write the acceleration into tmp.
-            scalar_acc<0, NDim, UInt>{}(tmp, *this, theta, m_codes[i], i, size_type(0), size_type(m_tree.size()));
+            particle_acc<0, NDim, UInt>{}(tmp, *this, theta, m_codes[i], i, size_type(0), size_type(m_tree.size()));
             // Copy the result to the output iterator.
             for (const auto &c : tmp) {
                 *out_it++ = c;
@@ -741,6 +742,6 @@ int main()
                                     nparts, 1);
     std::cout << t << '\n';
     std::vector<float> accs(nparts * 3);
-    t.scalar_accs(accs.begin(), 0.75f);
+    t.compute_accelerations(accs.begin(), 0.75f);
     std::cout << accs[0] << ", " << accs[1] << ", " << accs[2] << '\n';
 }
