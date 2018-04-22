@@ -449,7 +449,7 @@ public:
                << get<1>(tup)[1] << ',' << get<1>(tup)[2] << "|" << get<2>(tup) << "|[";
             for (std::size_t j = 0; j < NDim; ++j) {
                 os << get<3>(tup)[j];
-                if (j + 1u < NDim) {
+                if (j < NDim - 1u) {
                     os << ", ";
                 }
             }
