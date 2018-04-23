@@ -663,6 +663,104 @@ public:
     }
 
 private:
+    static constexpr unsigned ncrit = 64;
+    template <unsigned Level, unsigned SLevel>
+    void compute_vec_acc(std::vector<F> &out, const F &theta2, size_type idx, size_type size) const
+    {
+        // NOTE: here idx and size refer to indices in the particles' arrays.
+        // Store the pointers to the input and output data.
+        auto out_ptr = out.data() + idx * NDim;
+        auto m_ptr = m_masses.data() + idx;
+        std::array<const F *, NDim> c_ptrs;
+        for (std::size_t j = 0; j < NDim; ++j) {
+            c_ptrs[j] = m_coords[j].data() + idx;
+        }
+        // First we compute the self interaction.
+        // Temporary vectors to be used in the loops below.
+        std::array<F, NDim> diffs, pos1;
+        for (size_type i1 = 0; i1 < size; ++i1) {
+            // Load the coords of the current particle.
+            for (std::size_t j = 0; j < NDim; ++j) {
+                pos1[j] = c_ptrs[j][i1];
+            }
+            // Load the mass of the current particle.
+            const auto m1 = m_ptr[i1];
+            // The acceleration vector on the current particle
+            // (inited to zero).
+            std::array<F, NDim> a1{};
+            for (size_type i2 = i1 + 1u; i2 < size; ++i2) {
+                // Determine dist2, dist and dist3.
+                F dist2(0);
+                for (std::size_t j = 0; j < NDim; ++j) {
+                    diffs[j] = c_ptrs[j][i2] - pos1[j];
+                    dist2 += diffs[j] * diffs[j];
+                }
+                const F dist = std::sqrt(dist2);
+                const F dist3 = dist2 * dist;
+                // Divide both masses by dist3.
+                const F m2_dist3 = m_ptr[i2] / dist3;
+                const F m1_dist3 = m1 / dist3;
+                // Accumulate the accelerations, both in the local
+                // accumulator for the current particle and in the global
+                // acc vector for the opposite acceleration.
+                auto ptr2 = out_ptr + i2 * NDim;
+                for (std::size_t j = 0; j < NDim; ++j) {
+                    a1[j] += m2_dist3 * diffs[j];
+                    ptr2[j] -= m1_dist3 * diffs[j];
+                }
+            }
+            // Write out the acceleration on the first particle.
+            auto ptr1 = out_ptr + i1 * NDim;
+            for (std::size_t j = 0; j < NDim; ++j) {
+                ptr1[j] += a1[j];
+            }
+        }
+        // Now proceed to building the interaction list.
+        static thread_local std::vector<size_type> i_list;
+        i_list.resize(0);
+    }
+    template <unsigned Level>
+    void vec_accs_impl(std::vector<F> &out, const F &theta2, size_type begin, size_type end) const
+    {
+        constexpr auto cbits = cbits_v<UInt, NDim>;
+        if constexpr (Level < cbits + 1u) {
+            for (auto idx = begin; idx != end;
+                 // NOTE: when incrementing idx, we need to add 1 to the
+                 // total number of children in order to point to the next sibling.
+                 idx += get<1>(m_tree[idx])[2] + 1u) {
+                const auto [node_begin, node_end, n_children] = get<1>(m_tree[idx]);
+                const auto npart = node_end - node_begin;
+                if (Level == cbits || npart <= ncrit || !n_children) {
+                    // Either:
+                    // - this is the last possible recursion level, or
+                    // - the number of particles in the node is low enough, or
+                    // - this is a leaf node.
+                    // Then, proceed to the vectorised calculation.
+                    compute_vec_acc<Level, Level>(out, theta2, node_begin, npart);
+                } else {
+                    // We are not at the last recursion level, npart > ncrit and
+                    // the node has at least one children. Go deeper.
+                    vec_accs_impl<Level + 1u>(out, theta2, idx + 1u, idx + 1u + n_children);
+                }
+            }
+        } else {
+            ignore_args(begin, end);
+            assert(false);
+        }
+    }
+
+public:
+    void vec_accs(std::vector<F> &out, const F &theta) const
+    {
+        simple_timer st("vector acc computation");
+        const auto theta2 = theta * theta;
+        // Prepare out.
+        out.resize(m_masses.size());
+        std::fill(out.begin(), out.end(), F(0));
+        vec_accs_impl<0>(out, theta2, size_type(0), size_type(m_tree.size()));
+    }
+
+private:
     F m_box_size;
     size_type m_max_leaf_n;
     v_type<F> m_masses;
@@ -738,5 +836,7 @@ int main()
     std::cout << t << '\n';
     std::vector<float> accs(nparts * 3);
     t.scalar_accs(accs.begin(), 0.75f);
+    std::cout << accs[0] << ", " << accs[1] << ", " << accs[2] << '\n';
+    t.vec_accs(accs, 0.75f);
     std::cout << accs[0] << ", " << accs[1] << ", " << accs[2] << '\n';
 }
