@@ -524,8 +524,8 @@ private:
     // like that we get better performance (~4% or so). This probably has to
     // do with the fact that, with 2 templ. params, we get a unique version
     // of this function each time it is invoked, whereas with 1 templ. param
-    // we have multiple calls to the same function throughout a tree traversal
-    // - probably this impacts inlining etc.
+    // we have multiple calls to the same function throughout a tree traversal.
+    // Probably this impacts inlining etc.
     template <unsigned Level, unsigned SLevel>
     void scalar_acc_from_node(std::array<F, NDim> &out, const F &theta2, UInt code, size_type pidx, size_type begin,
                               size_type end) const
@@ -572,7 +572,7 @@ private:
                 add_acc_from_range(out, get<1>(m_tree[begin])[0], get<1>(m_tree[begin])[1], pidx);
                 return;
             }
-            // We can go deeper in the tree. Bump up the index to move to the first child.
+            // We can go deeper in the tree. Bump up begin to move to the first child.
             for (++begin; begin != end; begin += get<1>(m_tree[begin])[2] + 1u) {
                 scalar_acc_from_node<Level, SLevel + 1u>(out, theta2, code, pidx, begin,
                                                          begin + get<1>(m_tree[begin])[2] + 1u);
