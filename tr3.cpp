@@ -527,7 +527,7 @@ private:
     // we have multiple calls to the same function throughout a tree traversal
     // - probably this impacts inlining etc.
     template <unsigned Level, unsigned SLevel>
-    void scalar_acc_from_node(std::array<F, NDim> &out, const F &theta, UInt code, size_type pidx, size_type begin,
+    void scalar_acc_from_node(std::array<F, NDim> &out, const F &theta2, UInt code, size_type pidx, size_type begin,
                               size_type end) const
     {
         if constexpr (SLevel < cbits_v<UInt, NDim> + 1u) {
@@ -537,7 +537,7 @@ private:
             // Local array to store the difference between the node's COM coordinates
             // and the particle coordinates.
             std::array<F, NDim> diffs;
-            // Determine the distance**2, distance and distance**3 between the particle and the COM of the node.
+            // Determine the distance**2 between the particle and the COM of the node.
             F dist2(0);
             for (std::size_t j = 0; j < NDim; ++j) {
                 // Current node COM coordinate.
@@ -547,21 +547,14 @@ private:
                 diffs[j] = node_x - part_x;
                 dist2 += diffs[j] * diffs[j];
             }
-            const F dist = std::sqrt(dist2);
-            const F dist3 = dist2 * dist;
-            // Check if the current node is a leaf.
-            const auto n_children = get<1>(m_tree[begin])[2];
-            if (!n_children) {
-                // Leaf node, compute the acceleration.
-                add_acc_from_range(out, get<1>(m_tree[begin])[0], get<1>(m_tree[begin])[1], pidx);
-                return;
-            }
             // Determine the size of the node.
             const F node_size = m_box_size / (UInt(1) << SLevel);
             // Check the BH acceptance criterion.
-            if (node_size / dist < theta) {
+            if ((node_size * node_size) / dist2 < theta2) {
                 // We can approximate the acceleration with the COM of the
                 // current node.
+                const F dist = std::sqrt(dist2);
+                const F dist3 = dist2 * dist;
                 // NOTE: this is the mass of the COM divided by dist**3.
                 const F com_mass_dist3 = get<2>(m_tree[begin]) / dist3;
                 for (std::size_t j = 0; j < NDim; ++j) {
@@ -569,10 +562,19 @@ private:
                 }
                 return;
             }
-            // We need to go deeper in the tree.
-            // We can now bump up the index because we know this node has at least 1 child.
+            // The node does *not* satisfy the BH acceptance criterion.
+            // Check if the current node is a leaf: if that's the case,
+            // we cannot go deeper and we need to compute the interaction
+            // from all the particles in the node.
+            const auto n_children = get<1>(m_tree[begin])[2];
+            if (!n_children) {
+                // Leaf node, compute the acceleration.
+                add_acc_from_range(out, get<1>(m_tree[begin])[0], get<1>(m_tree[begin])[1], pidx);
+                return;
+            }
+            // We can go deeper in the tree. Bump up the index to move to the first child.
             for (++begin; begin != end; begin += get<1>(m_tree[begin])[2] + 1u) {
-                scalar_acc_from_node<Level, SLevel + 1u>(out, theta, code, pidx, begin,
+                scalar_acc_from_node<Level, SLevel + 1u>(out, theta2, code, pidx, begin,
                                                          begin + get<1>(m_tree[begin])[2] + 1u);
             }
         } else {
@@ -584,7 +586,7 @@ private:
         }
     }
     template <unsigned Level>
-    void scalar_acc(std::array<F, NDim> &out, const F &theta, UInt code, size_type pidx, size_type begin,
+    void scalar_acc(std::array<F, NDim> &out, const F &theta2, UInt code, size_type pidx, size_type begin,
                     size_type end) const
     {
         assert(code == m_codes[pidx]);
@@ -611,7 +613,7 @@ private:
                         // Internal node, go one level deeper. The new indices range must
                         // start from the position immediately past idx (i.e., the first children node) and have a size
                         // equal to the number of children.
-                        scalar_acc<Level + 1u>(out, theta, code, pidx, idx + 1u, idx + 1u + n_children);
+                        scalar_acc<Level + 1u>(out, theta2, code, pidx, idx + 1u, idx + 1u + n_children);
                     } else {
                         // The particle's node has no children, hence it is *the* leaf node
                         // containing the target particle.
@@ -627,7 +629,7 @@ private:
                     }
                 } else {
                     // Compute the acceleration from the current sibling node.
-                    scalar_acc_from_node<Level, Level>(out, theta, code, pidx, idx, idx + 1u + n_children);
+                    scalar_acc_from_node<Level, Level>(out, theta2, code, pidx, idx, idx + 1u + n_children);
                 }
             }
         } else {
@@ -644,6 +646,7 @@ public:
     void scalar_accs(OutIt out_it, const F &theta) const
     {
         simple_timer st("scalar acc computation");
+        const auto theta2 = theta * theta;
         std::array<F, NDim> tmp;
         for (size_type i = 0; i < m_codes.size(); ++i) {
             // Init the acc vector to zero.
@@ -651,7 +654,7 @@ public:
                 c = F(0);
             }
             // Write the acceleration into tmp.
-            scalar_acc<0>(tmp, theta, m_codes[i], i, size_type(0), size_type(m_tree.size()));
+            scalar_acc<0>(tmp, theta2, m_codes[i], i, size_type(0), size_type(m_tree.size()));
             // Copy the result to the output iterator.
             for (const auto &c : tmp) {
                 *out_it++ = c;
@@ -731,7 +734,7 @@ int main()
     auto parts = get_plummer_sphere(nparts, bsize);
     tree<std::uint64_t, float, 3> t(bsize, parts.begin(),
                                     {parts.begin() + nparts, parts.begin() + 2 * nparts, parts.begin() + 3 * nparts},
-                                    nparts, 1);
+                                    nparts, 16);
     std::cout << t << '\n';
     std::vector<float> accs(nparts * 3);
     t.scalar_accs(accs.begin(), 0.75f);
