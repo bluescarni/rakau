@@ -170,8 +170,6 @@ private:
     template <unsigned ParentLevel, typename CTuple, typename CIt>
     void build_tree_impl(std::deque<size_type> &children_count, CTuple &ct, UInt parent_code, CIt begin, CIt end)
     {
-        // Shortcut.
-        constexpr auto cbits = cbits_v<UInt, NDim>;
         if constexpr (ParentLevel < cbits) {
             // We should never be invoking this on an empty range.
             assert(begin != end);
@@ -590,7 +588,6 @@ private:
                     size_type end) const
     {
         assert(code == m_codes[pidx]);
-        constexpr unsigned cbits = cbits_v<UInt, NDim>;
         if constexpr (Level < cbits + 1u) {
             // This is the nodal code of the node in which the particle is at the current level.
             // We compute it via the following:
@@ -715,14 +712,20 @@ private:
                 ptr1[j] += a1[j];
             }
         }
-        // Now proceed to building the interaction list.
-        static thread_local std::vector<size_type> i_list;
-        i_list.resize(0);
+        // Iterate over the target node's siblings.
+        for (auto idx = begin; idx != end; idx += get<1>(m_tree[idx])[2] + 1u) {
+            if (get<0>(m_tree[idx]) == nodal_code) {
+                // Skip the target node, we already did the self
+                // calculation above.
+                continue;
+            }
+            // Compute the acceleration from the current sibling node.
+            vec_acc_from_node<Level, SLevel>(out, theta2, pidx, size, idx, idx + 1u + get<1>(m_tree[idx])[2]);
+        }
     }
     template <unsigned Level>
     void vec_accs_impl(std::vector<F> &out, const F &theta2, size_type begin, size_type end) const
     {
-        constexpr auto cbits = cbits_v<UInt, NDim>;
         if constexpr (Level < cbits + 1u) {
             for (auto idx = begin; idx != end;
                  // NOTE: when incrementing idx, we need to add 1 to the
