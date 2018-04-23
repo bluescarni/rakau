@@ -662,17 +662,129 @@ public:
 private:
     static constexpr unsigned ncrit = 64;
     template <unsigned Level, unsigned SLevel>
-    void compute_vec_acc(std::vector<F> &out, const F &theta2, size_type idx, size_type size) const
+    void vec_acc_from_node(std::vector<F> &out, const F &theta2, size_type pidx, size_type size, size_type begin,
+                           size_type end) const
     {
-        // NOTE: here idx and size refer to indices in the particles' arrays.
-        // Store the pointers to the input and output data.
-        auto out_ptr = out.data() + idx * NDim;
-        auto m_ptr = m_masses.data() + idx;
+        if constexpr (SLevel < cbits_v<UInt, NDim> + 1u) {
+            // Prepare pointers to the input and output data.
+            auto out_ptr = out.data() + pidx * NDim;
+            std::array<const F *, NDim> c_ptrs;
+            for (std::size_t j = 0; j < NDim; ++j) {
+                c_ptrs[j] = m_coords[j].data() + pidx;
+            }
+            // Determine the size of the nodes at this level.
+            const F node_size = m_box_size / (UInt(1) << SLevel);
+            const F node_size2 = node_size * node_size;
+            // Temporary vectors to store the pos differences and dist2 below.
+            static thread_local std::array<v_type<F>, NDim + 1u> tmp_vecs;
+            for (std::size_t j = 0; j < tmp_vecs.size(); ++j) {
+                tmp_vecs[j].resize(size);
+            }
+            // Copy locally the COM coords of the sibling.
+            const auto com_pos = get<3>(m_tree[begin]);
+            // Check the distances of all the particles of the target
+            // node from the COM of the sibling.
+            bool bh_flag = true;
+            for (size_type i = 0; i < size; ++i) {
+                F dist2(0);
+                for (std::size_t j = 0; j < NDim; ++j) {
+                    // Store the differences for later use.
+                    tmp_vecs[j][i] = com_pos[j] - c_ptrs[j][i];
+                    dist2 += tmp_vecs[j][i] * tmp_vecs[j][i];
+                }
+                // Store dist2 for later use.
+                tmp_vecs[NDim][i] = dist2;
+                if (node_size2 / dist2 >= theta2) {
+                    // At least one of the particles in the target
+                    // node is too close to the COM. Set the flag
+                    // to false and exit.
+                    bh_flag = false;
+                    break;
+                }
+            }
+            if (bh_flag) {
+                // The current sibling node satisfies the BH criterion for
+                // all the particles of the target node. Add the accelerations.
+                //
+                // Load the mass of the COM of the sibling node.
+                const auto m_com = get<2>(m_tree[begin]);
+                for (size_type i = 0; i < size; ++i) {
+                    auto ptr = out_ptr + i * NDim;
+                    const auto dist2 = tmp_vecs[NDim][i];
+                    const auto dist = std::sqrt(tmp_vecs[NDim][i]);
+                    const auto m_com_dist3 = m_com / (dist2 * dist);
+                    for (std::size_t j = 0; j < NDim; ++j) {
+                        ptr[j] += tmp_vecs[j][i] * m_com_dist3;
+                    }
+                }
+                return;
+            }
+            // At least one particle in the target node is too close to the
+            // COM of the sibling node. If we can, we go deeper, otherwise we must compute
+            // all the pairwise interactions between all the particles in the
+            // target and sibling nodes.
+            const auto n_children = get<1>(m_tree[begin])[2];
+            if (!n_children) {
+                // Leaf node, compute all the interactions between the particles in the
+                // target and sibling nodes.
+                //
+                // Establish the range of the sibling node.
+                const auto leaf_begin = get<1>(m_tree[begin])[0];
+                const auto leaf_end = get<1>(m_tree[begin])[1];
+                std::array<F, NDim> pos1, diffs;
+                for (size_type i1 = 0; i1 < size; ++i1) {
+                    // Load the coordinates of the current particle
+                    // in the target node.
+                    for (std::size_t j = 0; j < NDim; ++j) {
+                        pos1[j] = c_ptrs[j][i1];
+                    }
+                    // Establish the output pointer.
+                    auto ptr = out_ptr + i1 * NDim;
+                    // Iterate over the particles in the sibling node.
+                    for (size_type i2 = leaf_begin; i2 < leaf_end; ++i2) {
+                        F dist2(0);
+                        for (std::size_t j = 0; j < NDim; ++j) {
+                            diffs[j] = m_coords[j][i2] - pos1[j];
+                            dist2 += diffs[j] * diffs[j];
+                        }
+                        const auto dist = std::sqrt(dist2);
+                        const auto dist3 = dist * dist2;
+                        const auto m_dist3 = m_masses[i2] / dist3;
+                        for (std::size_t j = 0; j < NDim; ++j) {
+                            ptr[j] += diffs[j] * m_dist3;
+                        }
+                    }
+                }
+                return;
+            }
+            // We can go deeper in the tree. Bump up begin to move to the first child.
+            for (++begin; begin != end; begin += get<1>(m_tree[begin])[2] + 1u) {
+                vec_acc_from_node<Level, SLevel + 1u>(out, theta2, pidx, size, begin,
+                                                      begin + get<1>(m_tree[begin])[2] + 1u);
+            }
+        } else {
+            ignore_args(pidx, size, begin, end);
+            assert(false);
+        }
+    }
+    template <unsigned CurLevel, unsigned LastLevel>
+    void compute_vec_acc(std::vector<F> &out, const F &theta2, size_type pidx, size_type size, size_type begin,
+                         size_type end, UInt nodal_code) const
+    {
+        // NOTE: here pidx and size refer to indices in the particles' arrays,
+        // whereas begin and end refer to indices in the tree structure. [begin, end)
+        // is the range in m_tree of the target node and its siblings. nodal_code
+        // is the nodal code of the target node.
+        //
+        // Prepare pointers to the input and output data.
+        auto out_ptr = out.data() + pidx * NDim;
+        auto m_ptr = m_masses.data() + pidx;
         std::array<const F *, NDim> c_ptrs;
         for (std::size_t j = 0; j < NDim; ++j) {
-            c_ptrs[j] = m_coords[j].data() + idx;
+            c_ptrs[j] = m_coords[j].data() + pidx;
         }
-        // First we compute the self interaction.
+        // First we compute the self interaction in the target node.
+        //
         // Temporary vectors to be used in the loops below.
         std::array<F, NDim> diffs, pos1;
         for (size_type i1 = 0; i1 < size; ++i1) {
@@ -738,8 +850,9 @@ private:
                     // - this is the last possible recursion level, or
                     // - the number of particles in the node is low enough, or
                     // - this is a leaf node.
-                    // Then, proceed to the vectorised calculation.
-                    compute_vec_acc<Level, Level>(out, theta2, node_begin, npart);
+                    // Then, proceed to the vectorised calculation. We need to pass in the current
+                    // tree level, the particles belonging to the current node and the nodal code.
+                    compute_vec_acc<0, Level>(out, theta2, node_begin, npart, get<0>(m_tree[idx]));
                 } else {
                     // We are not at the last recursion level, npart > ncrit and
                     // the node has at least one children. Go deeper.
@@ -838,8 +951,8 @@ int main()
                                     nparts, 16);
     std::cout << t << '\n';
     std::vector<float> accs(nparts * 3);
-    t.scalar_accs(accs.begin(), 0.75f);
-    std::cout << accs[0] << ", " << accs[1] << ", " << accs[2] << '\n';
+    // t.scalar_accs(accs.begin(), 0.75f);
+    // std::cout << accs[0] << ", " << accs[1] << ", " << accs[2] << '\n';
     t.vec_accs(accs, 0.75f);
     std::cout << accs[0] << ", " << accs[1] << ", " << accs[2] << '\n';
 }
