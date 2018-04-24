@@ -526,12 +526,14 @@ private:
     // Probably this impacts inlining etc.
     template <unsigned Level, unsigned SLevel>
     void scalar_acc_from_node(std::array<F, NDim> &out, const F &theta2, UInt code, size_type pidx, size_type begin,
-                              size_type end) const
+                              size_type end, const F &node_size2) const
     {
         if constexpr (SLevel < cbits_v<UInt, NDim> + 1u) {
             // SLevel cannot be zero: the root node has no siblings and, even if it is a leaf node,
             // that case will be handled elsewhere.
             assert(SLevel);
+            // Make sure node_size2 is ok.
+            assert(node_size2 == m_box_size / (UInt(1) << SLevel) * m_box_size / (UInt(1) << SLevel));
             // Local array to store the difference between the node's COM coordinates
             // and the particle coordinates.
             std::array<F, NDim> diffs;
@@ -545,10 +547,8 @@ private:
                 diffs[j] = node_x - part_x;
                 dist2 += diffs[j] * diffs[j];
             }
-            // Determine the size of the node.
-            const F node_size = m_box_size / (UInt(1) << SLevel);
             // Check the BH acceptance criterion.
-            if ((node_size * node_size) / dist2 < theta2) {
+            if (node_size2 / dist2 < theta2) {
                 // We can approximate the acceleration with the COM of the
                 // current node.
                 const F dist = std::sqrt(dist2);
@@ -571,9 +571,12 @@ private:
                 return;
             }
             // We can go deeper in the tree. Bump up begin to move to the first child.
+            // Determine the size of the node at the next level.
+            const F next_node_size = m_box_size / (UInt(1) << (SLevel + 1u));
+            const F next_node_size2 = next_node_size * next_node_size;
             for (++begin; begin != end; begin += get<1>(m_tree[begin])[2] + 1u) {
                 scalar_acc_from_node<Level, SLevel + 1u>(out, theta2, code, pidx, begin,
-                                                         begin + get<1>(m_tree[begin])[2] + 1u);
+                                                         begin + get<1>(m_tree[begin])[2] + 1u, next_node_size2);
             }
         } else {
             // GCC warnings.
@@ -595,6 +598,9 @@ private:
             // - shift down the result depending on the current level.
             const auto part_node_code
                 = static_cast<UInt>(((UInt(1) << (cbits * NDim)) + code) >> ((cbits - Level) * NDim));
+            // Determine the size of the node at the current level.
+            const F node_size = m_box_size / (UInt(1) << Level);
+            const F node_size2 = node_size * node_size;
             for (auto idx = begin; idx != end;
                  // NOTE: when incrementing idx, we need to add 1 to the
                  // total number of children in order to point to the next sibling.
@@ -626,7 +632,7 @@ private:
                     }
                 } else {
                     // Compute the acceleration from the current sibling node.
-                    scalar_acc_from_node<Level, Level>(out, theta2, code, pidx, idx, idx + 1u + n_children);
+                    scalar_acc_from_node<Level, Level>(out, theta2, code, pidx, idx, idx + 1u + n_children, node_size2);
                 }
             }
         } else {
@@ -668,18 +674,17 @@ private:
     }
     template <unsigned Level, unsigned SLevel>
     void vec_acc_from_node(std::vector<F> &out, const F &theta2, size_type pidx, size_type size, size_type begin,
-                           size_type end) const
+                           size_type end, const F &node_size2) const
     {
         if constexpr (SLevel < cbits_v<UInt, NDim> + 1u) {
+            // Check that node_size2 is correct.
+            assert(node_size2 == m_box_size / (UInt(1) << SLevel) * m_box_size / (UInt(1) << SLevel));
             // Prepare pointers to the input and output data.
             auto out_ptr = out.data() + pidx * NDim;
             std::array<const F *, NDim> c_ptrs;
             for (std::size_t j = 0; j < NDim; ++j) {
                 c_ptrs[j] = m_coords[j].data() + pidx;
             }
-            // Determine the size of the nodes at this level.
-            const F node_size = m_box_size / (UInt(1) << SLevel);
-            const F node_size2 = node_size * node_size;
             // Temporary vectors to store the pos differences and dist2 below.
             auto &tmp_vecs = vec_acc_tmp_vecs();
             for (std::size_t j = 0; j < tmp_vecs.size(); ++j) {
@@ -763,9 +768,12 @@ private:
                 return;
             }
             // We can go deeper in the tree. Bump up begin to move to the first child.
+            // Determine the size of the node at the next level.
+            const F next_node_size = m_box_size / (UInt(1) << (SLevel + 1u));
+            const F next_node_size2 = next_node_size * next_node_size;
             for (++begin; begin != end; begin += get<1>(m_tree[begin])[2] + 1u) {
                 vec_acc_from_node<Level, SLevel + 1u>(out, theta2, pidx, size, begin,
-                                                      begin + get<1>(m_tree[begin])[2] + 1u);
+                                                      begin + get<1>(m_tree[begin])[2] + 1u, next_node_size2);
             }
         } else {
             ignore_args(pidx, size, begin, end);
@@ -837,6 +845,9 @@ private:
         // iteration).
         const auto s_code = nodal_code >> ((NodeLevel - CurLevel) * NDim);
         auto new_sib_begin = sib_end;
+        // Determine the size of the node at the current level.
+        const F node_size = m_box_size / (UInt(1) << CurLevel);
+        const F node_size2 = node_size * node_size;
         for (auto idx = sib_begin; idx != sib_end; idx += get<1>(m_tree[idx])[2] + 1u) {
             if (get<0>(m_tree[idx]) == s_code) {
                 // We are in the node's parent, or the node itself.
@@ -852,7 +863,7 @@ private:
             } else {
                 // Compute the accelerations from the current sibling.
                 vec_acc_from_node<CurLevel, CurLevel>(out, theta2, node_begin, npart, idx,
-                                                      idx + 1u + get<1>(m_tree[idx])[2]);
+                                                      idx + 1u + get<1>(m_tree[idx])[2], node_size2);
             }
         }
         if (CurLevel != NodeLevel) {
