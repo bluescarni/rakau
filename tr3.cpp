@@ -588,7 +588,7 @@ private:
                     size_type end) const
     {
         assert(code == m_codes[pidx]);
-        if constexpr (Level < cbits + 1u) {
+        if constexpr (Level <= cbits) {
             // This is the nodal code of the node in which the particle is at the current level.
             // We compute it via the following:
             // - add an extra 1 bit in the MSB direction,
@@ -871,7 +871,7 @@ private:
     template <unsigned Level>
     void vec_accs_impl(std::vector<F> &out, const F &theta2, size_type begin, size_type end) const
     {
-        if constexpr (Level < cbits + 1u) {
+        if constexpr (Level <= cbits) {
             for (auto idx = begin; idx != end;
                  // NOTE: when incrementing idx, we need to add 1 to the
                  // total number of children in order to point to the next sibling.
@@ -905,9 +905,30 @@ public:
         simple_timer st("vector acc computation");
         const auto theta2 = theta * theta;
         // Prepare out.
-        out.resize(m_masses.size());
+        out.resize(m_masses.size() * NDim);
         std::fill(out.begin(), out.end(), F(0));
         vec_accs_impl<0>(out, theta2, size_type(0), size_type(m_tree.size()));
+    }
+    std::array<F, NDim> exact_accs(size_type idx) const
+    {
+        simple_timer st("exact acc computation");
+        const auto size = m_masses.size();
+        std::array<F, NDim> retval{};
+        for (size_type i = 0; i < size; ++i) {
+            if (i == idx) {
+                continue;
+            }
+            F dist2(0);
+            for (std::size_t j = 0; j < NDim; ++j) {
+                dist2 += (m_coords[j][i] - m_coords[j][idx]) * (m_coords[j][i] - m_coords[j][idx]);
+            }
+            const auto dist = std::sqrt(dist2);
+            const auto dist3 = dist * dist2;
+            for (std::size_t j = 0; j < NDim; ++j) {
+                retval[j] += (m_coords[j][i] - m_coords[j][idx]) * m_masses[i] / dist3;
+            }
+        }
+        return retval;
     }
 
 private:
@@ -976,8 +997,13 @@ inline std::vector<F> get_plummer_sphere(std::size_t n, F size)
     return retval;
 }
 
-int main()
+#include <boost/lexical_cast.hpp>
+
+int main(int argc, char **argv)
 {
+    if (argc < 2) {
+        throw std::runtime_error("Need at least 2 arguments, but only " + std::to_string(argc) + " was/were provided");
+    }
     // auto parts = get_uniform_particles<3>(nparts, bsize);
     auto parts = get_plummer_sphere(nparts, bsize);
     tree<std::uint64_t, float, 3> t(bsize, parts.begin(),
@@ -986,7 +1012,10 @@ int main()
     std::cout << t << '\n';
     std::vector<float> accs(nparts * 3);
     t.scalar_accs(accs.begin(), 0.75f);
-    std::cout << accs[3000] << ", " << accs[3001] << ", " << accs[3002] << '\n';
+    const auto idx = boost::lexical_cast<std::size_t>(argv[1]);
+    std::cout << accs[idx * 3] << ", " << accs[idx * 3 + 1] << ", " << accs[idx * 3 + 2] << '\n';
     t.vec_accs(accs, 0.75f);
-    std::cout << accs[3000] << ", " << accs[3001] << ", " << accs[3002] << '\n';
+    std::cout << accs[idx * 3] << ", " << accs[idx * 3 + 1] << ", " << accs[idx * 3 + 2] << '\n';
+    auto eacc = t.exact_accs(idx);
+    std::cout << eacc[0] << ", " << eacc[1] << ", " << eacc[2] << '\n';
 }
