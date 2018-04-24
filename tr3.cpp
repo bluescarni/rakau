@@ -701,17 +701,15 @@ private:
                 constexpr auto inc = b_type::size;
                 const auto vec_size = static_cast<size_type>(size - size % inc);
                 const b_type node_size2_vec = xsimd::set_simd(node_size2);
-                const auto &[com_x, com_y, com_z] = com_pos;
                 for (; i < vec_size; i += inc) {
                     const b_type xvec = xsimd::load_unaligned(c_ptrs[0] + i);
                     const b_type yvec = xsimd::load_unaligned(c_ptrs[1] + i);
                     const b_type zvec = xsimd::load_unaligned(c_ptrs[2] + i);
-                    const b_type diffx = com_x - xvec;
-                    const b_type diffy = com_y - yvec;
-                    const b_type diffz = com_z - zvec;
+                    const b_type diffx = com_pos[0] - xvec;
+                    const b_type diffy = com_pos[1] - yvec;
+                    const b_type diffz = com_pos[2] - zvec;
                     const b_type dist2 = diffx * diffx + diffy * diffy + diffz * diffz;
-                    const auto flags_vec = node_size2_vec >= theta2 * dist2;
-                    if (xsimd::any(flags_vec)) {
+                    if (xsimd::any(node_size2_vec >= theta2 * dist2)) {
                         bh_flag = false;
                         i = size;
                         break;
