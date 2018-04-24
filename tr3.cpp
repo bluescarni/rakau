@@ -661,6 +661,11 @@ public:
 
 private:
     static constexpr unsigned ncrit = 64;
+    static auto &vec_acc_tmp_vecs()
+    {
+        static thread_local std::array<v_type<F>, NDim + 1u> tmp_vecs;
+        return tmp_vecs;
+    }
     template <unsigned Level, unsigned SLevel>
     void vec_acc_from_node(std::vector<F> &out, const F &theta2, size_type pidx, size_type size, size_type begin,
                            size_type end) const
@@ -676,7 +681,7 @@ private:
             const F node_size = m_box_size / (UInt(1) << SLevel);
             const F node_size2 = node_size * node_size;
             // Temporary vectors to store the pos differences and dist2 below.
-            static thread_local std::array<v_type<F>, NDim + 1u> tmp_vecs;
+            auto &tmp_vecs = vec_acc_tmp_vecs();
             for (std::size_t j = 0; j < tmp_vecs.size(); ++j) {
                 tmp_vecs[j].resize(size);
             }
@@ -767,27 +772,18 @@ private:
             assert(false);
         }
     }
-    template <unsigned CurLevel, unsigned LastLevel>
-    void compute_vec_acc(std::vector<F> &out, const F &theta2, size_type pidx, size_type size, size_type begin,
-                         size_type end, UInt nodal_code) const
+    void vec_node_self_interactions(std::vector<F> &out, size_type node_begin, size_type npart) const
     {
-        // NOTE: here pidx and size refer to indices in the particles' arrays,
-        // whereas begin and end refer to indices in the tree structure. [begin, end)
-        // is the range in m_tree of the target node and its siblings. nodal_code
-        // is the nodal code of the target node.
-        //
         // Prepare pointers to the input and output data.
-        auto out_ptr = out.data() + pidx * NDim;
-        auto m_ptr = m_masses.data() + pidx;
+        auto out_ptr = out.data() + node_begin * NDim;
+        auto m_ptr = m_masses.data() + node_begin;
         std::array<const F *, NDim> c_ptrs;
         for (std::size_t j = 0; j < NDim; ++j) {
-            c_ptrs[j] = m_coords[j].data() + pidx;
+            c_ptrs[j] = m_coords[j].data() + node_begin;
         }
-        // First we compute the self interaction in the target node.
-        //
         // Temporary vectors to be used in the loops below.
         std::array<F, NDim> diffs, pos1;
-        for (size_type i1 = 0; i1 < size; ++i1) {
+        for (size_type i1 = 0; i1 < npart; ++i1) {
             // Load the coords of the current particle.
             for (std::size_t j = 0; j < NDim; ++j) {
                 pos1[j] = c_ptrs[j][i1];
@@ -797,7 +793,7 @@ private:
             // The acceleration vector on the current particle
             // (inited to zero).
             std::array<F, NDim> a1{};
-            for (size_type i2 = i1 + 1u; i2 < size; ++i2) {
+            for (size_type i2 = i1 + 1u; i2 < npart; ++i2) {
                 // Determine dist2, dist and dist3.
                 F dist2(0);
                 for (std::size_t j = 0; j < NDim; ++j) {
@@ -824,15 +820,52 @@ private:
                 ptr1[j] += a1[j];
             }
         }
-        // Iterate over the target node's siblings.
-        for (auto idx = begin; idx != end; idx += get<1>(m_tree[idx])[2] + 1u) {
-            if (get<0>(m_tree[idx]) == nodal_code) {
-                // Skip the target node, we already did the self
-                // calculation above.
-                continue;
+    }
+    // Compute the total acceleration on the particles in a node. node_begin is the starting index
+    // of the node in the particles' arrays, npart the number of particles in the node. [sib_begin, sib_end)
+    // is the index range, in the tree structure, encompassing the node, its parent and its parent's siblings at the
+    // tree level CurLevel. NodeLevel is the level of the node itself.
+    template <unsigned CurLevel, unsigned NodeLevel>
+    void vec_acc_on_node(std::vector<F> &out, const F &theta2, size_type node_begin, size_type npart, UInt nodal_code,
+                         size_type sib_begin, size_type sib_end) const
+    {
+        // We proceed breadth-first examining all the siblings of the node's parent
+        // (or of the node itself, at the last iteration) at the current level.
+        //
+        // Compute the shifted code. This is the nodal code of the node's parent
+        // at the current level (or the nodal code of the node itself at the last
+        // iteration).
+        const auto s_code = nodal_code >> ((NodeLevel - CurLevel) * NDim);
+        auto new_sib_begin = sib_end;
+        for (auto idx = sib_begin; idx != sib_end; idx += get<1>(m_tree[idx])[2] + 1u) {
+            if (get<0>(m_tree[idx]) == s_code) {
+                // We are in the node's parent, or the node itself.
+                if (CurLevel == NodeLevel) {
+                    // Last iteration, we are in the node itself. Compute the
+                    // self-interactions within the node.
+                    vec_node_self_interactions(out, node_begin, npart);
+                } else {
+                    // We identified the parent of the node at the current
+                    // level. Store its starting index for later.
+                    new_sib_begin = idx;
+                }
+            } else {
+                // Compute the accelerations from the current sibling.
+                vec_acc_from_node<CurLevel, CurLevel>(out, theta2, node_begin, npart, idx,
+                                                      idx + 1u + get<1>(m_tree[idx])[2]);
             }
-            // Compute the acceleration from the current sibling node.
-            vec_acc_from_node<Level, SLevel>(out, theta2, pidx, size, idx, idx + 1u + get<1>(m_tree[idx])[2]);
+        }
+        if (CurLevel != NodeLevel) {
+            // If we are not at the last iteration, we must have changed
+            // new_sib_begin in the loop above.
+            assert(new_sib_begin != sib_end);
+        } else {
+            ignore_args(new_sib_begin);
+        }
+        if constexpr (CurLevel < NodeLevel) {
+            // Recurse down.
+            vec_acc_on_node<CurLevel + 1u, NodeLevel>(out, theta2, node_begin, npart, nodal_code, new_sib_begin + 1u,
+                                                      new_sib_begin + 1u + get<1>(m_tree[new_sib_begin])[2]);
         }
     }
     template <unsigned Level>
@@ -850,9 +883,10 @@ private:
                     // - this is the last possible recursion level, or
                     // - the number of particles in the node is low enough, or
                     // - this is a leaf node.
-                    // Then, proceed to the vectorised calculation. We need to pass in the current
-                    // tree level, the particles belonging to the current node and the nodal code.
-                    compute_vec_acc<0, Level>(out, theta2, node_begin, npart, get<0>(m_tree[idx]));
+                    // Then, proceed to the vectorised calculation of the accelerations
+                    // on the particles belonging to this node.
+                    vec_acc_on_node<0, Level>(out, theta2, node_begin, npart, get<0>(m_tree[idx]), size_type(0),
+                                              size_type(m_tree.size()));
                 } else {
                     // We are not at the last recursion level, npart > ncrit and
                     // the node has at least one children. Go deeper.
@@ -951,8 +985,8 @@ int main()
                                     nparts, 16);
     std::cout << t << '\n';
     std::vector<float> accs(nparts * 3);
-    // t.scalar_accs(accs.begin(), 0.75f);
-    // std::cout << accs[0] << ", " << accs[1] << ", " << accs[2] << '\n';
+    t.scalar_accs(accs.begin(), 0.75f);
+    std::cout << accs[3000] << ", " << accs[3001] << ", " << accs[3002] << '\n';
     t.vec_accs(accs, 0.75f);
-    std::cout << accs[0] << ", " << accs[1] << ", " << accs[2] << '\n';
+    std::cout << accs[3000] << ", " << accs[3001] << ", " << accs[3002] << '\n';
 }
