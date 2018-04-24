@@ -528,7 +528,7 @@ private:
     void scalar_acc_from_node(std::array<F, NDim> &out, const F &theta2, UInt code, size_type pidx, size_type begin,
                               size_type end, const F &node_size2) const
     {
-        if constexpr (SLevel < cbits_v<UInt, NDim> + 1u) {
+        if constexpr (SLevel <= cbits) {
             // SLevel cannot be zero: the root node has no siblings and, even if it is a leaf node,
             // that case will be handled elsewhere.
             assert(SLevel);
@@ -676,7 +676,7 @@ private:
     void vec_acc_from_node(std::vector<F> &out, const F &theta2, size_type pidx, size_type size, size_type begin,
                            size_type end, const F &node_size2) const
     {
-        if constexpr (SLevel < cbits_v<UInt, NDim> + 1u) {
+        if constexpr (SLevel <= cbits) {
             // Check that node_size2 is correct.
             assert(node_size2 == m_box_size / (UInt(1) << SLevel) * m_box_size / (UInt(1) << SLevel));
             // Prepare pointers to the input and output data.
