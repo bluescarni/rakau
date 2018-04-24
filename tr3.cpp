@@ -548,7 +548,7 @@ private:
                 dist2 += diffs[j] * diffs[j];
             }
             // Check the BH acceptance criterion.
-            if (node_size2 / dist2 < theta2) {
+            if (node_size2 < theta2 * dist2) {
                 // We can approximate the acceleration with the COM of the
                 // current node.
                 const F dist = std::sqrt(dist2);
@@ -704,7 +704,7 @@ private:
                 }
                 // Store dist2 for later use.
                 tmp_vecs[NDim][i] = dist2;
-                if (node_size2 / dist2 >= theta2) {
+                if (node_size2 >= theta2 * dist2) {
                     // At least one of the particles in the target
                     // node is too close to the COM. Set the flag
                     // to false and exit.
