@@ -744,7 +744,36 @@ private:
                 //
                 // Load the mass of the COM of the sibling node.
                 const auto m_com = get<2>(m_tree[begin]);
-                for (size_type i = 0; i < size; ++i) {
+                i = 0;
+#if 0
+                if constexpr (NDim == 3u) {
+                    using b_type = xsimd::simd_type<F>;
+                    constexpr auto inc = b_type::size;
+                    const auto vec_size = static_cast<size_type>(size - size % inc);
+                    std::array<F, inc> xaccs, yaccs, zaccs;
+                    for (; i < vec_size; i += inc) {
+                        auto ptr = out_ptr + i * NDim;
+                        const b_type dist2_vec = xsimd::load_unaligned(tmp_vecs[3].data() + i);
+                        const b_type dist_vec = xsimd::sqrt(dist2_vec);
+                        const b_type m_com_dist3_vec = m_com / (dist2_vec * dist_vec);
+                        const b_type xdiff = xsimd::load_unaligned(tmp_vecs[0].data() + i);
+                        const b_type ydiff = xsimd::load_unaligned(tmp_vecs[1].data() + i);
+                        const b_type zdiff = xsimd::load_unaligned(tmp_vecs[2].data() + i);
+                        const b_type xacc = xdiff * m_com_dist3_vec;
+                        const b_type yacc = ydiff * m_com_dist3_vec;
+                        const b_type zacc = zdiff * m_com_dist3_vec;
+                        xsimd::store_unaligned(xaccs.data(), xacc);
+                        xsimd::store_unaligned(yaccs.data(), yacc);
+                        xsimd::store_unaligned(zaccs.data(), zacc);
+                        for (std::size_t j = 0; j < inc; ++j) {
+                            ptr[j * 3] += xaccs[j];
+                            ptr[j * 3 + 1] += yaccs[j];
+                            ptr[j * 3 + 2] += zaccs[j];
+                        }
+                    }
+                }
+#endif
+                for (; i < size; ++i) {
                     auto ptr = out_ptr + i * NDim;
                     const auto dist2 = tmp_vecs[NDim][i];
                     const auto dist = std::sqrt(tmp_vecs[NDim][i]);
