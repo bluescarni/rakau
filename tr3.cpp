@@ -715,7 +715,7 @@ private:
     // ncrit: if the number of particles in a node is ncrit or less,
     // then we will compute the accelerations on the particles in that
     // node in a vectorised fashion.
-    static constexpr unsigned ncrit = 256;
+    static constexpr unsigned ncrit = 128;
     // Temporary storage used to store the distances between the particles
     // of a node and the COM of another node while traversing the tree.
     static auto &vec_acc_tmp_vecs()
@@ -1257,7 +1257,7 @@ int main(int argc, char **argv)
     auto parts = get_plummer_sphere(nparts, bsize);
     tree<std::uint64_t, float, 3> t(bsize, parts.begin(),
                                     {parts.begin() + nparts, parts.begin() + 2 * nparts, parts.begin() + 3 * nparts},
-                                    nparts, 32);
+                                    nparts, 16);
     std::cout << t << '\n';
     const auto idx = boost::lexical_cast<std::size_t>(argv[1]);
     std::vector<float> accs(nparts * 3);
