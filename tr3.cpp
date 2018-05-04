@@ -1219,8 +1219,10 @@ inline std::vector<F> get_plummer_sphere(std::size_t n, F size)
     std::vector<F> retval(n * 4u);
     // Uniform [0, 1) dist.
     std::uniform_real_distribution<F> udist(F(0), F(1));
-    // Particle mass is always 1/n.
-    std::fill(retval.begin(), retval.begin() + n, F(1) / F(n));
+    // Uniform [0.1, 1.9) dist.
+    std::uniform_real_distribution<F> mdist(F(0.1), F(1.9));
+    // Average mass of 1.
+    std::generate(retval.begin(), retval.begin() + n, [&mdist]() { return mdist(rng); });
     for (std::size_t i = 0; i < n;) {
         // Generate a random radius.
         const F r = F(1) / std::sqrt(std::pow(udist(rng), F(-2) / F(3)) - F(1));
@@ -1262,8 +1264,8 @@ int main(int argc, char **argv)
     std::cout << t << '\n';
     const auto idx = boost::lexical_cast<std::size_t>(argv[1]);
     std::vector<float> accs(nparts * 3);
-    t.scalar_accs(accs.begin(), 0.75f);
-    std::cout << accs[idx * 3] << ", " << accs[idx * 3 + 1] << ", " << accs[idx * 3 + 2] << '\n';
+    // t.scalar_accs(accs.begin(), 0.75f);
+    // std::cout << accs[idx * 3] << ", " << accs[idx * 3 + 1] << ", " << accs[idx * 3 + 2] << '\n';
     t.vec_accs(accs, 0.75f);
     std::cout << accs[idx * 3] << ", " << accs[idx * 3 + 1] << ", " << accs[idx * 3 + 2] << '\n';
     auto eacc = t.exact_accs(idx);
