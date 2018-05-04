@@ -917,6 +917,7 @@ private:
                                 xvec2 = rotate_m256(xvec2);
                                 yvec2 = rotate_m256(yvec2);
                                 zvec2 = rotate_m256(zvec2);
+                                mvec = rotate_m256(mvec);
                                 diff_x = xvec2 - xvec1;
                                 diff_y = yvec2 - yvec1;
                                 diff_z = zvec2 - zvec1;
