@@ -997,49 +997,162 @@ private:
     // in the temporary storage.
     void vec_node_self_interactions(size_type node_begin, size_type npart) const
     {
-        // Prepare pointers to the input and output data.
+        // Prepare common pointers to the input and output data.
         auto &tmp_res = vec_acc_tmp_res();
-        auto m_ptr = m_masses.data() + node_begin;
-        std::array<const F *, NDim> c_ptrs;
-        for (std::size_t j = 0; j < NDim; ++j) {
-            c_ptrs[j] = m_coords[j].data() + node_begin;
-        }
-        // Temporary vectors to be used in the loops below.
-        std::array<F, NDim> diffs, pos1;
-        for (size_type i1 = 0; i1 < npart; ++i1) {
-            // Load the coords of the current particle.
-            for (std::size_t j = 0; j < NDim; ++j) {
-                pos1[j] = c_ptrs[j][i1];
-            }
-            // Load the mass of the current particle.
-            const auto m1 = m_ptr[i1];
-            // The acceleration vector on the current particle
-            // (inited to zero).
-            std::array<F, NDim> a1{};
-            for (size_type i2 = i1 + 1u; i2 < npart; ++i2) {
-                // Determine dist2, dist and dist3.
-                F dist2(0);
-                for (std::size_t j = 0; j < NDim; ++j) {
-                    diffs[j] = c_ptrs[j][i2] - pos1[j];
-                    dist2 += diffs[j] * diffs[j];
+        const auto m_ptr = m_masses.data() + node_begin;
+        if constexpr (NDim == 3u && avx_version && std::is_same<F, float>::value) {
+            // Shortcuts to the node coordinates/masses.
+            const auto x_ptr = m_coords[0].data() + node_begin;
+            const auto y_ptr = m_coords[1].data() + node_begin;
+            const auto z_ptr = m_coords[2].data() + node_begin;
+            // Shortcuts to the result vectors.
+            auto res_x = tmp_res[0].data();
+            auto res_y = tmp_res[1].data();
+            auto res_z = tmp_res[2].data();
+            using b_type = xsimd::simd_type<F>;
+            constexpr auto inc = b_type::size;
+            const auto vec_size = static_cast<size_type>(npart - npart % inc);
+            auto [x_ptr1, y_ptr1, z_ptr1] = std::make_tuple(x_ptr, y_ptr, z_ptr);
+            size_type i1 = 0;
+            for (; i1 < vec_size;
+                 i1 += inc, x_ptr1 += inc, y_ptr1 += inc, z_ptr1 += inc, res_x += inc, res_y += inc, res_z += inc) {
+                // Load the current accelerations from the temporary result vectors.
+                b_type res_x_vec = xsimd::load_aligned(res_x);
+                b_type res_y_vec = xsimd::load_aligned(res_y);
+                b_type res_z_vec = xsimd::load_aligned(res_z);
+                // Load the data for the particles under consideration.
+                const b_type xvec1 = xsimd::load_unaligned(x_ptr1);
+                const b_type yvec1 = xsimd::load_unaligned(y_ptr1);
+                const b_type zvec1 = xsimd::load_unaligned(z_ptr1);
+                // Iterate over all the particles in the node and compute the accelerations
+                // on the particles under consideration.
+                auto [x_ptr2, y_ptr2, z_ptr2, m_ptr2] = std::make_tuple(x_ptr, y_ptr, z_ptr, m_ptr);
+                size_type i2 = 0;
+                for (; i2 < vec_size; i2 += inc, x_ptr2 += inc, y_ptr2 += inc, z_ptr2 += inc, m_ptr2 += inc) {
+                    // Load the current batch of particles exerting gravity.
+                    b_type xvec2 = xsimd::load_unaligned(x_ptr2);
+                    b_type yvec2 = xsimd::load_unaligned(y_ptr2);
+                    b_type zvec2 = xsimd::load_unaligned(z_ptr2);
+                    b_type mvec2 = xsimd::load_unaligned(m_ptr2);
+                    if (i2 != i1) {
+                        // NOTE: if i2 == i1, we want to skip the first batch-batch
+                        // permutation, as we don't want to compute self-accelerations.
+                        b_type diff_x = xvec2 - xvec1;
+                        b_type diff_y = yvec2 - yvec1;
+                        b_type diff_z = zvec2 - zvec1;
+                        b_type dist2 = diff_x * diff_x + diff_y * diff_y + diff_z * diff_z;
+                        b_type dist = xsimd::sqrt(dist2);
+                        b_type dist3 = dist * dist2;
+                        b_type m2_dist3 = mvec2 / dist3;
+                        res_x_vec = xsimd::fma(diff_x, m2_dist3, res_x_vec);
+                        res_y_vec = xsimd::fma(diff_y, m2_dist3, res_y_vec);
+                        res_z_vec = xsimd::fma(diff_z, m2_dist3, res_z_vec);
+                    }
+                    // Iterate over all the other possible batch-batch permutations
+                    // by rotating the data in xvec2, yvec2, zvec2.
+                    for (std::size_t j = 1; j < inc; ++j) {
+                        xvec2 = rotate_m256(xvec2);
+                        yvec2 = rotate_m256(yvec2);
+                        zvec2 = rotate_m256(zvec2);
+                        mvec2 = rotate_m256(mvec2);
+                        b_type diff_x = xvec2 - xvec1;
+                        b_type diff_y = yvec2 - yvec1;
+                        b_type diff_z = zvec2 - zvec1;
+                        b_type dist2 = diff_x * diff_x + diff_y * diff_y + diff_z * diff_z;
+                        b_type dist = xsimd::sqrt(dist2);
+                        b_type dist3 = dist * dist2;
+                        b_type m_dist3 = mvec2 / dist3;
+                        res_x_vec = xsimd::fma(diff_x, m_dist3, res_x_vec);
+                        res_y_vec = xsimd::fma(diff_y, m_dist3, res_y_vec);
+                        res_z_vec = xsimd::fma(diff_z, m_dist3, res_z_vec);
+                    }
                 }
-                const F dist = std::sqrt(dist2);
-                const F dist3 = dist2 * dist;
-                // Divide both masses by dist3.
-                const F m2_dist3 = m_ptr[i2] / dist3;
-                const F m1_dist3 = m1 / dist3;
-                // Accumulate the accelerations, both in the local
-                // accumulator for the current particle and in the global
-                // acc vector for the opposite acceleration.
-                for (std::size_t j = 0; j < NDim; ++j) {
-                    a1[j] += m2_dist3 * diffs[j];
-                    tmp_res[j][i2] -= m1_dist3 * diffs[j];
+                // Do the remaining scalar part.
+                for (; i2 < npart; ++i2, ++x_ptr2, ++y_ptr2, ++z_ptr2, ++m_ptr2) {
+                    if (i2 != i1) {
+                        // Avoid self-interactions.
+                        b_type diff_x = *x_ptr2 - xvec1;
+                        b_type diff_y = *y_ptr2 - yvec1;
+                        b_type diff_z = *z_ptr2 - zvec1;
+                        b_type dist2 = diff_x * diff_x + diff_y * diff_y + diff_z * diff_z;
+                        b_type dist = xsimd::sqrt(dist2);
+                        b_type dist3 = dist * dist2;
+                        b_type m2_dist3 = *m_ptr2 / dist3;
+                        res_x_vec = xsimd::fma(diff_x, m2_dist3, res_x_vec);
+                        res_y_vec = xsimd::fma(diff_y, m2_dist3, res_y_vec);
+                        res_z_vec = xsimd::fma(diff_z, m2_dist3, res_z_vec);
+                    }
+                }
+                // Write out the updated accelerations.
+                xsimd::store_aligned(res_x, res_x_vec);
+                xsimd::store_aligned(res_y, res_y_vec);
+                xsimd::store_aligned(res_z, res_z_vec);
+            }
+            // Do the remaining scalar part.
+            for (; i1 < npart; ++i1, ++x_ptr1, ++y_ptr1, ++z_ptr1, ++res_x, ++res_y, ++res_z) {
+                auto [x_ptr2, y_ptr2, z_ptr2, m_ptr2] = std::make_tuple(x_ptr, y_ptr, z_ptr, m_ptr);
+                const F x1 = *x_ptr1;
+                const F y1 = *y_ptr1;
+                const F z1 = *z_ptr1;
+                for (size_type i2 = 0; i2 < npart; ++i2, ++x_ptr2, ++y_ptr2, ++z_ptr2, ++m_ptr2) {
+                    if (i1 != i2) {
+                        // Avoid self interactions.
+                        F diff_x = *x_ptr2 - x1;
+                        F diff_y = *y_ptr2 - y1;
+                        F diff_z = *z_ptr2 - z1;
+                        F dist2 = diff_x * diff_x + diff_y * diff_y + diff_z * diff_z;
+                        F dist = std::sqrt(dist2);
+                        F dist3 = dist * dist2;
+                        F m2_dist3 = *m_ptr2 / dist3;
+                        *res_x += diff_x * m2_dist3;
+                        *res_y += diff_y * m2_dist3;
+                        *res_z += diff_z * m2_dist3;
+                    }
                 }
             }
-            // Update the acceleration on the first particle
-            // in the temporary storage.
+        } else {
+            // Shortcuts to the input coordinates.
+            std::array<const F *, NDim> c_ptrs;
             for (std::size_t j = 0; j < NDim; ++j) {
-                tmp_res[j][i1] += a1[j];
+                c_ptrs[j] = m_coords[j].data() + node_begin;
+            }
+            // Temporary vectors to be used in the loops below.
+            std::array<F, NDim> diffs, pos1;
+            for (size_type i1 = 0; i1 < npart; ++i1) {
+                // Load the coords of the current particle.
+                for (std::size_t j = 0; j < NDim; ++j) {
+                    pos1[j] = c_ptrs[j][i1];
+                }
+                // Load the mass of the current particle.
+                const auto m1 = m_ptr[i1];
+                // The acceleration vector on the current particle
+                // (inited to zero).
+                std::array<F, NDim> a1{};
+                for (size_type i2 = i1 + 1u; i2 < npart; ++i2) {
+                    // Determine dist2, dist and dist3.
+                    F dist2(0);
+                    for (std::size_t j = 0; j < NDim; ++j) {
+                        diffs[j] = c_ptrs[j][i2] - pos1[j];
+                        dist2 += diffs[j] * diffs[j];
+                    }
+                    const F dist = std::sqrt(dist2);
+                    const F dist3 = dist2 * dist;
+                    // Divide both masses by dist3.
+                    const F m2_dist3 = m_ptr[i2] / dist3;
+                    const F m1_dist3 = m1 / dist3;
+                    // Accumulate the accelerations, both in the local
+                    // accumulator for the current particle and in the global
+                    // acc vector for the opposite acceleration.
+                    for (std::size_t j = 0; j < NDim; ++j) {
+                        a1[j] += m2_dist3 * diffs[j];
+                        tmp_res[j][i2] -= m1_dist3 * diffs[j];
+                    }
+                }
+                // Update the acceleration on the first particle
+                // in the temporary storage.
+                for (std::size_t j = 0; j < NDim; ++j) {
+                    tmp_res[j][i1] += a1[j];
+                }
             }
         }
     }
