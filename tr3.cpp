@@ -373,8 +373,9 @@ private:
 
 public:
     template <typename It>
-    explicit tree(const F &box_size, It m_it, std::array<It, NDim> c_it, size_type N, size_type max_leaf_n)
-        : m_box_size(box_size), m_max_leaf_n(max_leaf_n)
+    explicit tree(const F &box_size, It m_it, std::array<It, NDim> c_it, size_type N, size_type max_leaf_n,
+                  size_type ncrit)
+        : m_box_size(box_size), m_max_leaf_n(max_leaf_n), m_ncrit(ncrit)
     {
         simple_timer st("overall tree construction");
         // Check the box size.
@@ -385,6 +386,11 @@ public:
         // Check the max_leaf_n param.
         if (!max_leaf_n) {
             throw std::invalid_argument("the maximum number of particles per leaf must be nonzero");
+        }
+        // Check the ncrit param.
+        if (!ncrit) {
+            throw std::invalid_argument(
+                "the critical number of particles for the vectorised computation of the accelerations must be nonzero");
         }
         // Prepare the vectors.
         m_masses.resize(N);
@@ -712,10 +718,6 @@ public:
     }
 
 private:
-    // ncrit: if the number of particles in a node is ncrit or less,
-    // then we will compute the accelerations on the particles in that
-    // node in a vectorised fashion.
-    static constexpr unsigned ncrit = 128;
     // Temporary storage used to store the distances between the particles
     // of a node and the COM of another node while traversing the tree.
     static auto &vec_acc_tmp_vecs()
@@ -1208,7 +1210,7 @@ private:
         }
     }
     // Top level function fo the vectorised computation of the accelerations. This function does
-    // a depth-first tree traversal until it finds a target node with a number of particles npart <= ncrit.
+    // a depth-first tree traversal until it finds a target node with a number of particles npart <= m_ncrit.
     // When it finds one, it will compute the accelerations on the target's particles by all the other
     // particles in the domain. When that is done, it will continue the traversal (except that all the
     // children of the target node will be skipped) and repeat the procedure for the next target node.
@@ -1222,7 +1224,7 @@ private:
                  idx += get<1>(m_tree[idx])[2] + 1u) {
                 const auto [node_begin, node_end, n_children] = get<1>(m_tree[idx]);
                 const auto npart = node_end - node_begin;
-                if (Level == cbits || npart <= ncrit || !n_children) {
+                if (Level == cbits || npart <= m_ncrit || !n_children) {
                     // Either:
                     // - this is the last possible recursion level, or
                     // - the number of particles is low enough, or
@@ -1248,7 +1250,7 @@ private:
                         }
                     }
                 } else {
-                    // We are not at the last recursion level, npart > ncrit and
+                    // We are not at the last recursion level, npart > m_ncrit and
                     // the node has at least one children. Go deeper.
                     vec_accs_impl<Level + 1u>(out, theta2, idx + 1u, idx + 1u + n_children);
                 }
@@ -1297,6 +1299,10 @@ public:
 private:
     F m_box_size;
     size_type m_max_leaf_n;
+    // ncrit: if the number of particles in a node is ncrit or less,
+    // then we will compute the accelerations on the particles in that
+    // node in a vectorised fashion.
+    size_type m_ncrit;
     v_type<F> m_masses;
     std::array<v_type<F>, NDim> m_coords;
     v_type<UInt> m_codes;
@@ -1367,15 +1373,17 @@ inline std::vector<F> get_plummer_sphere(std::size_t n, F size)
 int main(int argc, char **argv)
 {
     if (argc < 2) {
-        throw std::runtime_error("Need at least 2 arguments, but only " + std::to_string(argc) + " was/were provided");
+        throw std::runtime_error("Need at least 4 arguments, but only " + std::to_string(argc) + " was/were provided");
     }
+    const auto idx = boost::lexical_cast<std::size_t>(argv[1]);
+    const auto max_leaf_n = boost::lexical_cast<std::size_t>(argv[2]);
+    const auto ncrit = boost::lexical_cast<std::size_t>(argv[3]);
     // auto parts = get_uniform_particles<3>(nparts, bsize);
     auto parts = get_plummer_sphere(nparts, bsize);
     tree<std::uint64_t, float, 3> t(bsize, parts.begin(),
                                     {parts.begin() + nparts, parts.begin() + 2 * nparts, parts.begin() + 3 * nparts},
-                                    nparts, 16);
+                                    nparts, max_leaf_n, ncrit);
     std::cout << t << '\n';
-    const auto idx = boost::lexical_cast<std::size_t>(argv[1]);
     std::vector<float> accs(nparts * 3);
     // t.scalar_accs(accs.begin(), 0.75f);
     // std::cout << accs[idx * 3] << ", " << accs[idx * 3 + 1] << ", " << accs[idx * 3 + 2] << '\n';
