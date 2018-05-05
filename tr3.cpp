@@ -164,7 +164,6 @@ inline constexpr unsigned avx_version =
     ;
 
 // Function to rotate by one an AVX/AVX2 SIMD vector of floats.
-// TODO: versions for double precision.
 #if defined(__AVX2__)
 
 inline __m256 rotate_m256(__m256 x)
@@ -183,10 +182,27 @@ inline __m256 rotate_m256(__m256 x)
 // feature provided by _mm256_permute2f128_ps.
 inline __m256 rotate_m256(__m256 x)
 {
-    // NOTE: 0x88 == 0b10001000.
-    __m256 t0 = _mm256_permute_ps(x, 0x39);          // [x4  x7  x6  x5  x0  x3  x2  x1]
-    __m256 t1 = _mm256_permute2f128_ps(t0, t0, 0x1); // [x0  x3  x2  x1  x4  x7  x6  x5]
-    return _mm256_blend_ps(t0, t1, 0x88);            // [x0  x7  x6  x5  x4  x3  x2  x1]
+    // NOTE: 0x39 == 0011 1001, 0x88 == 1000 1000.
+    // NOTE: x = [x7 x6 ... x0].
+    __m256 t0 = _mm256_permute_ps(x, 0x39);        // [x4  x7  x6  x5  x0  x3  x2  x1]
+    __m256 t1 = _mm256_permute2f128_ps(t0, t0, 1); // [x0  x3  x2  x1  x4  x7  x6  x5]
+    return _mm256_blend_ps(t0, t1, 0x88);          // [x0  x7  x6  x5  x4  x3  x2  x1]
+}
+
+#endif
+
+#if defined(__AVX__)
+
+// The double-precision version.
+// NOTE: it seems like there's no AVX2-specific way of doing this,
+// so we do it the vanilla AVX way.
+inline __m256d rotate_m256(__m256d x)
+{
+    // NOTE: same idea as above, different constants.
+    // NOTE: x = [x3 x2 x1 x0].
+    __m256d t0 = _mm256_permute_pd(x, 5);           // [x2 x3 x0 x1]
+    __m256d t1 = _mm256_permute2f128_pd(t0, t0, 1); // [x0 x1 x2 x3]
+    return _mm256_blend_pd(t0, t1, 10);             // [x0 x3 x2 x1]
 }
 
 #endif
@@ -868,7 +884,7 @@ private:
                 const auto leaf_begin = get<1>(m_tree[begin])[0];
                 const auto leaf_end = get<1>(m_tree[begin])[1];
                 size_type i1 = 0;
-                if constexpr (NDim == 3u && avx_version && std::is_same<F, float>::value) {
+                if constexpr (NDim == 3u && avx_version) {
                     // The size of the source node.
                     const auto size_leaf = leaf_end - leaf_begin;
                     using b_type = xsimd::simd_type<F>;
@@ -1002,7 +1018,7 @@ private:
         // Prepare common pointers to the input and output data.
         auto &tmp_res = vec_acc_tmp_res();
         const auto m_ptr = m_masses.data() + node_begin;
-        if constexpr (NDim == 3u && avx_version && std::is_same<F, float>::value) {
+        if constexpr (NDim == 3u && avx_version) {
             // Shortcuts to the node coordinates/masses.
             const auto x_ptr = m_coords[0].data() + node_begin;
             const auto y_ptr = m_coords[1].data() + node_begin;
