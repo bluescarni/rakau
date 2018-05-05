@@ -864,6 +864,10 @@ private:
                 // The source node is a leaf, compute all the accelerations induced by its
                 // particles on the particles of the target node.
                 //
+                // NOTE: we do this here, rather than earlier, as it might be that the node
+                // is far enough to satisfy the BH criterion. In such a case we save a lot
+                // of operations, as we are avoiding all the pairwise interactions.
+                //
                 // Establish the range of the source node.
                 const auto leaf_begin = get<1>(m_tree[begin])[0];
                 const auto leaf_end = get<1>(m_tree[begin])[1];
