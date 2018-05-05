@@ -754,7 +754,7 @@ private:
                 res_ptrs[j] = tmp_res[j].data();
                 c_ptrs[j] = m_coords[j].data() + pidx;
             }
-            // Temporary vectors to store the pos differences and dist2 below.
+            // Temporary vectors to store the pos differences and dist3 below.
             // We will store the data generated in the BH criterion check because
             // we can re-use it later to compute the accelerations.
             auto &tmp_vecs = vec_acc_tmp_vecs();
@@ -777,9 +777,9 @@ private:
                 const b_type node_size2_vec = xsimd::set_simd(node_size2);
                 auto [x_ptr, y_ptr, z_ptr] = c_ptrs;
                 const auto [x_com, y_com, z_com] = com_pos;
-                auto [tmp_x, tmp_y, tmp_z, tmp_dist2] = tmp_ptrs;
+                auto [tmp_x, tmp_y, tmp_z, tmp_dist3] = tmp_ptrs;
                 for (; i < vec_size; i += inc, x_ptr += inc, y_ptr += inc, z_ptr += inc, tmp_x += inc, tmp_y += inc,
-                                     tmp_z += inc, tmp_dist2 += inc) {
+                                     tmp_z += inc, tmp_dist3 += inc) {
                     const b_type xvec = xsimd::load_unaligned(x_ptr);
                     const b_type yvec = xsimd::load_unaligned(y_ptr);
                     const b_type zvec = xsimd::load_unaligned(z_ptr);
@@ -798,7 +798,7 @@ private:
                     xsimd::store_aligned(tmp_x, diffx);
                     xsimd::store_aligned(tmp_y, diffy);
                     xsimd::store_aligned(tmp_z, diffz);
-                    xsimd::store_aligned(tmp_dist2, dist2);
+                    xsimd::store_aligned(tmp_dist3, xsimd::sqrt(dist2) * dist2);
                 }
             }
             for (; i < size; ++i) {
@@ -808,8 +808,6 @@ private:
                     tmp_ptrs[j][i] = com_pos[j] - c_ptrs[j][i];
                     dist2 += tmp_ptrs[j][i] * tmp_ptrs[j][i];
                 }
-                // Store dist2 for later use.
-                tmp_ptrs[NDim][i] = dist2;
                 if (node_size2 >= theta2 * dist2) {
                     // At least one of the particles in the target
                     // node is too close to the COM. Set the flag
@@ -817,6 +815,8 @@ private:
                     bh_flag = false;
                     break;
                 }
+                // Store dist3 for later use.
+                tmp_ptrs[NDim][i] = std::sqrt(dist2) * dist2;
             }
             if (bh_flag) {
                 // The source node satisfies the BH criterion for
@@ -830,13 +830,11 @@ private:
                     using b_type = xsimd::simd_type<F>;
                     constexpr auto inc = b_type::size;
                     const auto vec_size = static_cast<size_type>(size - size % inc);
-                    auto [tmp_x, tmp_y, tmp_z, tmp_dist2] = tmp_ptrs;
+                    auto [tmp_x, tmp_y, tmp_z, tmp_dist3] = tmp_ptrs;
                     auto [res_x, res_y, res_z] = res_ptrs;
-                    for (; i < vec_size; i += inc, tmp_x += inc, tmp_y += inc, tmp_z += inc, tmp_dist2 += inc,
+                    for (; i < vec_size; i += inc, tmp_x += inc, tmp_y += inc, tmp_z += inc, tmp_dist3 += inc,
                                          res_x += inc, res_y += inc, res_z += inc) {
-                        const b_type dist2_vec = xsimd::load_aligned(tmp_dist2);
-                        const b_type dist_vec = xsimd::sqrt(dist2_vec);
-                        const b_type m_com_dist3_vec = m_com / (dist2_vec * dist_vec);
+                        const b_type m_com_dist3_vec = m_com / xsimd::load_aligned(tmp_dist3);
                         const b_type xdiff = xsimd::load_aligned(tmp_x);
                         const b_type ydiff = xsimd::load_aligned(tmp_y);
                         const b_type zdiff = xsimd::load_aligned(tmp_z);
@@ -846,9 +844,7 @@ private:
                     }
                 }
                 for (; i < size; ++i) {
-                    const auto dist2 = tmp_ptrs[NDim][i];
-                    const auto dist = std::sqrt(dist2);
-                    const auto m_com_dist3 = m_com / (dist2 * dist);
+                    const auto m_com_dist3 = m_com / tmp_ptrs[NDim][i];
                     for (std::size_t j = 0; j < NDim; ++j) {
                         res_ptrs[j][i] += tmp_ptrs[j][i] * m_com_dist3;
                     }
