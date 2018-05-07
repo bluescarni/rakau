@@ -207,6 +207,24 @@ inline __m256d rotate_m256(__m256d x)
 
 #endif
 
+template <typename T, std::size_t N>
+inline xsimd::batch<T, N> inv_sqrt_3(xsimd::batch<T, N> x)
+{
+    const auto tmp = T(1) / xsimd::sqrt(x);
+    return tmp * tmp * tmp;
+}
+
+#if defined(__AVX__)
+
+template <>
+inline xsimd::batch<float, 8> inv_sqrt_3<float, 8>(xsimd::batch<float, 8> x)
+{
+    const xsimd::batch<float, 8> tmp = _mm256_rsqrt_ps(x);
+    return tmp * tmp * tmp;
+}
+
+#endif
+
 } // namespace detail
 
 template <typename UInt, typename F, std::size_t NDim>
@@ -814,7 +832,7 @@ private:
                     xsimd::store_aligned(tmp_x, diffx);
                     xsimd::store_aligned(tmp_y, diffy);
                     xsimd::store_aligned(tmp_z, diffz);
-                    xsimd::store_aligned(tmp_dist3, xsimd::sqrt(dist2) * dist2);
+                    xsimd::store_aligned(tmp_dist3, inv_sqrt_3(dist2));
                 }
             }
             for (; i < size; ++i) {
@@ -832,7 +850,7 @@ private:
                     break;
                 }
                 // Store dist3 for later use.
-                tmp_ptrs[NDim][i] = std::sqrt(dist2) * dist2;
+                tmp_ptrs[NDim][i] = F(1) / (std::sqrt(dist2) * dist2);
             }
             if (bh_flag) {
                 // The source node satisfies the BH criterion for
@@ -850,7 +868,7 @@ private:
                     auto [res_x, res_y, res_z] = res_ptrs;
                     for (; i < vec_size; i += inc, tmp_x += inc, tmp_y += inc, tmp_z += inc, tmp_dist3 += inc,
                                          res_x += inc, res_y += inc, res_z += inc) {
-                        const b_type m_com_dist3_vec = m_com / xsimd::load_aligned(tmp_dist3);
+                        const b_type m_com_dist3_vec = m_com * xsimd::load_aligned(tmp_dist3);
                         const b_type xdiff = xsimd::load_aligned(tmp_x);
                         const b_type ydiff = xsimd::load_aligned(tmp_y);
                         const b_type zdiff = xsimd::load_aligned(tmp_z);
@@ -860,7 +878,7 @@ private:
                     }
                 }
                 for (; i < size; ++i) {
-                    const auto m_com_dist3 = m_com / tmp_ptrs[NDim][i];
+                    const auto m_com_dist3 = m_com * tmp_ptrs[NDim][i];
                     for (std::size_t j = 0; j < NDim; ++j) {
                         res_ptrs[j][i] += tmp_ptrs[j][i] * m_com_dist3;
                     }
@@ -921,9 +939,7 @@ private:
                             b_type diff_y = yvec2 - yvec1;
                             b_type diff_z = zvec2 - zvec1;
                             b_type dist2 = diff_x * diff_x + diff_y * diff_y + diff_z * diff_z;
-                            b_type dist = xsimd::sqrt(dist2);
-                            b_type dist3 = dist * dist2;
-                            b_type m_dist3 = mvec / dist3;
+                            b_type m_dist3 = inv_sqrt_3(dist2) * mvec;
                             res_x_vec = xsimd::fma(diff_x, m_dist3, res_x_vec);
                             res_y_vec = xsimd::fma(diff_y, m_dist3, res_y_vec);
                             res_z_vec = xsimd::fma(diff_z, m_dist3, res_z_vec);
@@ -940,9 +956,7 @@ private:
                                 diff_y = yvec2 - yvec1;
                                 diff_z = zvec2 - zvec1;
                                 dist2 = diff_x * diff_x + diff_y * diff_y + diff_z * diff_z;
-                                dist = xsimd::sqrt(dist2);
-                                dist3 = dist * dist2;
-                                m_dist3 = mvec / dist3;
+                                b_type m_dist3 = inv_sqrt_3(dist2) * mvec;
                                 res_x_vec = xsimd::fma(diff_x, m_dist3, res_x_vec);
                                 res_y_vec = xsimd::fma(diff_y, m_dist3, res_y_vec);
                                 res_z_vec = xsimd::fma(diff_z, m_dist3, res_z_vec);
@@ -954,9 +968,7 @@ private:
                             const b_type diff_y = *y_ptr2 - yvec1;
                             const b_type diff_z = *z_ptr2 - zvec1;
                             const b_type dist2 = diff_x * diff_x + diff_y * diff_y + diff_z * diff_z;
-                            const b_type dist = xsimd::sqrt(dist2);
-                            const b_type dist3 = dist2 * dist;
-                            const b_type m_dist3 = *m_ptr / dist3;
+                            b_type m_dist3 = inv_sqrt_3(dist2) * *m_ptr;
                             res_x_vec = xsimd::fma(diff_x, m_dist3, res_x_vec);
                             res_y_vec = xsimd::fma(diff_y, m_dist3, res_y_vec);
                             res_z_vec = xsimd::fma(diff_z, m_dist3, res_z_vec);
@@ -1059,9 +1071,7 @@ private:
                         b_type diff_y = yvec2 - yvec1;
                         b_type diff_z = zvec2 - zvec1;
                         b_type dist2 = diff_x * diff_x + diff_y * diff_y + diff_z * diff_z;
-                        b_type dist = xsimd::sqrt(dist2);
-                        b_type dist3 = dist * dist2;
-                        b_type m2_dist3 = mvec2 / dist3;
+                        b_type m2_dist3 = mvec2 * inv_sqrt_3(dist2);
                         res_x_vec = xsimd::fma(diff_x, m2_dist3, res_x_vec);
                         res_y_vec = xsimd::fma(diff_y, m2_dist3, res_y_vec);
                         res_z_vec = xsimd::fma(diff_z, m2_dist3, res_z_vec);
@@ -1077,9 +1087,7 @@ private:
                         b_type diff_y = yvec2 - yvec1;
                         b_type diff_z = zvec2 - zvec1;
                         b_type dist2 = diff_x * diff_x + diff_y * diff_y + diff_z * diff_z;
-                        b_type dist = xsimd::sqrt(dist2);
-                        b_type dist3 = dist * dist2;
-                        b_type m_dist3 = mvec2 / dist3;
+                        b_type m_dist3 = mvec2 * inv_sqrt_3(dist2);
                         res_x_vec = xsimd::fma(diff_x, m_dist3, res_x_vec);
                         res_y_vec = xsimd::fma(diff_y, m_dist3, res_y_vec);
                         res_z_vec = xsimd::fma(diff_z, m_dist3, res_z_vec);
@@ -1093,9 +1101,7 @@ private:
                         b_type diff_y = *y_ptr2 - yvec1;
                         b_type diff_z = *z_ptr2 - zvec1;
                         b_type dist2 = diff_x * diff_x + diff_y * diff_y + diff_z * diff_z;
-                        b_type dist = xsimd::sqrt(dist2);
-                        b_type dist3 = dist * dist2;
-                        b_type m2_dist3 = *m_ptr2 / dist3;
+                        b_type m2_dist3 = *m_ptr2 * inv_sqrt_3(dist2);
                         res_x_vec = xsimd::fma(diff_x, m2_dist3, res_x_vec);
                         res_y_vec = xsimd::fma(diff_y, m2_dist3, res_y_vec);
                         res_z_vec = xsimd::fma(diff_z, m2_dist3, res_z_vec);
