@@ -413,13 +413,13 @@ public:
         for (auto &vc : m_coords) {
             vc.resize(N);
         }
-        // NOTE: this ensures that, from now on, we can just cast
-        // freely between the size types of the masses/coords and codes vectors.
-        m_codes.resize(boost::numeric_cast<decltype(m_codes.size())>(N));
         // Get out soon if there's nothing to do.
         if (!N) {
             return;
         }
+        // NOTE: this ensures that, from now on, we can just cast
+        // freely between the size types of the masses/coords and codes vectors.
+        m_codes.resize(boost::numeric_cast<decltype(m_codes.size())>(N));
         // Function to discretise the input NDim floating-point coordinates starting at 'it'
         // into a box of a given size box_size.
         auto disc_coords = [&box_size](auto it) {
@@ -854,9 +854,9 @@ private:
                         const b_type xdiff = xsimd::load_aligned(tmp_x);
                         const b_type ydiff = xsimd::load_aligned(tmp_y);
                         const b_type zdiff = xsimd::load_aligned(tmp_z);
-                        xsimd::store_aligned(res_x, xsimd::load_aligned(res_x) + xdiff * m_com_dist3_vec);
-                        xsimd::store_aligned(res_y, xsimd::load_aligned(res_y) + ydiff * m_com_dist3_vec);
-                        xsimd::store_aligned(res_z, xsimd::load_aligned(res_z) + zdiff * m_com_dist3_vec);
+                        xsimd::store_aligned(res_x, xsimd::fma(xdiff, m_com_dist3_vec, xsimd::load_aligned(res_x)));
+                        xsimd::store_aligned(res_y, xsimd::fma(ydiff, m_com_dist3_vec, xsimd::load_aligned(res_y)));
+                        xsimd::store_aligned(res_z, xsimd::fma(zdiff, m_com_dist3_vec, xsimd::load_aligned(res_z)));
                     }
                 }
                 for (; i < size; ++i) {
