@@ -163,9 +163,9 @@ inline constexpr unsigned avx_version =
 #endif
     ;
 
-// Function to rotate by one an AVX/AVX2 SIMD vector of floats.
 #if defined(__AVX2__)
 
+// Rotate a vector of AVX single-precision floats using AVX2.
 inline __m256 rotate_m256(__m256 x)
 {
     // NOTE: this is an AVX2 specific intrinsic. We can emulate it in terms
@@ -175,6 +175,8 @@ inline __m256 rotate_m256(__m256 x)
 
 #elif defined(__AVX__)
 
+// Rotate a vector of AVX single-precision floats using AVX.
+//
 // See the second answer here:
 // https://stackoverflow.com/questions/19516585/shifting-sse-avx-registers-32-bits-left-and-right-while-shifting-in-zeros
 //
@@ -184,25 +186,25 @@ inline __m256 rotate_m256(__m256 x)
 {
     // NOTE: 0x39 == 0011 1001, 0x88 == 1000 1000.
     // NOTE: x = [x7 x6 ... x0].
-    __m256 t0 = _mm256_permute_ps(x, 0x39);        // [x4  x7  x6  x5  x0  x3  x2  x1]
-    __m256 t1 = _mm256_permute2f128_ps(t0, t0, 1); // [x0  x3  x2  x1  x4  x7  x6  x5]
-    return _mm256_blend_ps(t0, t1, 0x88);          // [x0  x7  x6  x5  x4  x3  x2  x1]
+    const __m256 t0 = _mm256_permute_ps(x, 0x39);        // [x4  x7  x6  x5  x0  x3  x2  x1]
+    const __m256 t1 = _mm256_permute2f128_ps(t0, t0, 1); // [x0  x3  x2  x1  x4  x7  x6  x5]
+    return _mm256_blend_ps(t0, t1, 0x88);                // [x0  x7  x6  x5  x4  x3  x2  x1]
 }
 
 #endif
 
 #if defined(__AVX__)
 
-// The double-precision version.
+// Rotate a vector of AVX double-precision floats using AVX.
 // NOTE: it seems like there's no AVX2-specific way of doing this,
 // so we do it the vanilla AVX way.
 inline __m256d rotate_m256(__m256d x)
 {
-    // NOTE: same idea as above, different constants.
+    // NOTE: same idea as above, just different constants.
     // NOTE: x = [x3 x2 x1 x0].
-    __m256d t0 = _mm256_permute_pd(x, 5);           // [x2 x3 x0 x1]
-    __m256d t1 = _mm256_permute2f128_pd(t0, t0, 1); // [x0 x1 x2 x3]
-    return _mm256_blend_pd(t0, t1, 10);             // [x0 x3 x2 x1]
+    const __m256d t0 = _mm256_permute_pd(x, 5);           // [x2 x3 x0 x1]
+    const __m256d t1 = _mm256_permute2f128_pd(t0, t0, 1); // [x0 x1 x2 x3]
+    return _mm256_blend_pd(t0, t1, 10);                   // [x0 x3 x2 x1]
 }
 
 // Compute 1/sqrt(x)**3 using the AVX intrinsic _mm256_rsqrt_ps, refined with a Newton iteration.
