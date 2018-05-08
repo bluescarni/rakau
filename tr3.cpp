@@ -205,10 +205,17 @@ inline __m256d rotate_m256(__m256d x)
     return _mm256_blend_pd(t0, t1, 10);             // [x0 x3 x2 x1]
 }
 
+// Compute 1/sqrt(x)**3 using the AVX intrinsic _mm256_rsqrt_ps, refined with a Newton iteration.
 inline xsimd::batch<float, 8> inv_sqrt_3(xsimd::batch<float, 8> x)
 {
-    const xsimd::batch<float, 8> tmp = _mm256_rsqrt_ps(x);
-    return tmp * tmp * tmp;
+    // Newton iteration: y1 = y0/2 * (3 - x*y0**2).
+    const xsimd::batch<float, 8> three(3.f);
+    const xsimd::batch<float, 8> y0 = _mm256_rsqrt_ps(x);
+    const xsimd::batch<float, 8> xy0 = x * y0;
+    const xsimd::batch<float, 8> half_y0 = y0 * .5f;
+    const xsimd::batch<float, 8> three_minus_muls = xsimd::fnma(xy0, y0, three);
+    const xsimd::batch<float, 8> res = half_y0 * three_minus_muls;
+    return res * res * res;
 }
 
 #endif
