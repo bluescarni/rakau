@@ -16,6 +16,7 @@
 #include <string>
 #include <tuple>
 #include <type_traits>
+#include <utility>
 #include <vector>
 
 #if defined(__AVX2__) || defined(__AVX__)
@@ -222,6 +223,53 @@ inline xsimd::batch<float, 8> inv_sqrt_3(xsimd::batch<float, 8> x)
 
 #endif
 
+// Slightly adapted from:
+// https://blog.merovius.de/2014/08/12/applying-permutation-in-constant.html
+template <typename VVec, typename PVec>
+inline void apply_permuation(VVec &values, PVec &perm)
+{
+    using std::swap;
+    using idx_t = typename PVec::value_type;
+    assert(values.size() == perm.size());
+    const auto size = perm.size();
+    for (decltype(perm.size()) i = 0; i < size; ++i) {
+        if (perm[i] < i) {
+            swap(values[i], values[perm[i]]);
+        }
+#if 0
+        // Extract a reference to the value at the current position.
+        auto &v = values[i];
+        // The permutation index of v. This will be updated
+        // as we swap new values into v.
+        auto j = perm[i];
+        if (j >= (idx_t(1) << (std::numeric_limits<idx_t>::digits - 1))) {
+            // NOTE: v was placed into the correct position in an earlier
+            // iteration. Restore the original permutation index and
+            // move on.
+            // NOTE: regarding the test, consider an 8-bit unsigned integral type.
+            // The range is [0, 256) and we want to use the values [0, 128)
+            // for the original permutation indices, and the values [128, 256)
+            // for the flagged ones. Thus, the limit 1 << (8 - 1) which is 128.
+            perm[i] = static_cast<idx_t>(-j - 1u);
+            continue;
+        }
+        while (j != i) {
+            // v is not in the correct place. Swap it with the value at the
+            // correct position, so that the value which was in v is now
+            // placed correctly.
+            swap(v, values[j]);
+            // Remember the permutation index of the value that used to be
+            // in values[j], and which is now in v.
+            const auto old_pj = perm[j];
+            // Flip it and store it.
+            perm[j] = static_cast<idx_t>(idx_t(-1) - old_pj);
+            // Update j with the permutation index of the value now in v.
+            j = old_pj;
+        }
+#endif
+    }
+}
+
 } // namespace detail
 
 template <typename UInt, typename F, std::size_t NDim>
@@ -241,7 +289,7 @@ public:
 private:
     static auto &get_v_ind()
     {
-        static thread_local v_type<std::pair<UInt, size_type>> v_ind;
+        static thread_local v_type<size_type> v_ind;
         return v_ind;
     }
     template <unsigned ParentLevel, typename CTuple, typename CIt>
@@ -468,47 +516,41 @@ public:
         std::array<F, NDim> tmp_coord;
         // The encoder object.
         morton_encoder<NDim, UInt> me;
-        // Determine the particles' codes, and store them in a temporary vector for indirect
-        // sorting. Remember also the original coord iters for later use.
-        auto old_c_it = c_it;
+        // Determine the particles' codes, and fill in the particles' data.
         auto &v_ind = get_v_ind();
         v_ind.resize(boost::numeric_cast<decltype(v_ind.size())>(N));
-        for (size_type i = 0; i < N; ++i) {
-            // Write the coords in the temp structure.
+        for (size_type i = 0; i < N; ++i, ++m_it) {
+            // Write the coords in the temp structure and in the data members.
             for (std::size_t j = 0; j < NDim; ++j) {
                 tmp_coord[j] = *c_it[j];
+                m_coords[j][i] = *c_it[j];
             }
+            // Store the mass.
+            m_masses[i] = *m_it;
             // Compute and store the code.
-            v_ind[i].first = me(disc_coords(tmp_coord.begin()).begin());
+            m_codes[i] = me(disc_coords(tmp_coord.begin()).begin());
             // Store the index.
-            v_ind[i].second = i;
+            v_ind[i] = i;
             // Increase the coordinates iterators.
             for (auto &_ : c_it) {
                 ++_;
             }
         }
-        // Do the actual sorting of v_ind.
+        // Do the sorting of v_ind.
         boost::sort::spreadsort::integer_sort(
             v_ind.begin(), v_ind.end(),
-            [](const auto &p, unsigned offset) { return static_cast<UInt>(p.first >> offset); },
-            [](const auto &p1, const auto &p2) { return p1.first < p2.first; });
-        // Now let's write the masses, coords and the codes in the correct order.
-        // NOTE: we will need to index into It, so make sure its difference type
-        // can represent the total number of particles.
-        using it_diff_t = typename std::iterator_traits<It>::difference_type;
-        using it_udiff_t = std::make_unsigned_t<it_diff_t>;
-        if (N > static_cast<it_udiff_t>(std::numeric_limits<it_diff_t>::max())) {
-            throw std::overflow_error("the number of particles (" + std::to_string(N)
-                                      + ") is too large, and it results in an overflow condition");
+            [this](const size_type &idx, unsigned offset) { return this->m_codes[idx] >> offset; },
+            [this](const size_type &idx1, const size_type &idx2) { return this->m_codes[idx1] < this->m_codes[idx2]; });
+        // Apply the permutation to the data members.
+        std::cout << m_codes[v_ind[0]] << ", " << m_codes[1] << ", " << m_codes[2] << ", " << m_codes.back() << '\n';
+        apply_permuation(m_codes, v_ind);
+        std::cout << m_codes[0] << ", " << m_codes[1] << ", " << m_codes[2] << ", " << m_codes.back() << '\n';
+        std::cout << std::is_sorted(m_codes.begin(), m_codes.end()) << '\n';
+        std::exit(0);
+        for (std::size_t j = 0; j < NDim; ++j) {
+            apply_permuation(m_coords[j], v_ind);
         }
-        for (size_type i = 0; i < N; ++i) {
-            const auto idx = static_cast<it_diff_t>(v_ind[i].second);
-            m_masses[i] = m_it[idx];
-            for (std::size_t j = 0; j < NDim; ++j) {
-                m_coords[j][i] = old_c_it[j][idx];
-            }
-            m_codes[i] = v_ind[i].first;
-        }
+        apply_permuation(m_masses, v_ind);
         // Now let's proceed to the tree construction.
         build_tree();
         // Now move to the computation of the COM of the nodes.
