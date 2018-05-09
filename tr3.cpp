@@ -223,33 +223,71 @@ inline xsimd::batch<float, 8> inv_sqrt_3(xsimd::batch<float, 8> x)
 
 #endif
 
+// Apply the indirect sort defined by the vector of indices 'perm'
+// into the 'values' vector. E.g., if in input
+//
+// values = [a, c, d, b]
+// perm = [0, 3, 1, 2]
+//
+// then in output
+//
+// values = [a, b, c, d]
+//
+// and perm is unchanged (but it will be subject to writes inside this function).
 template <typename VVec, typename PVec>
-inline void apply_permuation(VVec &values, PVec &perm)
+inline void apply_isort(VVec &values, PVec &perm)
 {
     using std::swap;
     using idx_t = typename PVec::value_type;
     assert(values.size() == perm.size());
+#if !defined(NDEBUG)
+    const auto orig_perm = perm;
+#endif
     const auto size = perm.size();
     for (decltype(perm.size()) i = 0; i < size; ++i) {
-        auto j = perm[i];
-        if (j >= (idx_t(1) << (std::numeric_limits<idx_t>::digits - 1))) {
-            perm[i] = static_cast<idx_t>(-j - 1u);
+        if (perm[i] >= (idx_t(1) << (std::numeric_limits<idx_t>::digits - 1))) {
+            // The value was swapped in the correct position
+            // in an earlier iteration. Flip back the permutation
+            // index and move to the next value.
+            perm[i] = static_cast<idx_t>(-perm[i] - 1u);
             continue;
         }
+        auto j = perm[i];
         if (i != j) {
+            // The current value is not at its correct position. The idea
+            // is then to keep on swapping the current value with other
+            // values to the right, until it eventually falls into the correct
+            // place. The other values swapped in this process are all put
+            // into the correct position.
             auto k = i;
             while (true) {
+                // Move into the current position the correct value,
+                // swapping out the incorrect value.
                 swap(values[k], values[j]);
-                perm[k] = static_cast<idx_t>(idx_t(-1) - j);
+                // The current position now contains the correct value.
+                // Mark the permutation index with the negative of the original index.
+                perm[k] = static_cast<idx_t>(idx_t(-1) - perm[k]);
                 if (perm[j] == i) {
-                    perm[j] = static_cast<idx_t>(idx_t(-1) - i);
+                    // The previously incorrect value was swapped into its correct
+                    // position (note that the original index of the incorrect value
+                    // is i). Mark the corresponding index and break out.
+                    perm[j] = static_cast<idx_t>(idx_t(-1) - perm[j]);
                     break;
                 }
+                // The previously incorrect value was swapped into another
+                // incorrect position. Iterate the procedure.
                 k = j;
                 j = perm[k];
             }
+            // NOTE: during the first iteration of the cycle above we certainly
+            // negated the i-th slot of perm at the first swapout of the incorrect
+            // value. Since at the next iteration we will move to i + 1, we won't
+            // have any chance to restore the original permutation index, so we do
+            // it here.
+            perm[i] = static_cast<idx_t>(-perm[i] - 1u);
         }
     }
+    assert(perm == orig_perm);
 }
 
 } // namespace detail
@@ -524,11 +562,20 @@ public:
             [this](const size_type &idx, unsigned offset) { return this->m_codes[idx] >> offset; },
             [this](const size_type &idx1, const size_type &idx2) { return this->m_codes[idx1] < this->m_codes[idx2]; });
         // Apply the permutation to the data members.
-        apply_permuation(m_codes, v_ind);
-        for (std::size_t j = 0; j < NDim; ++j) {
-            apply_permuation(m_coords[j], v_ind);
+        // NOTE: the indices range is [0, N - 1]. The apply_isort() function requires the maximum
+        // value in the indices vector (N - 1, in this case) to be less than 2**(nbits - 1), as it
+        // uses the highest bit internally for a special purpose.
+        if (N > (size_type(1) << (std::numeric_limits<size_type>::digits - 1))) {
+            throw std::overflow_error("the number of particles (" + std::to_string(N)
+                                      + ") is too large, and it results in an overflow condition");
         }
-        apply_permuation(m_masses, v_ind);
+        apply_isort(m_codes, v_ind);
+        // Make sure the sort worked as intended.
+        assert(std::is_sorted(m_codes.begin(), m_codes.end()));
+        for (std::size_t j = 0; j < NDim; ++j) {
+            apply_isort(m_coords[j], v_ind);
+        }
+        apply_isort(m_masses, v_ind);
         // Now let's proceed to the tree construction.
         build_tree();
         // Now move to the computation of the COM of the nodes.
