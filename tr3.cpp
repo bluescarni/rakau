@@ -223,8 +223,6 @@ inline xsimd::batch<float, 8> inv_sqrt_3(xsimd::batch<float, 8> x)
 
 #endif
 
-// Slightly adapted from:
-// https://blog.merovius.de/2014/08/12/applying-permutation-in-constant.html
 template <typename VVec, typename PVec>
 inline void apply_permuation(VVec &values, PVec &perm)
 {
@@ -233,40 +231,24 @@ inline void apply_permuation(VVec &values, PVec &perm)
     assert(values.size() == perm.size());
     const auto size = perm.size();
     for (decltype(perm.size()) i = 0; i < size; ++i) {
-        if (perm[i] < i) {
-            swap(values[i], values[perm[i]]);
-        }
-#if 0
-        // Extract a reference to the value at the current position.
-        auto &v = values[i];
-        // The permutation index of v. This will be updated
-        // as we swap new values into v.
         auto j = perm[i];
         if (j >= (idx_t(1) << (std::numeric_limits<idx_t>::digits - 1))) {
-            // NOTE: v was placed into the correct position in an earlier
-            // iteration. Restore the original permutation index and
-            // move on.
-            // NOTE: regarding the test, consider an 8-bit unsigned integral type.
-            // The range is [0, 256) and we want to use the values [0, 128)
-            // for the original permutation indices, and the values [128, 256)
-            // for the flagged ones. Thus, the limit 1 << (8 - 1) which is 128.
             perm[i] = static_cast<idx_t>(-j - 1u);
             continue;
         }
-        while (j != i) {
-            // v is not in the correct place. Swap it with the value at the
-            // correct position, so that the value which was in v is now
-            // placed correctly.
-            swap(v, values[j]);
-            // Remember the permutation index of the value that used to be
-            // in values[j], and which is now in v.
-            const auto old_pj = perm[j];
-            // Flip it and store it.
-            perm[j] = static_cast<idx_t>(idx_t(-1) - old_pj);
-            // Update j with the permutation index of the value now in v.
-            j = old_pj;
+        if (i != j) {
+            auto k = i;
+            while (true) {
+                swap(values[k], values[j]);
+                perm[k] = static_cast<idx_t>(idx_t(-1) - j);
+                if (perm[j] == i) {
+                    perm[j] = static_cast<idx_t>(idx_t(-1) - i);
+                    break;
+                }
+                k = j;
+                j = perm[k];
+            }
         }
-#endif
     }
 }
 
@@ -542,11 +524,7 @@ public:
             [this](const size_type &idx, unsigned offset) { return this->m_codes[idx] >> offset; },
             [this](const size_type &idx1, const size_type &idx2) { return this->m_codes[idx1] < this->m_codes[idx2]; });
         // Apply the permutation to the data members.
-        std::cout << m_codes[v_ind[0]] << ", " << m_codes[1] << ", " << m_codes[2] << ", " << m_codes.back() << '\n';
         apply_permuation(m_codes, v_ind);
-        std::cout << m_codes[0] << ", " << m_codes[1] << ", " << m_codes[2] << ", " << m_codes.back() << '\n';
-        std::cout << std::is_sorted(m_codes.begin(), m_codes.end()) << '\n';
-        std::exit(0);
         for (std::size_t j = 0; j < NDim; ++j) {
             apply_permuation(m_coords[j], v_ind);
         }
