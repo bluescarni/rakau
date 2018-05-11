@@ -1384,11 +1384,8 @@ private:
                     vec_acc_on_node<0, Level>(theta2, node_begin, npart, get<0>(m_tree[idx]), size_type(0),
                                               size_type(m_tree.size()));
                     // Write out the result.
-                    auto out_ptr = out.data() + node_begin * NDim;
-                    for (size_type i = 0; i < npart; ++i, out_ptr += NDim) {
-                        for (std::size_t j = 0; j != NDim; ++j) {
-                            out_ptr[j] = tmp_res[j][i];
-                        }
+                    for (std::size_t j = 0; j != NDim; ++j) {
+                        std::copy(tmp_res[j].begin(), tmp_res[j].end(), out.data() + m_masses.size() * j + node_begin);
                     }
                 } else {
                     // We are not at the last recursion level, npart > m_ncrit and
@@ -1577,7 +1574,7 @@ int main(int argc, char **argv)
     // t.scalar_accs(accs.begin(), 0.75f);
     // std::cout << accs[idx * 3] << ", " << accs[idx * 3 + 1] << ", " << accs[idx * 3 + 2] << '\n';
     t.vec_accs(accs, 0.75f);
-    std::cout << accs[idx * 3] << ", " << accs[idx * 3 + 1] << ", " << accs[idx * 3 + 2] << '\n';
+    std::cout << accs[idx] << ", " << accs[nparts + idx] << ", " << accs[nparts * 2u + idx] << '\n';
     auto eacc = t.exact_accs(idx);
     std::cout << eacc[0] << ", " << eacc[1] << ", " << eacc[2] << '\n';
     // Test ordered iters.
