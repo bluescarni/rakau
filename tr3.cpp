@@ -1488,12 +1488,11 @@ private:
     size_type m_ncrit;
     // The particles' masses.
     v_type<F> m_masses;
-    // The particles' coordinates vectors.
+    // The particles' coordinates.
     std::array<v_type<F>, NDim> m_coords;
-    // The vector of Morton codes for the particles.
+    // The particles' Morton codes.
     v_type<UInt> m_codes;
-    // Indices vector which remembers the original order in which the
-    // particles were passed to the tree.
+    // Indices vector to iterate over the particles' data in the original order.
     v_type<size_type> m_ord_ind;
     // The tree structure.
     v_type<std::tuple<UInt, std::array<size_type, 3>, F, std::array<F, NDim>>> m_tree;
