@@ -492,18 +492,19 @@ public:
             throw std::invalid_argument(
                 "the critical number of particles for the vectorised computation of the accelerations must be nonzero");
         }
+        // Get out soon if there's nothing to do.
+        if (!N) {
+            return;
+        }
         // Prepare the vectors.
         m_masses.resize(N);
         for (auto &vc : m_coords) {
             vc.resize(N);
         }
-        // Get out soon if there's nothing to do.
-        if (!N) {
-            return;
-        }
-        // NOTE: this ensures that, from now on, we can just cast
-        // freely between the size types of the masses/coords and codes vectors.
+        // NOTE: these ensure that, from now on, we can just cast
+        // freely between the size types of the masses/coords and codes/indices vectors.
         m_codes.resize(boost::numeric_cast<decltype(m_codes.size())>(N));
+        m_ord_ind.resize(boost::numeric_cast<decltype(m_ord_ind.size())>(N));
         // Function to discretise the input NDim floating-point coordinates starting at 'it'
         // into a box of a given size box_size.
         auto disc_coords = [&box_size](auto it) {
@@ -578,7 +579,6 @@ public:
         }
         apply_isort(m_masses, v_ind);
         // Establish the indices for ordered iteration.
-        m_ord_ind.resize(boost::numeric_cast<decltype(m_ord_ind.size())>(N));
         for (size_type i = 0; i < N; ++i) {
             m_ord_ind[v_ind[i]] = i;
         }
@@ -1436,42 +1436,48 @@ public:
 
 private:
     template <typename Tr>
-    static auto ord_c_begin_impl(Tr &tr)
+    static auto ord_c_ranges_impl(Tr &tr)
     {
         using it_t = decltype(boost::make_permutation_iterator(tr.m_coords[0].begin(), tr.m_ord_ind.begin()));
-        std::array<it_t, NDim> retval;
+        std::array<std::pair<it_t, it_t>, NDim> retval;
         for (std::size_t j = 0; j < NDim; ++j) {
-            retval[j] = boost::make_permutation_iterator(tr.m_coords[j].begin(), tr.m_ord_ind.begin());
-        }
-        return retval;
-    }
-    template <typename Tr>
-    static auto ord_c_end_impl(Tr &tr)
-    {
-        using it_t = decltype(boost::make_permutation_iterator(tr.m_coords[0].end(), tr.m_ord_ind.end()));
-        std::array<it_t, NDim> retval;
-        for (std::size_t j = 0; j < NDim; ++j) {
-            retval[j] = boost::make_permutation_iterator(tr.m_coords[j].end(), tr.m_ord_ind.end());
+            retval[j] = std::make_pair(boost::make_permutation_iterator(tr.m_coords[j].begin(), tr.m_ord_ind.begin()),
+                                       boost::make_permutation_iterator(tr.m_coords[j].end(), tr.m_ord_ind.end()));
         }
         return retval;
     }
 
 public:
-    auto ord_c_begin() const
+    auto ord_c_ranges() const
     {
-        return ord_c_begin_impl(*this);
+        return ord_c_ranges_impl(*this);
     }
-    auto ord_c_end() const
+    auto ord_m_range() const
     {
-        return ord_c_end_impl(*this);
+        return std::make_pair(boost::make_permutation_iterator(m_masses.begin(), m_ord_ind.begin()),
+                              boost::make_permutation_iterator(m_masses.end(), m_ord_ind.end()));
     }
-    auto ord_m_begin() const
+
+private:
+    template <typename Func>
+    void update_positions_impl(Func &&f)
     {
-        return boost::make_permutation_iterator(m_masses.begin(), m_ord_ind.begin());
+        const auto nparts = m_masses.size();
+        for (std::size_t j = 0; j != NDim; ++j) {
+            for (size_type i = 0; i < nparts; ++i) {
+                m_coords[j][i] = std::forward<Func>(f)(j, i, static_cast<const F &>(m_coords[j][i]));
+            }
+        }
     }
-    auto ord_m_end() const
+
+public:
+    template <typename Func>
+    void update_positions(Func &&f)
     {
-        return boost::make_permutation_iterator(m_masses.end(), m_ord_ind.end());
+        try {
+            update_positions_impl(std::forward<Func>(f));
+        } catch (...) {
+        }
     }
 
 private:
@@ -1578,14 +1584,14 @@ int main(int argc, char **argv)
     auto eacc = t.exact_accs(idx);
     std::cout << eacc[0] << ", " << eacc[1] << ", " << eacc[2] << '\n';
     // Test ordered iters.
-    auto [x_it, y_it, z_it] = t.ord_c_begin();
-    std::cout << *x_it << ", " << *y_it << ", " << *z_it << '\n';
+    auto [x_r, y_r, z_r] = t.ord_c_ranges();
+    std::cout << *x_r.first << ", " << *y_r.first << ", " << *z_r.first << '\n';
     std::cout << *(parts.begin() + nparts) << ", " << *(parts.begin() + 2 * nparts) << ", "
               << *(parts.begin() + 3 * nparts) << '\n';
-    x_it += 5;
-    y_it += 5;
-    z_it += 5;
-    std::cout << *x_it << ", " << *y_it << ", " << *z_it << '\n';
+    x_r.first += 5;
+    y_r.first += 5;
+    z_r.first += 5;
+    std::cout << *x_r.first << ", " << *y_r.first << ", " << *z_r.first << '\n';
     std::cout << *(parts.begin() + nparts + 5) << ", " << *(parts.begin() + 2 * nparts + 5) << ", "
               << *(parts.begin() + 3 * nparts + 5) << '\n';
 }
