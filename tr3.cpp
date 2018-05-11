@@ -25,6 +25,7 @@
 
 #endif
 
+#include <boost/iterator/permutation_iterator.hpp>
 #include <boost/numeric/conversion/cast.hpp>
 #include <boost/sort/spreadsort/spreadsort.hpp>
 
@@ -167,7 +168,7 @@ inline constexpr unsigned avx_version =
 #if defined(__AVX2__)
 
 // Rotate a vector of AVX single-precision floats using AVX2.
-inline __m256 rotate_m256(__m256 x)
+inline __m256 rotate_simd_vec(__m256 x)
 {
     // NOTE: this is an AVX2 specific intrinsic. We can emulate it in terms
     // of AVX with 3 instructions (see below).
@@ -183,7 +184,7 @@ inline __m256 rotate_m256(__m256 x)
 //
 // This is slightly modified in the second line as we don't want the zeroing
 // feature provided by _mm256_permute2f128_ps.
-inline __m256 rotate_m256(__m256 x)
+inline __m256 rotate_simd_vec(__m256 x)
 {
     // NOTE: 0x39 == 0011 1001, 0x88 == 1000 1000.
     // NOTE: x = [x7 x6 ... x0].
@@ -199,7 +200,7 @@ inline __m256 rotate_m256(__m256 x)
 // Rotate a vector of AVX double-precision floats using AVX.
 // NOTE: it seems like there's no AVX2-specific way of doing this,
 // so we do it the vanilla AVX way.
-inline __m256d rotate_m256(__m256d x)
+inline __m256d rotate_simd_vec(__m256d x)
 {
     // NOTE: same idea as above, just different constants.
     // NOTE: x = [x3 x2 x1 x0].
@@ -246,7 +247,7 @@ inline void apply_isort(VVec &values, PVec &perm)
     const auto size = perm.size();
     for (decltype(perm.size()) i = 0; i < size; ++i) {
         if (perm[i] >= (idx_t(1) << (std::numeric_limits<idx_t>::digits - 1))) {
-            // The value was swapped in the correct position
+            // The value was swapped into the correct position
             // in an earlier iteration. Flip back the permutation
             // index and move to the next value.
             perm[i] = static_cast<idx_t>(-perm[i] - 1u);
@@ -576,6 +577,11 @@ public:
             apply_isort(m_coords[j], v_ind);
         }
         apply_isort(m_masses, v_ind);
+        // Establish the indices for ordered iteration.
+        m_ord_ind.resize(boost::numeric_cast<decltype(m_ord_ind.size())>(N));
+        for (size_type i = 0; i < N; ++i) {
+            m_ord_ind[v_ind[i]] = i;
+        }
         // Now let's proceed to the tree construction.
         build_tree();
         // Now move to the computation of the COM of the nodes.
@@ -975,7 +981,7 @@ private:
                 const auto leaf_end = get<1>(m_tree[begin])[1];
                 size_type i1 = 0;
                 if constexpr (NDim == 3u && avx_version) {
-                    // The size of the source node.
+                    // The number of particles in the source node.
                     const auto size_leaf = leaf_end - leaf_begin;
                     using b_type = xsimd::simd_type<F>;
                     constexpr auto inc = b_type::size;
@@ -1027,10 +1033,10 @@ private:
                                 // onto a target batch. We need to rotate the source batch
                                 // inc - 1 times and perform again the computation in order
                                 // to compute all possible particle-particle interactions.
-                                xvec2 = rotate_m256(xvec2);
-                                yvec2 = rotate_m256(yvec2);
-                                zvec2 = rotate_m256(zvec2);
-                                mvec = rotate_m256(mvec);
+                                xvec2 = rotate_simd_vec(xvec2);
+                                yvec2 = rotate_simd_vec(yvec2);
+                                zvec2 = rotate_simd_vec(zvec2);
+                                mvec = rotate_simd_vec(mvec);
                                 diff_x = xvec2 - xvec1;
                                 diff_y = yvec2 - yvec1;
                                 diff_z = zvec2 - zvec1;
@@ -1178,10 +1184,10 @@ private:
                     // Iterate over all the other possible batch-batch permutations
                     // by rotating the data in xvec2, yvec2, zvec2.
                     for (std::size_t j = 1; j < inc; ++j) {
-                        xvec2 = rotate_m256(xvec2);
-                        yvec2 = rotate_m256(yvec2);
-                        zvec2 = rotate_m256(zvec2);
-                        mvec2 = rotate_m256(mvec2);
+                        xvec2 = rotate_simd_vec(xvec2);
+                        yvec2 = rotate_simd_vec(yvec2);
+                        zvec2 = rotate_simd_vec(zvec2);
+                        mvec2 = rotate_simd_vec(mvec2);
                         b_type diff_x = xvec2 - xvec1;
                         b_type diff_y = yvec2 - yvec1;
                         b_type diff_z = zvec2 - zvec1;
@@ -1432,15 +1438,64 @@ public:
     }
 
 private:
+    template <typename Tr>
+    static auto ord_c_begin_impl(Tr &tr)
+    {
+        using it_t = decltype(boost::make_permutation_iterator(tr.m_coords[0].begin(), tr.m_ord_ind.begin()));
+        std::array<it_t, NDim> retval;
+        for (std::size_t j = 0; j < NDim; ++j) {
+            retval[j] = boost::make_permutation_iterator(tr.m_coords[j].begin(), tr.m_ord_ind.begin());
+        }
+        return retval;
+    }
+    template <typename Tr>
+    static auto ord_c_end_impl(Tr &tr)
+    {
+        using it_t = decltype(boost::make_permutation_iterator(tr.m_coords[0].end(), tr.m_ord_ind.end()));
+        std::array<it_t, NDim> retval;
+        for (std::size_t j = 0; j < NDim; ++j) {
+            retval[j] = boost::make_permutation_iterator(tr.m_coords[j].end(), tr.m_ord_ind.end());
+        }
+        return retval;
+    }
+
+public:
+    auto ord_c_begin() const
+    {
+        return ord_c_begin_impl(*this);
+    }
+    auto ord_c_end() const
+    {
+        return ord_c_end_impl(*this);
+    }
+    auto ord_m_begin() const
+    {
+        return boost::make_permutation_iterator(m_masses.begin(), m_ord_ind.begin());
+    }
+    auto ord_m_end() const
+    {
+        return boost::make_permutation_iterator(m_masses.end(), m_ord_ind.end());
+    }
+
+private:
+    // The size of the domain.
     F m_box_size;
+    // The maximum number of particles in a leaf node.
     size_type m_max_leaf_n;
-    // ncrit: if the number of particles in a node is ncrit or less,
-    // then we will compute the accelerations on the particles in that
-    // node in a vectorised fashion.
+    // Number of particles in a critical node: if the number of particles in
+    // a node is ncrit or less, then we will compute the accelerations on the
+    // particles in that node in a vectorised fashion.
     size_type m_ncrit;
+    // The particles' masses.
     v_type<F> m_masses;
+    // The particles' coordinates vectors.
     std::array<v_type<F>, NDim> m_coords;
+    // The vector of Morton codes for the particles.
     v_type<UInt> m_codes;
+    // Indices vector which remembers the original order in which the
+    // particles were passed to the tree.
+    v_type<size_type> m_ord_ind;
+    // The tree structure.
     v_type<std::tuple<UInt, std::array<size_type, 3>, F, std::array<F, NDim>>> m_tree;
 };
 
@@ -1526,4 +1581,15 @@ int main(int argc, char **argv)
     std::cout << accs[idx * 3] << ", " << accs[idx * 3 + 1] << ", " << accs[idx * 3 + 2] << '\n';
     auto eacc = t.exact_accs(idx);
     std::cout << eacc[0] << ", " << eacc[1] << ", " << eacc[2] << '\n';
+    // Test ordered iters.
+    auto [x_it, y_it, z_it] = t.ord_c_begin();
+    std::cout << *x_it << ", " << *y_it << ", " << *z_it << '\n';
+    std::cout << *(parts.begin() + nparts) << ", " << *(parts.begin() + 2 * nparts) << ", "
+              << *(parts.begin() + 3 * nparts) << '\n';
+    x_it += 5;
+    y_it += 5;
+    z_it += 5;
+    std::cout << *x_it << ", " << *y_it << ", " << *z_it << '\n';
+    std::cout << *(parts.begin() + nparts + 5) << ", " << *(parts.begin() + 2 * nparts + 5) << ", "
+              << *(parts.begin() + 3 * nparts + 5) << '\n';
 }
