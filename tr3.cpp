@@ -470,6 +470,37 @@ private:
             get<2>(tup) = tot_mass;
         }
     }
+    // Function to discretise the input NDim floating-point coordinates starting at 'it'
+    // into a box of a given size box_size.
+    template <typename It>
+    static auto disc_coords(It it, const F &box_size)
+    {
+        constexpr UInt factor = UInt(1) << cbits;
+        std::array<UInt, NDim> retval;
+        for (std::size_t i = 0; i < NDim; ++i, ++it) {
+            const auto &x = *it;
+            // Translate and rescale the coordinate so that -box_size/2 becomes zero
+            // and box_size/2 becomes 1.
+            auto tmp = (x + box_size / F(2)) / box_size;
+            // Rescale by factor.
+            tmp *= factor;
+            // Check: don't end up with a nonfinite value.
+            if (!std::isfinite(tmp)) {
+                throw std::invalid_argument("Not finite!");
+            }
+            // Check: don't end up outside the [0, factor) range.
+            if (tmp < F(0) || tmp >= F(factor)) {
+                throw std::invalid_argument("Out of bounds!");
+            }
+            // Cast to UInt and write to retval.
+            retval[i] = static_cast<UInt>(tmp);
+            // Last check, make sure we don't overflow.
+            if (retval[i] >= factor) {
+                throw std::invalid_argument("Out of bounds! (after cast)");
+            }
+        }
+        return retval;
+    }
 
 public:
     template <typename It>
@@ -505,35 +536,6 @@ public:
         // freely between the size types of the masses/coords and codes/indices vectors.
         m_codes.resize(boost::numeric_cast<decltype(m_codes.size())>(N));
         m_ord_ind.resize(boost::numeric_cast<decltype(m_ord_ind.size())>(N));
-        // Function to discretise the input NDim floating-point coordinates starting at 'it'
-        // into a box of a given size box_size.
-        auto disc_coords = [&box_size](auto it) {
-            constexpr UInt factor = UInt(1) << cbits;
-            std::array<UInt, NDim> retval;
-            for (std::size_t i = 0; i < NDim; ++i, ++it) {
-                const auto &x = *it;
-                // Translate and rescale the coordinate so that -box_size/2 becomes zero
-                // and box_size/2 becomes 1.
-                auto tmp = (x + box_size / F(2)) / box_size;
-                // Rescale by factor.
-                tmp *= factor;
-                // Check: don't end up with a nonfinite value.
-                if (!std::isfinite(tmp)) {
-                    throw std::invalid_argument("Not finite!");
-                }
-                // Check: don't end up outside the [0, factor) range.
-                if (tmp < F(0) || tmp >= F(factor)) {
-                    throw std::invalid_argument("Out of bounds!");
-                }
-                // Cast to UInt and write to retval.
-                retval[i] = static_cast<UInt>(tmp);
-                // Last check, make sure we don't overflow.
-                if (retval[i] >= factor) {
-                    throw std::invalid_argument("Out of bounds! (after cast)");
-                }
-            }
-            return retval;
-        };
         // Temporary structure used in the encoding.
         std::array<F, NDim> tmp_coord;
         // The encoder object.
@@ -550,7 +552,7 @@ public:
             // Store the mass.
             m_masses[i] = *m_it;
             // Compute and store the code.
-            m_codes[i] = me(disc_coords(tmp_coord.begin()).begin());
+            m_codes[i] = me(disc_coords(tmp_coord.begin(), m_box_size).begin());
             // Store the index.
             v_ind[i] = i;
             // Increase the coordinates iterators.
