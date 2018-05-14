@@ -1464,12 +1464,57 @@ private:
     template <typename Func>
     void update_positions_impl(Func &&f)
     {
+        // Write the new coordinates following the original order, and re-compute the Morton codes.
+        auto c_ranges = ord_c_ranges_impl(*this);
         const auto nparts = m_masses.size();
-        for (std::size_t j = 0; j != NDim; ++j) {
-            for (size_type i = 0; i < nparts; ++i) {
-                m_coords[j][i] = std::forward<Func>(f)(j, i, static_cast<const F &>(m_coords[j][i]));
+        std::array<F, NDim> tmp_coord;
+        morton_encoder<NDim, UInt> me;
+        for (size_type i = 0; i < nparts; ++i) {
+            for (std::size_t j = 0; j != NDim; ++j) {
+                *c_ranges[j].first = std::forward<Func>(f)(j, i, *c_ranges[j].first);
+                tmp_coord[j] = *c_ranges[j].first;
+                ++c_ranges[j].first;
             }
+            m_codes[m_ord_ind[i]] = me(disc_coords(tmp_coord.begin(), m_box_size).begin());
         }
+        assert(std::all_of(c_ranges.begin(), c_ranges.end(), [](const auto &p) { return p.first == p.second; }));
+        // Like on construction, do the indirect sorting of the new codes.
+        auto &v_ind = get_v_ind();
+        // Make sure v_ind has the correct size and contains all the needed indices.
+        v_ind.resize(boost::numeric_cast<decltype(v_ind.size())>(nparts));
+        std::iota(v_ind.begin(), v_ind.end(), size_type(0));
+        // Do the sorting.
+        boost::sort::spreadsort::integer_sort(
+            v_ind.begin(), v_ind.end(),
+            [this](const size_type &idx, unsigned offset) { return this->m_codes[idx] >> offset; },
+            [this](const size_type &idx1, const size_type &idx2) { return this->m_codes[idx1] < this->m_codes[idx2]; });
+        // Apply the indirect sorting.
+        // NOTE: upon tree construction, we already checked that the number of particles does not
+        // overflow the limit imposed by apply_isort().
+        apply_isort(m_codes, v_ind);
+        // Make sure the sort worked as intended.
+        assert(std::is_sorted(m_codes.begin(), m_codes.end()));
+        for (std::size_t j = 0; j < NDim; ++j) {
+            apply_isort(m_coords[j], v_ind);
+        }
+        apply_isort(m_masses, v_ind);
+        // Now we need to recover the original indirect sorting, sort that
+        // according to the new indirect sorting and finally recompute
+        // the indices for the iteration in the original order.
+        v_type<size_type> orig_is;
+        orig_is.resize(boost::numeric_cast<decltype(orig_is.size())>(nparts));
+        for (size_type i = 0; i < nparts; ++i) {
+            orig_is[m_ord_ind[i]] = i;
+        }
+        apply_isort(orig_is, v_ind);
+        // Establish the indices for ordered iteration (in the original order).
+        for (size_type i = 0; i < nparts; ++i) {
+            m_ord_ind[orig_is[i]] = i;
+        }
+        // Re-construct the tree.
+        m_tree.resize(0);
+        build_tree();
+        build_tree_properties();
     }
 
 public:
@@ -1479,6 +1524,15 @@ public:
         try {
             update_positions_impl(std::forward<Func>(f));
         } catch (...) {
+            // Erase everything before re-throwing.
+            m_masses.resize(0);
+            for (std::size_t j = 0; j < NDim; ++j) {
+                m_coords[j].resize(0);
+            }
+            m_codes.resize(0);
+            m_ord_ind.resize(0);
+            m_tree.resize(0);
+            throw;
         }
     }
 
@@ -1586,14 +1640,33 @@ int main(int argc, char **argv)
     auto eacc = t.exact_accs(idx);
     std::cout << eacc[0] << ", " << eacc[1] << ", " << eacc[2] << '\n';
     // Test ordered iters.
-    auto [x_r, y_r, z_r] = t.ord_c_ranges();
-    std::cout << *x_r.first << ", " << *y_r.first << ", " << *z_r.first << '\n';
-    std::cout << *(parts.begin() + nparts) << ", " << *(parts.begin() + 2 * nparts) << ", "
-              << *(parts.begin() + 3 * nparts) << '\n';
-    x_r.first += 5;
-    y_r.first += 5;
-    z_r.first += 5;
-    std::cout << *x_r.first << ", " << *y_r.first << ", " << *z_r.first << '\n';
-    std::cout << *(parts.begin() + nparts + 5) << ", " << *(parts.begin() + 2 * nparts + 5) << ", "
-              << *(parts.begin() + 3 * nparts + 5) << '\n';
+    auto test_ordered_iters = [&]() {
+        auto [x_r, y_r, z_r] = t.ord_c_ranges();
+        std::cout << *x_r.first << ", " << *y_r.first << ", " << *z_r.first << '\n';
+        std::cout << *(parts.begin() + nparts) << ", " << *(parts.begin() + 2 * nparts) << ", "
+                  << *(parts.begin() + 3 * nparts) << '\n';
+        x_r.first += 5;
+        y_r.first += 5;
+        z_r.first += 5;
+        std::cout << *x_r.first << ", " << *y_r.first << ", " << *z_r.first << '\n';
+        std::cout << *(parts.begin() + nparts + 5) << ", " << *(parts.begin() + 2 * nparts + 5) << ", "
+                  << *(parts.begin() + 3 * nparts + 5) << '\n';
+    };
+    test_ordered_iters();
+    // Update positions, identity.
+    t.update_positions([](std::size_t, tree<std::uint64_t, float, 3>::size_type, const auto &x) { return x; });
+    test_ordered_iters();
+    // Update positions, divide by two.
+    t.update_positions([](std::size_t, tree<std::uint64_t, float, 3>::size_type, const auto &x) { return x / 2; });
+    test_ordered_iters();
+    // Update positions, take square root.
+    t.update_positions([](std::size_t, tree<std::uint64_t, float, 3>::size_type, const auto &x) {
+        const auto sign = x >= 0;
+        if (sign) {
+            return std::sqrt(x);
+        } else {
+            return -std::sqrt(-x);
+        }
+    });
+    test_ordered_iters();
 }
