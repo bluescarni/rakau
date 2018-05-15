@@ -840,6 +840,29 @@ private:
         static thread_local std::array<v_type<F>, NDim> tmp_res;
         return tmp_res;
     }
+    // Compute the element-wise attraction on the batch of particles at xvec1, yvec1, zvec1 by the
+    // particle(s) at x2, y2, z2 with mass(es) mvec2, and add the result into res_x_vec, res_y_vec,
+    // res_z_vec. B must be an xsimd batch. BS must be either the same as B, or the scalar type of B.
+    template <typename B, typename BS>
+    static void batch_bs_3d(B &res_x_vec, B &res_y_vec, B &res_z_vec, B xvec1, B yvec1, B zvec1, BS x2, BS y2, BS z2,
+                            BS m2)
+    {
+        const B diff_x = x2 - xvec1;
+        const B diff_y = y2 - yvec1;
+        const B diff_z = z2 - zvec1;
+        const B dist2 = diff_x * diff_x + diff_y * diff_y + diff_z * diff_z;
+        B m2_dist3;
+        if constexpr (avx_version && std::is_same_v<F, float>) {
+            m2_dist3 = m2 * inv_sqrt_3(dist2);
+        } else {
+            const B dist = xsimd::sqrt(dist2);
+            const B dist3 = dist * dist2;
+            m2_dist3 = m2 / dist3;
+        }
+        res_x_vec = xsimd::fma(diff_x, m2_dist3, res_x_vec);
+        res_y_vec = xsimd::fma(diff_y, m2_dist3, res_y_vec);
+        res_z_vec = xsimd::fma(diff_z, m2_dist3, res_z_vec);
+    }
     // Compute the accelerations on the particles of a target node induced by the particles of another
     // node (the source). pidx and size are the starting index (in the particles arrays) and the size of the target
     // node. begin/end is the range, in the tree structure, encompassing the source node and its children.
@@ -1003,33 +1026,20 @@ private:
                         auto x_ptr2 = m_coords[0].data() + leaf_begin;
                         auto y_ptr2 = m_coords[1].data() + leaf_begin;
                         auto z_ptr2 = m_coords[2].data() + leaf_begin;
-                        auto m_ptr = m_masses.data() + leaf_begin;
+                        auto m_ptr2 = m_masses.data() + leaf_begin;
                         // Init the batches for computing the accelerations, loading the
                         // accumulated acceleration for the current batch.
                         b_type res_x_vec = xsimd::load_aligned(res_x);
                         b_type res_y_vec = xsimd::load_aligned(res_y);
                         b_type res_z_vec = xsimd::load_aligned(res_z);
                         size_type i2 = 0;
-                        for (; i2 < vec_size2; i2 += inc, x_ptr2 += inc, y_ptr2 += inc, z_ptr2 += inc, m_ptr += inc) {
+                        for (; i2 < vec_size2; i2 += inc, x_ptr2 += inc, y_ptr2 += inc, z_ptr2 += inc, m_ptr2 += inc) {
                             b_type xvec2 = xsimd::load_unaligned(x_ptr2);
                             b_type yvec2 = xsimd::load_unaligned(y_ptr2);
                             b_type zvec2 = xsimd::load_unaligned(z_ptr2);
-                            b_type mvec = xsimd::load_unaligned(m_ptr);
-                            b_type diff_x = xvec2 - xvec1;
-                            b_type diff_y = yvec2 - yvec1;
-                            b_type diff_z = zvec2 - zvec1;
-                            b_type dist2 = diff_x * diff_x + diff_y * diff_y + diff_z * diff_z;
-                            b_type m_dist3;
-                            if constexpr (avx_version && std::is_same_v<F, float>) {
-                                m_dist3 = inv_sqrt_3(dist2) * mvec;
-                            } else {
-                                b_type dist = xsimd::sqrt(dist2);
-                                b_type dist3 = dist * dist2;
-                                m_dist3 = mvec / dist3;
-                            }
-                            res_x_vec = xsimd::fma(diff_x, m_dist3, res_x_vec);
-                            res_y_vec = xsimd::fma(diff_y, m_dist3, res_y_vec);
-                            res_z_vec = xsimd::fma(diff_z, m_dist3, res_z_vec);
+                            b_type mvec2 = xsimd::load_unaligned(m_ptr2);
+                            batch_bs_3d(res_x_vec, res_y_vec, res_z_vec, xvec1, yvec1, zvec1, xvec2, yvec2, zvec2,
+                                        mvec2);
                             for (std::size_t j = 1; j < inc; ++j) {
                                 // Above we computed the element-wise accelerations of a source batch
                                 // onto a target batch. We need to rotate the source batch
@@ -1038,40 +1048,15 @@ private:
                                 xvec2 = rotate_simd_vec(xvec2);
                                 yvec2 = rotate_simd_vec(yvec2);
                                 zvec2 = rotate_simd_vec(zvec2);
-                                mvec = rotate_simd_vec(mvec);
-                                diff_x = xvec2 - xvec1;
-                                diff_y = yvec2 - yvec1;
-                                diff_z = zvec2 - zvec1;
-                                dist2 = diff_x * diff_x + diff_y * diff_y + diff_z * diff_z;
-                                if constexpr (avx_version && std::is_same_v<F, float>) {
-                                    m_dist3 = inv_sqrt_3(dist2) * mvec;
-                                } else {
-                                    b_type dist = xsimd::sqrt(dist2);
-                                    b_type dist3 = dist * dist2;
-                                    m_dist3 = mvec / dist3;
-                                }
-                                res_x_vec = xsimd::fma(diff_x, m_dist3, res_x_vec);
-                                res_y_vec = xsimd::fma(diff_y, m_dist3, res_y_vec);
-                                res_z_vec = xsimd::fma(diff_z, m_dist3, res_z_vec);
+                                mvec2 = rotate_simd_vec(mvec2);
+                                batch_bs_3d(res_x_vec, res_y_vec, res_z_vec, xvec1, yvec1, zvec1, xvec2, yvec2, zvec2,
+                                            mvec2);
                             }
                         }
                         // Iterate over the remaining particles of the source node, one by one.
-                        for (; i2 < size_leaf; ++i2, ++x_ptr2, ++y_ptr2, ++z_ptr2, ++m_ptr) {
-                            const b_type diff_x = *x_ptr2 - xvec1;
-                            const b_type diff_y = *y_ptr2 - yvec1;
-                            const b_type diff_z = *z_ptr2 - zvec1;
-                            const b_type dist2 = diff_x * diff_x + diff_y * diff_y + diff_z * diff_z;
-                            b_type m_dist3;
-                            if constexpr (avx_version && std::is_same_v<F, float>) {
-                                m_dist3 = inv_sqrt_3(dist2) * *m_ptr;
-                            } else {
-                                const b_type dist = xsimd::sqrt(dist2);
-                                const b_type dist3 = dist2 * dist;
-                                m_dist3 = *m_ptr / dist3;
-                            }
-                            res_x_vec = xsimd::fma(diff_x, m_dist3, res_x_vec);
-                            res_y_vec = xsimd::fma(diff_y, m_dist3, res_y_vec);
-                            res_z_vec = xsimd::fma(diff_z, m_dist3, res_z_vec);
+                        for (; i2 < size_leaf; ++i2, ++x_ptr2, ++y_ptr2, ++z_ptr2, ++m_ptr2) {
+                            batch_bs_3d(res_x_vec, res_y_vec, res_z_vec, xvec1, yvec1, zvec1, *x_ptr2, *y_ptr2, *z_ptr2,
+                                        *m_ptr2);
                         }
                         // Store the updated accelerations in the temporary vectors.
                         xsimd::store_aligned(res_x, res_x_vec);
@@ -1167,21 +1152,7 @@ private:
                     if (i2 != i1) {
                         // NOTE: if i2 == i1, we want to skip the first batch-batch
                         // permutation, as we don't want to compute self-accelerations.
-                        b_type diff_x = xvec2 - xvec1;
-                        b_type diff_y = yvec2 - yvec1;
-                        b_type diff_z = zvec2 - zvec1;
-                        b_type dist2 = diff_x * diff_x + diff_y * diff_y + diff_z * diff_z;
-                        b_type m2_dist3;
-                        if constexpr (avx_version && std::is_same_v<F, float>) {
-                            m2_dist3 = mvec2 * inv_sqrt_3(dist2);
-                        } else {
-                            b_type dist = xsimd::sqrt(dist2);
-                            b_type dist3 = dist * dist2;
-                            m2_dist3 = mvec2 / dist3;
-                        }
-                        res_x_vec = xsimd::fma(diff_x, m2_dist3, res_x_vec);
-                        res_y_vec = xsimd::fma(diff_y, m2_dist3, res_y_vec);
-                        res_z_vec = xsimd::fma(diff_z, m2_dist3, res_z_vec);
+                        batch_bs_3d(res_x_vec, res_y_vec, res_z_vec, xvec1, yvec1, zvec1, xvec2, yvec2, zvec2, mvec2);
                     }
                     // Iterate over all the other possible batch-batch permutations
                     // by rotating the data in xvec2, yvec2, zvec2.
@@ -1190,42 +1161,15 @@ private:
                         yvec2 = rotate_simd_vec(yvec2);
                         zvec2 = rotate_simd_vec(zvec2);
                         mvec2 = rotate_simd_vec(mvec2);
-                        b_type diff_x = xvec2 - xvec1;
-                        b_type diff_y = yvec2 - yvec1;
-                        b_type diff_z = zvec2 - zvec1;
-                        b_type dist2 = diff_x * diff_x + diff_y * diff_y + diff_z * diff_z;
-                        b_type m2_dist3;
-                        if constexpr (avx_version && std::is_same_v<F, float>) {
-                            m2_dist3 = mvec2 * inv_sqrt_3(dist2);
-                        } else {
-                            b_type dist = xsimd::sqrt(dist2);
-                            b_type dist3 = dist * dist2;
-                            m2_dist3 = mvec2 / dist3;
-                        }
-                        res_x_vec = xsimd::fma(diff_x, m2_dist3, res_x_vec);
-                        res_y_vec = xsimd::fma(diff_y, m2_dist3, res_y_vec);
-                        res_z_vec = xsimd::fma(diff_z, m2_dist3, res_z_vec);
+                        batch_bs_3d(res_x_vec, res_y_vec, res_z_vec, xvec1, yvec1, zvec1, xvec2, yvec2, zvec2, mvec2);
                     }
                 }
                 // Do the remaining scalar part.
                 for (; i2 < npart; ++i2, ++x_ptr2, ++y_ptr2, ++z_ptr2, ++m_ptr2) {
                     if (i2 != i1) {
                         // Avoid self-interactions.
-                        b_type diff_x = *x_ptr2 - xvec1;
-                        b_type diff_y = *y_ptr2 - yvec1;
-                        b_type diff_z = *z_ptr2 - zvec1;
-                        b_type dist2 = diff_x * diff_x + diff_y * diff_y + diff_z * diff_z;
-                        b_type m2_dist3;
-                        if constexpr (avx_version && std::is_same_v<F, float>) {
-                            m2_dist3 = *m_ptr2 * inv_sqrt_3(dist2);
-                        } else {
-                            b_type dist = xsimd::sqrt(dist2);
-                            b_type dist3 = dist * dist2;
-                            m2_dist3 = *m_ptr2 / dist3;
-                        }
-                        res_x_vec = xsimd::fma(diff_x, m2_dist3, res_x_vec);
-                        res_y_vec = xsimd::fma(diff_y, m2_dist3, res_y_vec);
-                        res_z_vec = xsimd::fma(diff_z, m2_dist3, res_z_vec);
+                        batch_bs_3d(res_x_vec, res_y_vec, res_z_vec, xvec1, yvec1, zvec1, *x_ptr2, *y_ptr2, *z_ptr2,
+                                    *m_ptr2);
                     }
                 }
                 // Write out the updated accelerations.
