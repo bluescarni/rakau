@@ -209,17 +209,23 @@ inline __m256d rotate_simd_vec(__m256d x)
     return _mm256_blend_pd(t0, t1, 10);                   // [x0 x3 x2 x1]
 }
 
+// Newton iteration step for the computation of 1/sqrt(x) with starting point y0:
+// y1 = y0/2 * (3 - x*y0**2).
+template <typename F, std::size_t N>
+inline xsimd::batch<F, N> inv_sqrt_newton_iter(xsimd::batch<F, N> y0, xsimd::batch<F, N> x)
+{
+    const xsimd::batch<F, N> three(F(3));
+    const xsimd::batch<F, N> xy0 = x * y0;
+    const xsimd::batch<F, N> half_y0 = y0 * (F(1) / F(2));
+    const xsimd::batch<F, N> three_minus_muls = xsimd::fnma(xy0, y0, three);
+    return half_y0 * three_minus_muls;
+}
+
 // Compute 1/sqrt(x)**3 using the AVX intrinsic _mm256_rsqrt_ps, refined with a Newton iteration.
 inline xsimd::batch<float, 8> inv_sqrt_3(xsimd::batch<float, 8> x)
 {
-    // Newton iteration: y1 = y0/2 * (3 - x*y0**2).
-    const xsimd::batch<float, 8> three(3.f);
-    const xsimd::batch<float, 8> y0 = _mm256_rsqrt_ps(x);
-    const xsimd::batch<float, 8> xy0 = x * y0;
-    const xsimd::batch<float, 8> half_y0 = y0 * .5f;
-    const xsimd::batch<float, 8> three_minus_muls = xsimd::fnma(xy0, y0, three);
-    const xsimd::batch<float, 8> res = half_y0 * three_minus_muls;
-    return res * res * res;
+    const auto tmp = inv_sqrt_newton_iter(xsimd::batch<float, 8>(_mm256_rsqrt_ps(x)), x);
+    return tmp * tmp * tmp;
 }
 
 #endif
