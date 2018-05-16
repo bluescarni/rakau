@@ -872,7 +872,7 @@ private:
     // Compute the accelerations on the particles of a target node induced by the particles of another
     // node (the source). pidx and size are the starting index (in the particles arrays) and the size of the target
     // node. begin/end is the range, in the tree structure, encompassing the source node and its children.
-    // node_size2 is the size of the source node. The accelerations will be written into the
+    // node_size2 is the square of the size of the source node. The accelerations will be written into the
     // temporary storage provided by vec_acc_tmp_res().
     template <unsigned Level, unsigned SLevel>
     void vec_acc_from_node(const F &theta2, size_type pidx, size_type size, size_type begin, size_type end,
