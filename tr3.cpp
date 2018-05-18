@@ -413,7 +413,7 @@ private:
         // has to be a deque (rather than a vector) because we need
         // to keep references to elements in it as we grow it.
         static thread_local std::deque<size_type> children_count;
-        children_count.resize(0);
+        children_count.clear();
         // Add the counter for the root node.
         children_count.emplace_back(0);
         // The initial tuple containing the children counters for the parents
@@ -569,8 +569,10 @@ public:
         // Do the sorting of v_ind.
         boost::sort::spreadsort::integer_sort(
             v_ind.begin(), v_ind.end(),
-            [this](const size_type &idx, unsigned offset) { return this->m_codes[idx] >> offset; },
-            [this](const size_type &idx1, const size_type &idx2) { return this->m_codes[idx1] < this->m_codes[idx2]; });
+            [codes_ptr = m_codes.data()](const size_type &idx, unsigned offset) { return codes_ptr[idx] >> offset; },
+            [codes_ptr = m_codes.data()](const size_type &idx1, const size_type &idx2) {
+                return codes_ptr[idx1] < codes_ptr[idx2];
+            });
         // Apply the permutation to the data members.
         // NOTE: the indices range is [0, N - 1]. The apply_isort() function requires the maximum
         // value in the indices vector (N - 1, in this case) to be less than 2**(nbits - 1), as it
@@ -629,37 +631,6 @@ private:
     // the particle at index pidx.
     void add_acc_from_range(std::array<F, NDim> &out, size_type begin, size_type end, size_type pidx) const
     {
-#if 0
-        using b_type = xsimd::simd_type<F>;
-        constexpr std::size_t inc = b_type::size;
-        const auto size = end - begin;
-        const auto vec_size = static_cast<size_type>(size - size % inc);
-        const auto vec_end = begin + vec_size;
-        auto xdata = m_coords[0].data();
-        auto ydata = m_coords[1].data();
-        auto zdata = m_coords[2].data();
-        auto mdata = m_masses.data();
-        const auto x0 = xdata[pidx], y0 = ydata[pidx], z0 = zdata[pidx];
-        for (; begin != vec_end; begin += inc) {
-            b_type xvec = xsimd::load_unaligned(xdata + begin);
-            b_type diff_x = xvec - x0;
-            b_type yvec = xsimd::load_unaligned(ydata + begin);
-            b_type diff_y = yvec - y0;
-            b_type zvec = xsimd::load_unaligned(zdata + begin);
-            b_type diff_z = zvec - z0;
-            b_type dist2 = diff_x * diff_x + diff_y * diff_y + diff_z * diff_z;
-            b_type dist = xsimd::sqrt(dist2);
-            b_type dist3 = dist2 * dist;
-            b_type mvec = xsimd::load_unaligned(mdata + begin);
-            b_type m_dist3 = mvec / dist3;
-            b_type xacc = diff_x * m_dist3;
-            b_type yacc = diff_y * m_dist3;
-            b_type zacc = diff_z * m_dist3;
-            out[0] += xsimd::hadd(xacc);
-            out[1] += xsimd::hadd(yacc);
-            out[2] += xsimd::hadd(zacc);
-        }
-#endif
         // Local arrays to store the target particle's coords
         // and the diff between the range's particles coordinates and the
         // target particle coordinates.
@@ -1409,25 +1380,39 @@ public:
         return std::make_pair(boost::make_permutation_iterator(m_masses.begin(), m_ord_ind.begin()),
                               boost::make_permutation_iterator(m_masses.end(), m_ord_ind.end()));
     }
+    const auto &ord_ind() const
+    {
+        return m_ord_ind;
+    }
 
 private:
-    template <typename Func>
-    void update_positions_impl(Func &&f)
+    // Helper to clear all the internal containers. Used to ensure
+    // a consistent state if an exception is thrown while updating
+    // the particles' positions.
+    void clear_containers()
     {
-        // Write the new coordinates following the original order, and re-compute the Morton codes.
-        auto c_ranges = ord_c_ranges_impl(*this);
+        m_masses.clear();
+        for (auto &coord : m_coords) {
+            coord.clear();
+        }
+        m_codes.clear();
+        m_ord_ind.clear();
+        m_tree.clear();
+    }
+    // After updating the particles' positions, this method must be called
+    // to reconstruct the other data members according to the new positions.
+    void refresh()
+    {
+        // Let's start with generating the new codes.
         const auto nparts = m_masses.size();
         std::array<F, NDim> tmp_coord;
         morton_encoder<NDim, UInt> me;
         for (size_type i = 0; i < nparts; ++i) {
             for (std::size_t j = 0; j != NDim; ++j) {
-                *c_ranges[j].first = std::forward<Func>(f)(j, i, *c_ranges[j].first);
-                tmp_coord[j] = *c_ranges[j].first;
-                ++c_ranges[j].first;
+                tmp_coord[j] = m_coords[j][i];
             }
-            m_codes[m_ord_ind[i]] = me(disc_coords(tmp_coord.begin(), m_box_size).begin());
+            m_codes[i] = me(disc_coords(tmp_coord.begin(), m_box_size).begin());
         }
-        assert(std::all_of(c_ranges.begin(), c_ranges.end(), [](const auto &p) { return p.first == p.second; }));
         // Like on construction, do the indirect sorting of the new codes.
         auto &v_ind = get_v_ind();
         // Make sure v_ind has the correct size and contains all the needed indices.
@@ -1436,8 +1421,10 @@ private:
         // Do the sorting.
         boost::sort::spreadsort::integer_sort(
             v_ind.begin(), v_ind.end(),
-            [this](const size_type &idx, unsigned offset) { return this->m_codes[idx] >> offset; },
-            [this](const size_type &idx1, const size_type &idx2) { return this->m_codes[idx1] < this->m_codes[idx2]; });
+            [codes_ptr = m_codes.data()](const size_type &idx, unsigned offset) { return codes_ptr[idx] >> offset; },
+            [codes_ptr = m_codes.data()](const size_type &idx1, const size_type &idx2) {
+                return codes_ptr[idx1] < codes_ptr[idx2];
+            });
         // Apply the indirect sorting.
         // NOTE: upon tree construction, we already checked that the number of particles does not
         // overflow the limit imposed by apply_isort().
@@ -1462,26 +1449,35 @@ private:
             m_ord_ind[orig_is[i]] = i;
         }
         // Re-construct the tree.
-        m_tree.resize(0);
+        m_tree.clear();
         build_tree();
         build_tree_properties();
+    }
+    template <typename Func>
+    void update_positions_impl(Func &&f)
+    {
+        // Create an array of ranges to the coordinates.
+        std::array<std::pair<F *, F *>, NDim> c_ranges;
+        for (std::size_t j = 0; j != NDim; ++j) {
+            // NOTE: [data(), data() + size) is a valid range also for empty vectors.
+            c_ranges[j] = std::make_pair(m_coords[j].data(), m_coords[j].data() + m_coords[j].size());
+        }
+        // Feed it to the functor.
+        std::forward<Func>(f)(c_ranges);
+        // Refresh the tree.
+        refresh();
     }
 
 public:
     template <typename Func>
     void update_positions(Func &&f)
     {
+        simple_timer st("overall update_positions");
         try {
             update_positions_impl(std::forward<Func>(f));
         } catch (...) {
             // Erase everything before re-throwing.
-            m_masses.resize(0);
-            for (std::size_t j = 0; j < NDim; ++j) {
-                m_coords[j].resize(0);
-            }
-            m_codes.resize(0);
-            m_ord_ind.resize(0);
-            m_tree.resize(0);
+            clear_containers();
             throw;
         }
     }
@@ -1604,19 +1600,54 @@ int main(int argc, char **argv)
     };
     test_ordered_iters();
     // Update positions, identity.
-    t.update_positions([](std::size_t, tree<std::uint64_t, float, 3>::size_type, const auto &x) { return x; });
+    t.update_positions([](const auto &) {});
+    test_ordered_iters();
+    // Again.
+    t.update_positions([](const auto &) {});
     test_ordered_iters();
     // Update positions, divide by two.
-    t.update_positions([](std::size_t, tree<std::uint64_t, float, 3>::size_type, const auto &x) { return x / 2; });
-    test_ordered_iters();
-    // Update positions, take square root.
-    t.update_positions([](std::size_t, tree<std::uint64_t, float, 3>::size_type, const auto &x) {
-        const auto sign = x >= 0;
-        if (sign) {
-            return std::sqrt(x);
-        } else {
-            return -std::sqrt(-x);
+    t.update_positions([](auto s) {
+        for (std::size_t j = 0; j < 3u; ++j) {
+            for (; s[j].first != s[j].second; ++s[j].first) {
+                *s[j].first /= 2;
+            }
         }
     });
     test_ordered_iters();
+    // Update positions, take square root.
+    t.update_positions([](auto s) {
+        for (std::size_t j = 0; j < 3u; ++j) {
+            for (; s[j].first != s[j].second; ++s[j].first) {
+                const auto sign = *s[j].first >= 0;
+                if (sign) {
+                    *s[j].first = std::sqrt(*s[j].first);
+                } else {
+                    *s[j].first = -std::sqrt(-*s[j].first);
+                }
+            }
+        }
+    });
+    test_ordered_iters();
+    // Rotate around the z axis by 180 degrees.
+    t.vec_accs(accs, 0.75f);
+    std::cout << "vec acc before rotation at idx 42: " << accs[t.ord_ind()[42]] << ", "
+              << accs[nparts + t.ord_ind()[42]] << ", " << accs[nparts * 2u + t.ord_ind()[42]] << '\n';
+    t.update_positions([](const auto &s) {
+        using float_t = std::remove_reference_t<decltype(s[0].first[0])>;
+        for (auto i = 0u; i < nparts; ++i) {
+            const auto x0 = s[0].first[i];
+            const auto y0 = s[1].first[i];
+            const auto z0 = s[2].first[i];
+            const auto r0 = std::hypot(x0, y0, z0);
+            const auto th0 = std::acos(z0 / r0);
+            const auto phi0 = std::atan2(y0, x0);
+            const auto phi1 = phi0 + boost::math::constants::pi<float_t>();
+            s[0].first[i] = r0 * std::sin(th0) * std::cos(phi1);
+            s[1].first[i] = r0 * std::sin(th0) * std::sin(phi1);
+            s[2].first[i] = r0 * std::cos(th0);
+        }
+    });
+    t.vec_accs(accs, 0.75f);
+    std::cout << "vec acc after rotation at idx 42: " << accs[t.ord_ind()[42]] << ", " << accs[nparts + t.ord_ind()[42]]
+              << ", " << accs[nparts * 2u + t.ord_ind()[42]] << '\n';
 }
