@@ -1083,7 +1083,7 @@ private:
             assert(false);
         }
     }
-    // Compute the accelerations on the particles in a node due to the particles themselves.
+    // Compute the accelerations on the particles in a node due to node's particles themselves.
     // node_begin is the starting index of the node in the particles arrays. npart is the
     // number of particles in the node. The self accelerations will be added to the accelerations
     // in the temporary storage.
@@ -1278,8 +1278,8 @@ private:
     // When it finds one, it will compute the accelerations on the target's particles by all the other
     // particles in the domain. When that is done, it will continue the traversal (except that all the
     // children of the target node will be skipped) and repeat the procedure for the next target node.
-    template <unsigned Level>
-    void vec_accs_impl(std::vector<F> &out, const F &theta2, size_type begin, size_type end) const
+    template <unsigned Level, typename It>
+    void vec_accs_impl(std::array<It, NDim> &out, const F &theta2, size_type begin, size_type end) const
     {
         if constexpr (Level <= cbits) {
             for (auto idx = begin; idx != end;
@@ -1308,7 +1308,9 @@ private:
                                               size_type(m_tree.size()));
                     // Write out the result.
                     for (std::size_t j = 0; j != NDim; ++j) {
-                        std::copy(tmp_res[j].begin(), tmp_res[j].end(), out.data() + m_masses.size() * j + node_begin);
+                        using it_diff_t = typename std::iterator_traits<It>::difference_type;
+                        std::copy(tmp_res[j].begin(), tmp_res[j].end(),
+                                  out[j] + boost::numeric_cast<it_diff_t>(node_begin));
                     }
                 } else {
                     // We are not at the last recursion level, npart > m_ncrit and
@@ -1324,18 +1326,61 @@ private:
             assert(false);
         }
     }
+    // Small MP to detect if T is an array of vectors of F.
+    template <typename T>
+    struct is_vector_array : std::false_type {
+    };
+    template <typename Allocator>
+    struct is_vector_array<std::array<std::vector<F, Allocator>, NDim>> : std::true_type {
+    };
+    // Top level dispatcher for vec_accs. It will run a few checks and then invoke vec_accs_impl()
+    // (slightly differently depending on whether Output is an array of vectors or iterators).
+    template <typename Output>
+    void vec_accs_dispatch(Output &out, const F &theta) const
+    {
+        simple_timer st("vector accs computation");
+        const auto theta2 = theta * theta;
+        // Input param check.
+        if (!std::isfinite(theta2)) {
+            throw std::domain_error("the value of the square of the theta parameter must be finite, but it is "
+                                    + std::to_string(theta2) + " instead");
+        }
+        if (theta < F(0)) {
+            throw std::domain_error("the value of the theta parameter must be non-negative, but it is "
+                                    + std::to_string(theta) + " instead");
+        }
+        // In the implementation we need to be able to compute the square of the node size.
+        // Check we can do it with the largest node size (i.e., the box size).
+        if (!std::isfinite(m_box_size * m_box_size)) {
+            throw std::overflow_error("the box size (" + std::to_string(m_box_size)
+                                      + ") is too large, and it leads to non-finite values being generated during the "
+                                        "computation of the accelerations");
+        }
+        if constexpr (is_vector_array<Output>::value) {
+            // Prepare out and an array of pointers into out.
+            std::array<F *, NDim> out_ptrs;
+            for (std::size_t j = 0; j != NDim; ++j) {
+                out[j].resize(boost::numeric_cast<decltype(out[j].size())>(m_masses.size()));
+                out_ptrs[j] = out[j].data();
+            }
+            vec_accs_impl<0>(out_ptrs, theta2, size_type(0), size_type(m_tree.size()));
+        } else {
+            vec_accs_impl<0>(out, theta2, size_type(0), size_type(m_tree.size()));
+        }
+    }
 
 public:
-    void vec_accs(std::vector<F> &out, const F &theta) const
+    template <typename Allocator>
+    void vec_accs(std::array<std::vector<F, Allocator>, NDim> &out, const F &theta) const
     {
-        simple_timer st("vector acc computation");
-        const auto theta2 = theta * theta;
-        // Prepare out.
-        out.resize(m_masses.size() * NDim);
-        std::fill(out.begin(), out.end(), F(0));
-        vec_accs_impl<0>(out, theta2, size_type(0), size_type(m_tree.size()));
+        vec_accs_dispatch(out, theta);
     }
-    std::array<F, NDim> exact_accs(size_type idx) const
+    template <typename It>
+    void vec_accs(std::array<It, NDim> &out, const F &theta) const
+    {
+        vec_accs_dispatch(out, theta);
+    }
+    std::array<F, NDim> exact_acc(size_type idx) const
     {
         simple_timer st("exact acc computation");
         const auto size = m_masses.size();
@@ -1569,6 +1614,7 @@ int main(int argc, char **argv)
     if (argc < 2) {
         throw std::runtime_error("Need at least 4 arguments, but only " + std::to_string(argc) + " was/were provided");
     }
+    std::cout.precision(20);
     const auto idx = boost::lexical_cast<std::size_t>(argv[1]);
     const auto max_leaf_n = boost::lexical_cast<std::size_t>(argv[2]);
     const auto ncrit = boost::lexical_cast<std::size_t>(argv[3]);
@@ -1578,12 +1624,12 @@ int main(int argc, char **argv)
                                     {parts.begin() + nparts, parts.begin() + 2 * nparts, parts.begin() + 3 * nparts},
                                     nparts, max_leaf_n, ncrit);
     std::cout << t << '\n';
-    std::vector<float> accs(nparts * 3);
+    std::array<std::vector<float>, 3> accs;
     // t.scalar_accs(accs.begin(), 0.75f);
     // std::cout << accs[idx * 3] << ", " << accs[idx * 3 + 1] << ", " << accs[idx * 3 + 2] << '\n';
     t.vec_accs(accs, 0.75f);
-    std::cout << accs[idx] << ", " << accs[nparts + idx] << ", " << accs[nparts * 2u + idx] << '\n';
-    auto eacc = t.exact_accs(idx);
+    std::cout << accs[0][idx] << ", " << accs[1][idx] << ", " << accs[2][idx] << '\n';
+    auto eacc = t.exact_acc(idx);
     std::cout << eacc[0] << ", " << eacc[1] << ", " << eacc[2] << '\n';
     // Test ordered iters.
     auto test_ordered_iters = [&]() {
@@ -1630,10 +1676,9 @@ int main(int argc, char **argv)
     test_ordered_iters();
     // Rotate around the z axis by 180 degrees.
     t.vec_accs(accs, 0.75f);
-    std::cout << "vec acc before rotation at idx 42: " << accs[t.ord_ind()[42]] << ", "
-              << accs[nparts + t.ord_ind()[42]] << ", " << accs[nparts * 2u + t.ord_ind()[42]] << '\n';
+    std::cout << "vec acc before rotation at idx 42: " << accs[0][t.ord_ind()[42]] << ", " << accs[1][t.ord_ind()[42]]
+              << ", " << accs[2][t.ord_ind()[42]] << '\n';
     t.update_positions([](const auto &s) {
-        using float_t = std::remove_reference_t<decltype(s[0].first[0])>;
         for (auto i = 0u; i < nparts; ++i) {
             const auto x0 = s[0].first[i];
             const auto y0 = s[1].first[i];
@@ -1641,13 +1686,13 @@ int main(int argc, char **argv)
             const auto r0 = std::hypot(x0, y0, z0);
             const auto th0 = std::acos(z0 / r0);
             const auto phi0 = std::atan2(y0, x0);
-            const auto phi1 = phi0 + boost::math::constants::pi<float_t>();
+            const auto phi1 = phi0 + boost::math::constants::pi<std::remove_reference_t<decltype(s[0].first[0])>>();
             s[0].first[i] = r0 * std::sin(th0) * std::cos(phi1);
             s[1].first[i] = r0 * std::sin(th0) * std::sin(phi1);
             s[2].first[i] = r0 * std::cos(th0);
         }
     });
     t.vec_accs(accs, 0.75f);
-    std::cout << "vec acc after rotation at idx 42: " << accs[t.ord_ind()[42]] << ", " << accs[nparts + t.ord_ind()[42]]
-              << ", " << accs[nparts * 2u + t.ord_ind()[42]] << '\n';
+    std::cout << "vec acc after rotation at idx 42: " << accs[0][t.ord_ind()[42]] << ", " << accs[1][t.ord_ind()[42]]
+              << ", " << accs[2][t.ord_ind()[42]] << '\n';
 }
