@@ -650,6 +650,7 @@ public:
     }
     ~tree()
     {
+        // Run various debug checks.
 #if !defined(NDEBUG)
         for (std::size_t j = 0; j < NDim; ++j) {
             assert(m_masses.size() == m_coords[j].size());
@@ -698,180 +699,6 @@ public:
     }
 
 private:
-    // Add to out the acceleration induced by the particles in the [begin, end) range onto
-    // the particle at index pidx.
-    void add_acc_from_range(std::array<F, NDim> &out, size_type begin, size_type end, size_type pidx) const
-    {
-        // Local arrays to store the target particle's coords
-        // and the diff between the range's particles coordinates and the
-        // target particle coordinates.
-        std::array<F, NDim> pcoords, diffs;
-        for (std::size_t j = 0; j < NDim; ++j) {
-            pcoords[j] = m_coords[j][pidx];
-        }
-        for (; begin != end; ++begin) {
-            assert(begin != pidx);
-            F dist2(0);
-            for (std::size_t j = 0; j < NDim; ++j) {
-                diffs[j] = m_coords[j][begin] - pcoords[j];
-                dist2 += diffs[j] * diffs[j];
-            }
-            const F dist = std::sqrt(dist2);
-            const F dist3 = dist * dist2;
-            const F m_dist3 = m_masses[begin] / dist3;
-            for (std::size_t j = 0; j < NDim; ++j) {
-                out[j] += m_dist3 * diffs[j];
-            }
-        }
-    }
-    // NOTE: this is templatised over Level (in addition to SLevel) because
-    // like that we get better performance (~4% or so). This probably has to
-    // do with the fact that, with 2 templ. params, we get a unique version
-    // of this function each time it is invoked, whereas with 1 templ. param
-    // we have multiple calls to the same function throughout a tree traversal.
-    // Probably this impacts inlining etc.
-    template <unsigned Level, unsigned SLevel>
-    void scalar_acc_from_node(std::array<F, NDim> &out, const F &theta2, UInt code, size_type pidx, size_type begin,
-                              size_type end, const F &node_size2) const
-    {
-        if constexpr (SLevel <= cbits) {
-            // SLevel cannot be zero: the root node has no siblings and, even if it is a leaf node,
-            // that case will be handled elsewhere.
-            assert(SLevel);
-            // Make sure node_size2 is ok.
-            assert(node_size2 == m_box_size / (UInt(1) << SLevel) * m_box_size / (UInt(1) << SLevel));
-            // Local array to store the difference between the node's COM coordinates
-            // and the particle coordinates.
-            std::array<F, NDim> diffs;
-            // Determine the distance**2 between the particle and the COM of the node.
-            F dist2(0);
-            for (std::size_t j = 0; j < NDim; ++j) {
-                // Current node COM coordinate.
-                const F &node_x = get<3>(m_tree[begin])[j];
-                // Current part coordinate.
-                const F &part_x = m_coords[j][pidx];
-                diffs[j] = node_x - part_x;
-                dist2 += diffs[j] * diffs[j];
-            }
-            // Check the BH acceptance criterion.
-            if (node_size2 < theta2 * dist2) {
-                // We can approximate the acceleration with the COM of the
-                // current node.
-                const F dist = std::sqrt(dist2);
-                const F dist3 = dist2 * dist;
-                // NOTE: this is the mass of the COM divided by dist**3.
-                const F com_mass_dist3 = get<2>(m_tree[begin]) / dist3;
-                for (std::size_t j = 0; j < NDim; ++j) {
-                    out[j] += com_mass_dist3 * diffs[j];
-                }
-                return;
-            }
-            // The node does *not* satisfy the BH acceptance criterion.
-            // Check if the current node is a leaf: if that's the case,
-            // we cannot go deeper and we need to compute the interaction
-            // from all the particles in the node.
-            const auto n_children = get<1>(m_tree[begin])[2];
-            if (!n_children) {
-                // Leaf node, compute the acceleration.
-                add_acc_from_range(out, get<1>(m_tree[begin])[0], get<1>(m_tree[begin])[1], pidx);
-                return;
-            }
-            // We can go deeper in the tree. Bump up begin to move to the first child.
-            // Determine the size of the node at the next level.
-            const F next_node_size = m_box_size / (UInt(1) << (SLevel + 1u));
-            const F next_node_size2 = next_node_size * next_node_size;
-            for (++begin; begin != end; begin += get<1>(m_tree[begin])[2] + 1u) {
-                scalar_acc_from_node<Level, SLevel + 1u>(out, theta2, code, pidx, begin,
-                                                         begin + get<1>(m_tree[begin])[2] + 1u, next_node_size2);
-            }
-        } else {
-            // GCC warnings.
-            ignore_args(code, pidx, begin, end);
-            // We should never get here: if we use all cbits, the deepest node will be a leaf
-            // and we will have handled the case earlier.
-            assert(false);
-        }
-    }
-    template <unsigned Level>
-    void scalar_acc(std::array<F, NDim> &out, const F &theta2, UInt code, size_type pidx, size_type begin,
-                    size_type end) const
-    {
-        assert(code == m_codes[pidx]);
-        if constexpr (Level <= cbits) {
-            // This is the nodal code of the node in which the particle is at the current level.
-            // We compute it via the following:
-            // - add an extra 1 bit in the MSB direction,
-            // - shift down the result depending on the current level.
-            const auto part_node_code
-                = static_cast<UInt>(((UInt(1) << (cbits * NDim)) + code) >> ((cbits - Level) * NDim));
-            // Determine the size of the node at the current level.
-            const F node_size = m_box_size / (UInt(1) << Level);
-            const F node_size2 = node_size * node_size;
-            for (auto idx = begin; idx != end;
-                 // NOTE: when incrementing idx, we need to add 1 to the
-                 // total number of children in order to point to the next sibling.
-                 idx += get<1>(m_tree[idx])[2] + 1u) {
-                // Get the nodal code of the current sibling.
-                const auto cur_node_code = get<0>(m_tree[idx]);
-                // Get the number of children of the current sibling.
-                const auto n_children = get<1>(m_tree[idx])[2];
-                if (part_node_code == cur_node_code) {
-                    // We are in the sibling that contains the particle. Check if it is a leaf
-                    // or an internal node.
-                    if (n_children) {
-                        // Internal node, go one level deeper. The new indices range must
-                        // start from the position immediately past idx (i.e., the first children node) and have a size
-                        // equal to the number of children.
-                        scalar_acc<Level + 1u>(out, theta2, code, pidx, idx + 1u, idx + 1u + n_children);
-                    } else {
-                        // The particle's node has no children, hence it is *the* leaf node
-                        // containing the target particle.
-                        const auto leaf_begin = get<1>(m_tree[idx])[0];
-                        const auto leaf_end = get<1>(m_tree[idx])[1];
-                        // Double check the particle's code is indeed in the leaf node.
-                        assert(pidx >= leaf_begin && pidx < leaf_end);
-                        // Add the acceleration from the leaf node. We split it
-                        // in two parts as we want to avoid adding the acceleration
-                        // from the particle itself.
-                        add_acc_from_range(out, leaf_begin, pidx, pidx);
-                        add_acc_from_range(out, pidx + 1u, leaf_end, pidx);
-                    }
-                } else {
-                    // Compute the acceleration from the current sibling node.
-                    scalar_acc_from_node<Level, Level>(out, theta2, code, pidx, idx, idx + 1u + n_children, node_size2);
-                }
-            }
-        } else {
-            // GCC warnings.
-            ignore_args(code, pidx, begin, end);
-            // We would end up here only if the leaf node containing the target
-            // particle had children, but that is impossible.
-            assert(false);
-        }
-    }
-
-public:
-    template <typename OutIt>
-    void scalar_accs(OutIt out_it, const F &theta) const
-    {
-        simple_timer st("scalar acc computation");
-        const auto theta2 = theta * theta;
-        std::array<F, NDim> tmp;
-        for (size_type i = 0; i < m_codes.size(); ++i) {
-            // Init the acc vector to zero.
-            for (auto &c : tmp) {
-                c = F(0);
-            }
-            // Write the acceleration into tmp.
-            scalar_acc<0>(tmp, theta2, m_codes[i], i, size_type(0), size_type(m_tree.size()));
-            // Copy the result to the output iterator.
-            for (const auto &c : tmp) {
-                *out_it++ = c;
-            }
-        }
-    }
-
-private:
     // Temporary storage used to store the distances between the particles
     // of a node and the COM of another node while traversing the tree.
     static auto &vec_acc_tmp_vecs()
@@ -916,6 +743,12 @@ private:
     // node. begin/end is the range, in the tree structure, encompassing the source node and its children.
     // node_size2 is the square of the size of the source node. The accelerations will be written into the
     // temporary storage provided by vec_acc_tmp_res().
+    // NOTE: this is templatised over Level (in addition to SLevel) because
+    // like that we get better performance (~4% or so). This probably has to
+    // do with the fact that, with 2 templ. params, we get a unique version
+    // of this function each time it is invoked, whereas with 1 templ. param
+    // we have multiple calls to the same function throughout a tree traversal.
+    // Probably this impacts inlining, recursion, etc.
     template <unsigned Level, unsigned SLevel>
     void vec_acc_from_node(const F &theta2, size_type pidx, size_type size, size_type begin, size_type end,
                            const F &node_size2) const
@@ -1704,7 +1537,6 @@ int main(int argc, char **argv)
                                     nparts, max_leaf_n, ncrit);
     std::cout << t << '\n';
     std::array<std::vector<float>, 3> accs;
-    // t.scalar_accs(accs.begin(), 0.75f);
     // std::cout << accs[idx * 3] << ", " << accs[idx * 3 + 1] << ", " << accs[idx * 3 + 2] << '\n';
     t.vec_accs(accs, 0.75f);
     std::cout << accs[0][idx] << ", " << accs[1][idx] << ", " << accs[2][idx] << '\n';
