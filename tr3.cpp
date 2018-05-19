@@ -44,7 +44,7 @@ inline void ignore_args(const Args &...)
 class simple_timer
 {
 public:
-    simple_timer(const std::string &desc) : m_desc(desc), m_start(std::chrono::high_resolution_clock::now()) {}
+    simple_timer(const char *desc) : m_desc(desc), m_start(std::chrono::high_resolution_clock::now()) {}
     double elapsed() const
     {
         return static_cast<double>(
@@ -314,11 +314,6 @@ public:
     using size_type = typename v_type<F>::size_type;
 
 private:
-    static auto &get_v_ind()
-    {
-        static thread_local v_type<size_type> v_ind;
-        return v_ind;
-    }
     template <unsigned ParentLevel, typename CTuple, typename CIt>
     void build_tree_impl(std::deque<size_type> &children_count, CTuple &ct, UInt parent_code, CIt begin, CIt end)
     {
@@ -398,8 +393,12 @@ private:
     void build_tree()
     {
         simple_timer st("node building");
-        // Make sure this is not invoked on an empty tree.
-        assert(m_codes.size());
+        // Make sure we always have an empty tree when invoking this method.
+        assert(m_tree.empty());
+        // Exit early if there are no particles.
+        if (!m_codes.size()) {
+            return;
+        }
         // NOTE: in the tree builder code, we will be moving around in the codes
         // vector using random access iterators. Thus, we must ensure the difference
         // type of the iterator can represent the size of the codes vector.
@@ -441,9 +440,9 @@ private:
         assert(
             std::all_of(m_tree.begin(), m_tree.end(), [](const auto &tup) { return get<1>(tup)[1] > get<1>(tup)[0]; }));
         // Copy over the children count.
-        auto tree_it = m_tree.begin();
-        for (auto it = children_count.begin(); it != children_count.end(); ++it, ++tree_it) {
-            get<1>(*tree_it)[2] = *it;
+        for (auto p = std::make_pair(children_count.begin(), m_tree.begin()); p.first != children_count.end();
+             ++p.first, ++p.second) {
+            get<1>(*p.second)[2] = *p.first;
         }
         // Check that size_type can represent the size of the tree.
         if (m_tree.size() > std::numeric_limits<size_type>::max()) {
@@ -541,14 +540,13 @@ public:
         // NOTE: these ensure that, from now on, we can just cast
         // freely between the size types of the masses/coords and codes/indices vectors.
         m_codes.resize(boost::numeric_cast<decltype(m_codes.size())>(N));
+        m_isort.resize(boost::numeric_cast<decltype(m_isort.size())>(N));
         m_ord_ind.resize(boost::numeric_cast<decltype(m_ord_ind.size())>(N));
         // Temporary structure used in the encoding.
         std::array<F, NDim> tmp_coord;
         // The encoder object.
         morton_encoder<NDim, UInt> me;
         // Determine the particles' codes, and fill in the particles' data.
-        auto &v_ind = get_v_ind();
-        v_ind.resize(boost::numeric_cast<decltype(v_ind.size())>(N));
         for (size_type i = 0; i < N; ++i, ++m_it) {
             // Write the coords in the temp structure and in the data members.
             for (std::size_t j = 0; j < NDim; ++j) {
@@ -559,16 +557,16 @@ public:
             m_masses[i] = *m_it;
             // Compute and store the code.
             m_codes[i] = me(disc_coords(tmp_coord.begin(), m_box_size).begin());
-            // Store the index.
-            v_ind[i] = i;
+            // Store the index for indirect sorting.
+            m_isort[i] = i;
             // Increase the coordinates iterators.
             for (auto &_ : c_it) {
                 ++_;
             }
         }
-        // Do the sorting of v_ind.
+        // Do the sorting of m_isort.
         boost::sort::spreadsort::integer_sort(
-            v_ind.begin(), v_ind.end(),
+            m_isort.begin(), m_isort.end(),
             [codes_ptr = m_codes.data()](const size_type &idx, unsigned offset) { return codes_ptr[idx] >> offset; },
             [codes_ptr = m_codes.data()](const size_type &idx1, const size_type &idx2) {
                 return codes_ptr[idx1] < codes_ptr[idx2];
@@ -581,21 +579,94 @@ public:
             throw std::overflow_error("the number of particles (" + std::to_string(N)
                                       + ") is too large, and it results in an overflow condition");
         }
-        apply_isort(m_codes, v_ind);
+        apply_isort(m_codes, m_isort);
         // Make sure the sort worked as intended.
         assert(std::is_sorted(m_codes.begin(), m_codes.end()));
         for (std::size_t j = 0; j < NDim; ++j) {
-            apply_isort(m_coords[j], v_ind);
+            apply_isort(m_coords[j], m_isort);
         }
-        apply_isort(m_masses, v_ind);
+        apply_isort(m_masses, m_isort);
         // Establish the indices for ordered iteration.
         for (size_type i = 0; i < N; ++i) {
-            m_ord_ind[v_ind[i]] = i;
+            m_ord_ind[m_isort[i]] = i;
         }
         // Now let's proceed to the tree construction.
         build_tree();
         // Now move to the computation of the COM of the nodes.
         build_tree_properties();
+    }
+    tree(const tree &) = default;
+    tree(tree &&other) noexcept
+        : m_box_size(std::move(other.m_box_size)), m_max_leaf_n(other.m_max_leaf_n), m_ncrit(other.m_ncrit),
+          m_masses(std::move(other.m_masses)), m_coords(std::move(other.m_coords)), m_codes(std::move(other.m_codes)),
+          m_isort(std::move(other.m_isort)), m_ord_ind(std::move(other.m_ord_ind)), m_tree(std::move(other.m_tree))
+    {
+        // Make sure other is left in an empty state, otherwise we might
+        // have in principle assertions failures in the destructor of other
+        // in debug mode.
+        other.clear_containers();
+    }
+    tree &operator=(const tree &other)
+    {
+        try {
+            if (this != &other) {
+                m_box_size = other.m_box_size;
+                m_max_leaf_n = other.m_max_leaf_n;
+                m_ncrit = other.m_ncrit;
+                m_masses = other.m_masses;
+                m_coords = other.m_coords;
+                m_codes = other.m_codes;
+                m_isort = other.m_isort;
+                m_ord_ind = other.m_ord_ind;
+                m_tree = other.m_tree;
+            }
+            return *this;
+        } catch (...) {
+            // NOTE: if we triggered an exception, this might now be
+            // in an inconsistent state. Clear out the internal containers
+            // to reset to a consistent state before re-throwing.
+            clear_containers();
+            throw;
+        }
+    }
+    tree &operator=(tree &&other) noexcept
+    {
+        if (this != &other) {
+            m_box_size = std::move(other.m_box_size);
+            m_max_leaf_n = other.m_max_leaf_n;
+            m_ncrit = other.m_ncrit;
+            m_masses = std::move(other.m_masses);
+            m_coords = std::move(other.m_coords);
+            m_codes = std::move(other.m_codes);
+            m_isort = std::move(other.m_isort);
+            m_ord_ind = std::move(other.m_ord_ind);
+            m_tree = std::move(other.m_tree);
+            // Make sure other is left in an empty state, otherwise we might
+            // have in principle assertions failures in the destructor of other
+            // in debug mode.
+            other.clear_containers();
+        }
+        return *this;
+    }
+    ~tree()
+    {
+#if !defined(NDEBUG)
+        for (std::size_t j = 0; j < NDim; ++j) {
+            assert(m_masses.size() == m_coords[j].size());
+        }
+#endif
+        assert(m_masses.size() == m_codes.size());
+        assert(std::is_sorted(m_codes.begin(), m_codes.end()));
+        assert(m_masses.size() == m_isort.size());
+        assert(m_masses.size() == m_ord_ind.size());
+#if !defined(NDEBUG)
+        for (decltype(m_isort.size()) i = 0; i < m_isort.size(); ++i) {
+            assert(m_isort[i] < m_ord_ind.size());
+            assert(m_ord_ind[m_isort[i]] == i);
+        }
+        std::sort(m_isort.begin(), m_isort.end());
+        assert(std::unique(m_isort.begin(), m_isort.end()) == m_isort.end());
+#endif
     }
     friend std::ostream &operator<<(std::ostream &os, const tree &t)
     {
@@ -1441,6 +1512,7 @@ private:
             coord.clear();
         }
         m_codes.clear();
+        m_isort.clear();
         m_ord_ind.clear();
         m_tree.clear();
     }
@@ -1459,8 +1531,8 @@ private:
             m_codes[i] = me(disc_coords(tmp_coord.begin(), m_box_size).begin());
         }
         // Like on construction, do the indirect sorting of the new codes.
-        auto &v_ind = get_v_ind();
-        // Make sure v_ind has the correct size and contains all the needed indices.
+        // Use a new temp vector for the new indirect sorting.
+        v_type<size_type> v_ind;
         v_ind.resize(boost::numeric_cast<decltype(v_ind.size())>(nparts));
         std::iota(v_ind.begin(), v_ind.end(), size_type(0));
         // Do the sorting.
@@ -1480,18 +1552,11 @@ private:
             apply_isort(m_coords[j], v_ind);
         }
         apply_isort(m_masses, v_ind);
-        // Now we need to recover the original indirect sorting, sort that
-        // according to the new indirect sorting and finally recompute
-        // the indices for the iteration in the original order.
-        v_type<size_type> orig_is;
-        orig_is.resize(boost::numeric_cast<decltype(orig_is.size())>(nparts));
-        for (size_type i = 0; i < nparts; ++i) {
-            orig_is[m_ord_ind[i]] = i;
-        }
-        apply_isort(orig_is, v_ind);
+        // Apply the new indirect sorting to the original one.
+        apply_isort(m_isort, v_ind);
         // Establish the indices for ordered iteration (in the original order).
         for (size_type i = 0; i < nparts; ++i) {
-            m_ord_ind[orig_is[i]] = i;
+            m_ord_ind[m_isort[i]] = i;
         }
         // Re-construct the tree.
         m_tree.clear();
@@ -1542,7 +1607,21 @@ private:
     std::array<v_type<F>, NDim> m_coords;
     // The particles' Morton codes.
     v_type<UInt> m_codes;
+    // The indirect sorting vector. It establishes how to re-order the
+    // original particle sequence so that the particles' Morton codes are
+    // sorted in ascending order. E.g., if m_isort is [0, 3, 1, 2, ...],
+    // then the first particle in Morton order is also the first particle in
+    // the original order, the second particle in the Morton order is the
+    // particle at index 3 in the original order, and so on.
+    v_type<size_type> m_isort;
     // Indices vector to iterate over the particles' data in the original order.
+    // It establishes how to re-order the Morton order to recover the original
+    // particle order. This is the dual of m_isort, and it's always possible to
+    // compute one given the other. E.g., if m_isort is [0, 3, 1, 2, ...] then
+    // m_ord_ind will be [0, 2, 3, 1, ...], meaning that the first particle in
+    // the original order is also the first particle in the Morton order, the second
+    // particle in the original order is the particle at index 2 in the Morton order,
+    // and so on.
     v_type<size_type> m_ord_ind;
     // The tree structure.
     v_type<std::tuple<UInt, std::array<size_type, 3>, F, std::array<F, NDim>>> m_tree;
@@ -1678,6 +1757,24 @@ int main(int argc, char **argv)
     t.vec_accs(accs, 0.75f);
     std::cout << "vec acc before rotation at idx 42: " << accs[0][t.ord_ind()[42]] << ", " << accs[1][t.ord_ind()[42]]
               << ", " << accs[2][t.ord_ind()[42]] << '\n';
+    t.update_positions([](const auto &s) {
+        for (auto i = 0u; i < nparts; ++i) {
+            const auto x0 = s[0].first[i];
+            const auto y0 = s[1].first[i];
+            const auto z0 = s[2].first[i];
+            const auto r0 = std::hypot(x0, y0, z0);
+            const auto th0 = std::acos(z0 / r0);
+            const auto phi0 = std::atan2(y0, x0);
+            const auto phi1 = phi0 + boost::math::constants::pi<std::remove_reference_t<decltype(s[0].first[0])>>();
+            s[0].first[i] = r0 * std::sin(th0) * std::cos(phi1);
+            s[1].first[i] = r0 * std::sin(th0) * std::sin(phi1);
+            s[2].first[i] = r0 * std::cos(th0);
+        }
+    });
+    t.vec_accs(accs, 0.75f);
+    std::cout << "vec acc after rotation at idx 42: " << accs[0][t.ord_ind()[42]] << ", " << accs[1][t.ord_ind()[42]]
+              << ", " << accs[2][t.ord_ind()[42]] << '\n';
+    // Rotate again.
     t.update_positions([](const auto &s) {
         for (auto i = 0u; i < nparts; ++i) {
             const auto x0 = s[0].first[i];
