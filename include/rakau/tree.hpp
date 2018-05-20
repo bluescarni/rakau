@@ -43,7 +43,28 @@
 
 #include <xsimd/xsimd.hpp>
 
+// Let's disable a few compiler warnings emitted by the libmorton code.
+#if defined(__clang__) || defined(__GNUC__)
+
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wold-style-cast"
+
+#if defined(__clang__)
+
+#pragma GCC diagnostic ignored "-Wshorten-64-to-32"
+#pragma GCC diagnostic ignored "-Wsign-conversion"
+
+#endif
+
+#endif
+
 #include <rakau/detail/libmorton/morton.h>
+
+#if defined(__clang__) || defined(__GNUC__)
+
+#pragma GCC diagnostic pop
+
+#endif
 
 namespace rakau
 {
@@ -1565,6 +1586,9 @@ private:
     // The tree structure.
     v_type<std::tuple<UInt, std::array<size_type, 3>, F, std::array<F, NDim>>> m_tree;
 };
+
+template <typename UInt, typename F>
+using octree = tree<UInt, F, 3>;
 
 } // namespace rakau
 
