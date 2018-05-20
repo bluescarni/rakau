@@ -297,6 +297,18 @@ inline void apply_isort(VVec &values, PVec &perm)
     assert(perm == orig_perm);
 }
 
+// Little helper to verify that we can index into ElementIt
+// up to at least the value max_index. This is used below to verify
+// that a permuted iterator does not incur in overflows.
+template <typename ElementIt, typename Index>
+inline bool check_perm_it_range(Index max_index)
+{
+    using diff_t = typename std::iterator_traits<ElementIt>::difference_type;
+    using udiff_t = std::make_unsigned_t<diff_t>;
+    static_assert(std::is_integral_v<Index> && std::is_unsigned_v<Index>);
+    return max_index <= static_cast<udiff_t>(std::numeric_limits<diff_t>::max());
+}
+
 } // namespace detail
 
 template <typename UInt, typename F, std::size_t NDim>
@@ -594,8 +606,31 @@ public:
         build_tree();
         // Now move to the computation of the COM of the nodes.
         build_tree_properties();
+        // NOTE: whenever we need ordered iteration on the particles' data,
+        // we need to be able to index into the vectors' iterators with values
+        // up to the total number of particles. Verify that we can actually do that.
+        if (!check_perm_it_range<decltype(m_masses.begin())>(m_masses.size())) {
+            throw std::overflow_error("the number of particles (" + std::to_string(m_masses.size())
+                                      + ") is too large, and it results in an overflow condition");
+        }
     }
     tree(const tree &) = default;
+
+private:
+    // Helper to clear all the internal containers.
+    void clear_containers()
+    {
+        m_masses.clear();
+        for (auto &coord : m_coords) {
+            coord.clear();
+        }
+        m_codes.clear();
+        m_isort.clear();
+        m_ord_ind.clear();
+        m_tree.clear();
+    }
+
+public:
     tree(tree &&other) noexcept
         : m_box_size(std::move(other.m_box_size)), m_max_leaf_n(other.m_max_leaf_n), m_ncrit(other.m_ncrit),
           m_masses(std::move(other.m_masses)), m_coords(std::move(other.m_coords)), m_codes(std::move(other.m_codes)),
@@ -1230,17 +1265,9 @@ private:
             assert(false);
         }
     }
-    // Small MP to detect if T is an array of vectors of F.
-    template <typename T>
-    struct is_vector_array : std::false_type {
-    };
-    template <typename Allocator>
-    struct is_vector_array<std::array<std::vector<F, Allocator>, NDim>> : std::true_type {
-    };
-    // Top level dispatcher for vec_accs. It will run a few checks and then invoke vec_accs_impl()
-    // (slightly differently depending on whether Output is an array of vectors or iterators).
-    template <typename Output>
-    void vec_accs_dispatch(Output &out, const F &theta) const
+    // Top level dispatcher for the accs functions. It will run a few checks and then invoke vec_accs_impl().
+    template <bool Ordered, typename Output>
+    void accs_dispatch(Output &out, const F &theta) const
     {
         simple_timer st("vector accs computation");
         const auto theta2 = theta * theta;
@@ -1260,35 +1287,67 @@ private:
                                       + ") is too large, and it leads to non-finite values being generated during the "
                                         "computation of the accelerations");
         }
-        if constexpr (is_vector_array<Output>::value) {
-            // Prepare out and an array of pointers into out.
-            std::array<F *, NDim> out_ptrs;
-            for (std::size_t j = 0; j != NDim; ++j) {
-                out[j].resize(boost::numeric_cast<decltype(out[j].size())>(m_masses.size()));
-                out_ptrs[j] = out[j].data();
+        if constexpr (Ordered) {
+            using it_t = decltype(boost::make_permutation_iterator(out[0], m_isort.begin()));
+            // Make sure we don't run into overflows when doing a permutated iteration
+            // over the iterators in out.
+            if (!check_perm_it_range<std::remove_reference_t<decltype(out[0])>>(m_masses.size())) {
+                throw std::overflow_error(
+                    "the number of particles (" + std::to_string(m_masses.size())
+                    + ") is too large, and it results in an overflow condition when computing the accelerations");
             }
-            vec_accs_impl<0>(out_ptrs, theta2, size_type(0), size_type(m_tree.size()));
+            std::array<it_t, NDim> out_pits;
+            for (std::size_t j = 0; j != NDim; ++j) {
+                out_pits[j] = boost::make_permutation_iterator(out[j], m_isort.begin());
+            }
+            vec_accs_impl<0>(out_pits, theta2, size_type(0), size_type(m_tree.size()));
         } else {
             vec_accs_impl<0>(out, theta2, size_type(0), size_type(m_tree.size()));
         }
     }
+    // Helper overload for an array of vectors. It will prepare the vectors and then
+    // call the other overload.
+    template <bool Ordered, typename Allocator>
+    void accs_dispatch(std::array<std::vector<F, Allocator>, NDim> &out, const F &theta) const
+    {
+        std::array<F *, NDim> out_ptrs;
+        for (std::size_t j = 0; j != NDim; ++j) {
+            out[j].resize(boost::numeric_cast<decltype(out[j].size())>(m_masses.size()));
+            out_ptrs[j] = out[j].data();
+        }
+        accs_dispatch<Ordered>(out_ptrs, theta);
+    }
 
 public:
     template <typename Allocator>
-    void vec_accs(std::array<std::vector<F, Allocator>, NDim> &out, const F &theta) const
+    void accs_u(std::array<std::vector<F, Allocator>, NDim> &out, const F &theta) const
     {
-        vec_accs_dispatch(out, theta);
+        accs_dispatch<false>(out, theta);
     }
     template <typename It>
-    void vec_accs(std::array<It, NDim> &out, const F &theta) const
+    void accs_u(std::array<It, NDim> &out, const F &theta) const
     {
-        vec_accs_dispatch(out, theta);
+        accs_dispatch<false>(out, theta);
     }
-    std::array<F, NDim> exact_acc(size_type idx) const
+    template <typename Allocator>
+    void accs_o(std::array<std::vector<F, Allocator>, NDim> &out, const F &theta) const
+    {
+        accs_dispatch<true>(out, theta);
+    }
+    template <typename It>
+    void accs_o(std::array<It, NDim> &out, const F &theta) const
+    {
+        accs_dispatch<true>(out, theta);
+    }
+
+private:
+    template <bool Ordered>
+    std::array<F, NDim> exact_acc_impl(size_type orig_idx) const
     {
         simple_timer st("exact acc computation");
         const auto size = m_masses.size();
         std::array<F, NDim> retval{};
+        const auto idx = Ordered ? m_ord_ind[orig_idx] : orig_idx;
         for (size_type i = 0; i < size; ++i) {
             if (i == idx) {
                 continue;
@@ -1306,13 +1365,23 @@ public:
         return retval;
     }
 
+public:
+    std::array<F, NDim> exact_acc_u(size_type idx) const
+    {
+        return exact_acc_impl<false>(idx);
+    }
+    std::array<F, NDim> exact_acc_o(size_type idx) const
+    {
+        return exact_acc_impl<true>(idx);
+    }
+
 private:
     template <typename Tr>
     static auto ord_c_ranges_impl(Tr &tr)
     {
         using it_t = decltype(boost::make_permutation_iterator(tr.m_coords[0].begin(), tr.m_ord_ind.begin()));
         std::array<std::pair<it_t, it_t>, NDim> retval;
-        for (std::size_t j = 0; j < NDim; ++j) {
+        for (std::size_t j = 0; j != NDim; ++j) {
             retval[j] = std::make_pair(boost::make_permutation_iterator(tr.m_coords[j].begin(), tr.m_ord_ind.begin()),
                                        boost::make_permutation_iterator(tr.m_coords[j].end(), tr.m_ord_ind.end()));
         }
@@ -1320,11 +1389,23 @@ private:
     }
 
 public:
-    auto ord_c_ranges() const
+    auto c_ranges_u() const
+    {
+        std::array<std::pair<const F *, const F *>, NDim> retval;
+        for (std::size_t j = 0; j != NDim; ++j) {
+            retval[j] = std::make_pair(m_coords[j].data(), m_coords[j].data() + m_coords[j].size());
+        }
+        return retval;
+    }
+    auto c_ranges_o() const
     {
         return ord_c_ranges_impl(*this);
     }
-    auto ord_m_range() const
+    auto m_range_u() const
+    {
+        return std::make_pair(m_masses.data(), m_masses.data() + m_masses.size());
+    }
+    auto m_range_o() const
     {
         return std::make_pair(boost::make_permutation_iterator(m_masses.begin(), m_ord_ind.begin()),
                               boost::make_permutation_iterator(m_masses.end(), m_ord_ind.end()));
@@ -1335,20 +1416,6 @@ public:
     }
 
 private:
-    // Helper to clear all the internal containers. Used to ensure
-    // a consistent state if an exception is thrown while updating
-    // the particles' positions.
-    void clear_containers()
-    {
-        m_masses.clear();
-        for (auto &coord : m_coords) {
-            coord.clear();
-        }
-        m_codes.clear();
-        m_isort.clear();
-        m_ord_ind.clear();
-        m_tree.clear();
-    }
     // After updating the particles' positions, this method must be called
     // to reconstruct the other data members according to the new positions.
     void refresh()
@@ -1395,34 +1462,58 @@ private:
         m_tree.clear();
         build_tree();
         build_tree_properties();
+        // NOTE: we are not adding new particles, we don't need the permutation
+        // iterator check that is present in the constructor.
     }
-    template <typename Func>
+    template <bool Ordered, typename Func>
     void update_positions_impl(Func &&f)
     {
-        // Create an array of ranges to the coordinates.
-        std::array<std::pair<F *, F *>, NDim> c_ranges;
-        for (std::size_t j = 0; j != NDim; ++j) {
-            // NOTE: [data(), data() + size) is a valid range also for empty vectors.
-            c_ranges[j] = std::make_pair(m_coords[j].data(), m_coords[j].data() + m_coords[j].size());
+        if constexpr (Ordered) {
+            // Create an array of ranges to the coordinates in the original order.
+            using it_t = decltype(boost::make_permutation_iterator(m_coords[0].begin(), m_ord_ind.begin()));
+            std::array<std::pair<it_t, it_t>, NDim> c_pranges;
+            for (std::size_t j = 0; j != NDim; ++j) {
+                c_pranges[j] = std::make_pair(boost::make_permutation_iterator(m_coords[j].begin(), m_ord_ind.begin()),
+                                              boost::make_permutation_iterator(m_coords[j].end(), m_ord_ind.end()));
+            }
+            // Feed it to the functor.
+            std::forward<Func>(f)(c_pranges);
+        } else {
+            // Create an array of ranges to the coordinates.
+            std::array<std::pair<F *, F *>, NDim> c_ranges;
+            for (std::size_t j = 0; j != NDim; ++j) {
+                // NOTE: [data(), data() + size) is a valid range also for empty vectors.
+                c_ranges[j] = std::make_pair(m_coords[j].data(), m_coords[j].data() + m_coords[j].size());
+            }
+            // Feed it to the functor.
+            std::forward<Func>(f)(c_ranges);
         }
-        // Feed it to the functor.
-        std::forward<Func>(f)(c_ranges);
         // Refresh the tree.
         refresh();
     }
-
-public:
-    template <typename Func>
-    void update_positions(Func &&f)
+    template <bool Ordered, typename Func>
+    void update_positions_dispatch(Func &&f)
     {
         simple_timer st("overall update_positions");
         try {
-            update_positions_impl(std::forward<Func>(f));
+            update_positions_impl<Ordered>(std::forward<Func>(f));
         } catch (...) {
             // Erase everything before re-throwing.
             clear_containers();
             throw;
         }
+    }
+
+public:
+    template <typename Func>
+    void update_positions_u(Func &&f)
+    {
+        update_positions_dispatch<false>(std::forward<Func>(f));
+    }
+    template <typename Func>
+    void update_positions_o(Func &&f)
+    {
+        update_positions_dispatch<true>(std::forward<Func>(f));
     }
 
 private:
@@ -1538,10 +1629,33 @@ int main(int argc, char **argv)
     std::cout << t << '\n';
     std::array<std::vector<float>, 3> accs;
     // std::cout << accs[idx * 3] << ", " << accs[idx * 3 + 1] << ", " << accs[idx * 3 + 2] << '\n';
-    t.vec_accs(accs, 0.75f);
-    std::cout << accs[0][idx] << ", " << accs[1][idx] << ", " << accs[2][idx] << '\n';
-    auto eacc = t.exact_acc(idx);
+    t.accs_u(accs, 0.75f);
+    std::cout << accs[0][t.ord_ind()[idx]] << ", " << accs[1][t.ord_ind()[idx]] << ", " << accs[2][t.ord_ind()[idx]]
+              << '\n';
+    auto eacc = t.exact_acc_u(t.ord_ind()[idx]);
     std::cout << eacc[0] << ", " << eacc[1] << ", " << eacc[2] << '\n';
+    t.accs_o(accs, 0.75f);
+    std::cout << accs[0][idx] << ", " << accs[1][idx] << ", " << accs[2][idx] << '\n';
+    eacc = t.exact_acc_o(idx);
+    std::cout << eacc[0] << ", " << eacc[1] << ", " << eacc[2] << '\n';
+    std::cout << "ZERO\n";
+    std::cout << accs[0][0] << ", " << accs[1][0] << ", " << accs[2][0] << '\n';
+    eacc = t.exact_acc_o(0);
+    std::cout << eacc[0] << ", " << eacc[1] << ", " << eacc[2] << '\n';
+    // Slightly change the position of a single particle.
+    t.update_positions_o([idx](auto s) {
+        for (std::size_t j = 0; j < 3u; ++j) {
+            s[j].first[idx] += 1E-6;
+        }
+    });
+    t.accs_o(accs, 0.75f);
+    std::cout << accs[0][idx] << ", " << accs[1][idx] << ", " << accs[2][idx] << '\n';
+    eacc = t.exact_acc_o(idx);
+    std::cout << eacc[0] << ", " << eacc[1] << ", " << eacc[2] << '\n';
+    std::cout << accs[0][0] << ", " << accs[1][0] << ", " << accs[2][0] << '\n';
+    eacc = t.exact_acc_o(0);
+    std::cout << eacc[0] << ", " << eacc[1] << ", " << eacc[2] << '\n';
+#if 0
     // Test ordered iters.
     auto test_ordered_iters = [&]() {
         auto [x_r, y_r, z_r] = t.ord_c_ranges();
@@ -1586,7 +1700,7 @@ int main(int argc, char **argv)
     });
     test_ordered_iters();
     // Rotate around the z axis by 180 degrees.
-    t.vec_accs(accs, 0.75f);
+    t.vec_accs_u(accs, 0.75f);
     std::cout << "vec acc before rotation at idx 42: " << accs[0][t.ord_ind()[42]] << ", " << accs[1][t.ord_ind()[42]]
               << ", " << accs[2][t.ord_ind()[42]] << '\n';
     t.update_positions([](const auto &s) {
@@ -1603,7 +1717,7 @@ int main(int argc, char **argv)
             s[2].first[i] = r0 * std::cos(th0);
         }
     });
-    t.vec_accs(accs, 0.75f);
+    t.vec_accs_u(accs, 0.75f);
     std::cout << "vec acc after rotation at idx 42: " << accs[0][t.ord_ind()[42]] << ", " << accs[1][t.ord_ind()[42]]
               << ", " << accs[2][t.ord_ind()[42]] << '\n';
     // Rotate again.
@@ -1621,7 +1735,8 @@ int main(int argc, char **argv)
             s[2].first[i] = r0 * std::cos(th0);
         }
     });
-    t.vec_accs(accs, 0.75f);
+    t.vec_accs_u(accs, 0.75f);
     std::cout << "vec acc after rotation at idx 42: " << accs[0][t.ord_ind()[42]] << ", " << accs[1][t.ord_ind()[42]]
               << ", " << accs[2][t.ord_ind()[42]] << '\n';
+#endif
 }
