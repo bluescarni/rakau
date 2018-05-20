@@ -43,7 +43,7 @@
 
 #include <xsimd/xsimd.hpp>
 
-#include "libmorton/morton.h"
+#include <rakau/detail/libmorton/morton.h>
 
 namespace rakau
 {
