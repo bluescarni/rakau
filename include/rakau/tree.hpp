@@ -1,4 +1,3 @@
-
 // Copyright 2018 Francesco Biscani (bluescarni@gmail.com)
 //
 // This file is part of the rakau library.
@@ -80,6 +79,7 @@ inline void ignore_args(const Args &...)
 class simple_timer
 {
 public:
+#if defined(RAKAU_WITH_TIMER)
     simple_timer(const char *desc) : m_desc(desc), m_start(std::chrono::high_resolution_clock::now()) {}
     double elapsed() const
     {
@@ -99,6 +99,9 @@ public:
 private:
     const std::string m_desc;
     const std::chrono::high_resolution_clock::time_point m_start;
+#else
+    simple_timer(const char *) {}
+#endif
 };
 
 template <std::size_t NDim, typename Out>
@@ -116,8 +119,10 @@ struct morton_encoder<3, std::uint64_t> {
         assert(x < (1ul << 21));
         assert(y < (1ul << 21));
         assert(z < (1ul << 21));
-        assert(!(::m3D_e_sLUT<std::uint64_t, std::uint32_t>(x, y, z) >> 63u));
-        assert((::morton3D_64_encode(x, y, z) == ::m3D_e_sLUT<std::uint64_t, std::uint32_t>(x, y, z)));
+        assert(
+            !(::m3D_e_sLUT<std::uint64_t, std::uint32_t>(std::uint32_t(x), std::uint32_t(y), std::uint32_t(z)) >> 63u));
+        assert((::morton3D_64_encode(x, y, z)
+                == ::m3D_e_sLUT<std::uint64_t, std::uint32_t>(std::uint32_t(x), std::uint32_t(y), std::uint32_t(z))));
         return ::m3D_e_sLUT<std::uint64_t, std::uint32_t>(std::uint32_t(x), std::uint32_t(y), std::uint32_t(z));
     }
 };
