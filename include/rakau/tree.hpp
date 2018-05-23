@@ -164,18 +164,42 @@ inline void increase_children_count(T &tup, const std::index_sequence<N...> &)
     (..., inc(get<N>(tup)));
 }
 
+// clz wrapper. n must be a nonzero unsigned integral.
+template <typename UInt>
+inline unsigned clz(UInt n)
+{
+    static_assert(std::is_integral_v<UInt> && std::is_unsigned_v<UInt>);
+    assert(n);
+    if constexpr (std::is_same_v<UInt, unsigned>) {
+        return static_cast<unsigned>(__builtin_clz(n));
+    } else if (std::is_same_v<UInt, unsigned long>) {
+        return static_cast<unsigned>(__builtin_clzl(n));
+    } else if (std::is_same_v<UInt, unsigned long long>) {
+        return static_cast<unsigned>(__builtin_clzll(n));
+    } else {
+        // In this case we are dealing with an unsigned integral type which
+        // is not wider than unsigned int. Let's compute the result with n cast
+        // to unsigned int first.
+        const auto ret_u = static_cast<unsigned>(__builtin_clz(static_cast<unsigned>(n)));
+        // We must now subtract the number of extra bits that unsigned
+        // has over UInt.
+        constexpr auto extra_nbits
+            = static_cast<unsigned>(std::numeric_limits<unsigned>::digits - std::numeric_limits<UInt>::digits);
+        return ret_u - extra_nbits;
+    }
+}
+
 // Small helper to get the tree level of a nodal code.
 template <std::size_t NDim, typename UInt>
 inline unsigned tree_level(UInt n)
 {
-    // TODO clzl wrappers.
 #if !defined(NDEBUG)
     constexpr unsigned cbits = cbits_v<UInt, NDim>;
 #endif
     constexpr unsigned ndigits = std::numeric_limits<UInt>::digits;
     assert(n);
-    assert(!((ndigits - 1u - unsigned(__builtin_clzl(n))) % NDim));
-    auto retval = static_cast<unsigned>((ndigits - 1u - unsigned(__builtin_clzl(n))) / NDim);
+    assert(!((ndigits - 1u - clz(n)) % NDim));
+    auto retval = static_cast<unsigned>((ndigits - 1u - clz(n)) / NDim);
     assert(cbits >= retval);
     assert((cbits - retval) * NDim < ndigits);
     return retval;
