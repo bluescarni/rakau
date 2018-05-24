@@ -2,7 +2,7 @@
 
 #include <boost/math/constants/constants.hpp>
 
-#include "tree.hpp"
+#include <rakau/tree.hpp>
 
 static constexpr unsigned nparts = 1'000'000;
 static constexpr float bsize = 10.f;
