@@ -205,20 +205,17 @@ inline unsigned tree_level(UInt n)
     return retval;
 }
 
-// Small functor to compare nodal codes.
-template <std::size_t NDim>
-struct node_comparer {
-    template <typename UInt>
-    bool operator()(UInt n1, UInt n2) const
-    {
-        constexpr unsigned cbits = cbits_v<UInt, NDim>;
-        const auto tl1 = tree_level<NDim>(n1);
-        const auto tl2 = tree_level<NDim>(n2);
-        const auto s_n1 = n1 << ((cbits - tl1) * NDim);
-        const auto s_n2 = n2 << ((cbits - tl2) * NDim);
-        return s_n1 < s_n2 || (s_n1 == s_n2 && tl1 < tl2);
-    }
-};
+// Small function to compare nodal codes.
+template <std::size_t NDim, typename UInt>
+inline bool node_compare(UInt n1, UInt n2)
+{
+    constexpr unsigned cbits = cbits_v<UInt, NDim>;
+    const auto tl1 = tree_level<NDim>(n1);
+    const auto tl2 = tree_level<NDim>(n2);
+    const auto s_n1 = n1 << ((cbits - tl1) * NDim);
+    const auto s_n2 = n2 << ((cbits - tl2) * NDim);
+    return s_n1 < s_n2 || (s_n1 == s_n2 && tl1 < tl2);
+}
 
 inline constexpr unsigned avx_version =
 #if defined(__AVX2__)
@@ -510,8 +507,7 @@ private:
         assert(children_count.size() == m_tree.size());
         // Check the tree is sorted according to the nodal code comparison.
         assert(std::is_sorted(m_tree.begin(), m_tree.end(), [](const auto &t1, const auto &t2) {
-            node_comparer<NDim> nc;
-            return nc(get<0>(t1), get<0>(t2));
+            return node_compare<NDim>(get<0>(t1), get<0>(t2));
         }));
         // Check that all the nodes contain at least 1 element.
         assert(
