@@ -74,7 +74,7 @@ inline xsimd::batch<F, N> rotate(xsimd::batch<F, N> x)
     // because inside we are calling functions which do not depend
     // on any template parameter, and thus name lookup happens before
     // instantiation.
-#if defined(__AVX512F__)
+#if defined(__AVX512F__) && false
     if constexpr (avx_version == 3u && std::is_same_v<F, float> && N == 16u) {
         return _mm512_permutexvar_ps(x, _mm512_set_epi32(0, 15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1));
     } else if constexpr (avx_version == 3u && std::is_same_v<F, double> && N == 8u) {
@@ -127,9 +127,12 @@ inline xsimd::batch<F, N> rotate(xsimd::batch<F, N> x)
 // Small variable template helper to establish if a fast implementation
 // of the inverse sqrt for an xsimd batch of type B is available.
 template <typename B>
-inline constexpr bool has_fast_inv_sqrt
-    = avx_version &&std::is_same_v<typename xsimd::simd_batch_traits<B>::value_type, float>
-          &&xsimd::simd_batch_traits<B>::size == 8u;
+inline constexpr bool has_fast_inv_sqrt = (avx_version == 3u
+                                           && std::is_same_v<typename xsimd::simd_batch_traits<B>::value_type,
+                                                             float> && xsimd::simd_batch_traits<B>::size == 16u)
+                                          || (avx_version
+                                              && std::is_same_v<typename xsimd::simd_batch_traits<B>::value_type,
+                                                                float> && xsimd::simd_batch_traits<B>::size == 8u);
 
 // Newton iteration step for the computation of 1/sqrt(x) with starting point y0:
 // y1 = y0/2 * (3 - x*y0**2).
@@ -147,8 +150,11 @@ inline xsimd::batch<F, N> inv_sqrt_newton_iter(xsimd::batch<F, N> y0, xsimd::bat
 template <typename F, std::size_t N>
 inline xsimd::batch<F, N> inv_sqrt_3(xsimd::batch<F, N> x)
 {
-    if constexpr (avx_version && std::is_same_v<F, float> && N == 8u) {
-        // Use the AVX intrinsic _mm256_rsqrt_ps, refined with a Newton iteration.
+    // On AVX, use the rsqrt intrinsics refined with a Newton iteration.
+    if constexpr (avx_version == 3u && std::is_same_v<F, float> && N == 16u) {
+        const auto tmp = inv_sqrt_newton_iter(xsimd::batch<F, N>(_mm512_rsqrt14_ps(x)), x);
+        return tmp * tmp * tmp;
+    } else if constexpr (avx_version && std::is_same_v<F, float> && N == 8u) {
         const auto tmp = inv_sqrt_newton_iter(xsimd::batch<F, N>(_mm256_rsqrt_ps(x)), x);
         return tmp * tmp * tmp;
     } else {
