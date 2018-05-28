@@ -30,7 +30,9 @@ inline namespace detail
 
 // Highest AVX version available.
 inline constexpr unsigned avx_version =
-#if defined(__AVX2__)
+#if defined(__AVX512F__)
+    3
+#elif defined(__AVX2__)
     2
 #elif defined(__AVX__)
     1
@@ -68,12 +70,19 @@ inline constexpr unsigned sse_version =
 template <typename F, std::size_t N>
 inline xsimd::batch<F, N> rotate(xsimd::batch<F, N> x)
 {
-    // NOTE: this needs the preprocessor #if in addition to if constexpr
-    // because inside we are calling a function which does not depend
+    // NOTE: these need the preprocessor #if in addition to if constexpr
+    // because inside we are calling functions which do not depend
     // on any template parameter, and thus name lookup happens before
     // instantiation.
+#if defined(__AVX512F__)
+    if constexpr (avx_version == 3u && std::is_same_v<F, float> && N == 16u) {
+        return _mm512_permutexvar_ps(x, _mm512_set_epi32(0, 15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1));
+    } else if constexpr (avx_version == 3u && std::is_same_v<F, double> && N == 8u) {
+        return _mm512_permutexvar_pd(x, _mm512_set_epi64(0, 7, 6, 5, 4, 3, 2, 1));
+    } else
+#endif
 #if defined(__AVX2__)
-    if constexpr (avx_version == 2u && std::is_same_v<F, float> && N == 8u) {
+        if constexpr (avx_version == 2u && std::is_same_v<F, float> && N == 8u) {
         // This instruction is available on AVX2 for floats.
         return _mm256_permutevar8x32_ps(x, _mm256_set_epi32(0, 7, 6, 5, 4, 3, 2, 1));
     } else
