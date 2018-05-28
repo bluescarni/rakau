@@ -749,7 +749,7 @@ private:
         const B diff_z = z2 - zvec1;
         const B dist2 = diff_x * diff_x + diff_y * diff_y + diff_z * diff_z;
         B m2_dist3;
-        if constexpr (has_fast_inv_sqrt_3<B>) {
+        if constexpr (has_fast_inv_sqrt<B>) {
             m2_dist3 = m2 * inv_sqrt_3(dist2);
         } else {
             const B dist = xsimd::sqrt(dist2);
@@ -802,7 +802,7 @@ private:
             // The inverse square root is used in vectorized mode
             // if the instruction set has a fast reciprocal square root implementation.
             // NOTE: currently the vectorized mode is activated only for NDim == 3u.
-            constexpr bool use_inv_sqrt = (NDim == 3u) && has_fast_inv_sqrt_3<b_type>;
+            constexpr bool use_inv_sqrt = (NDim == 3u) && has_fast_inv_sqrt<b_type>;
             // Check the distances of all the particles of the target
             // node from the COM of the source.
             bool bh_flag = true;
@@ -834,7 +834,7 @@ private:
                     xsimd::store_aligned(tmp_x, diffx);
                     xsimd::store_aligned(tmp_y, diffy);
                     xsimd::store_aligned(tmp_z, diffz);
-                    if constexpr (has_fast_inv_sqrt_3<b_type>) {
+                    if constexpr (has_fast_inv_sqrt<b_type>) {
                         xsimd::store_aligned(tmp_dist3, inv_sqrt_3(dist2));
                     } else {
                         xsimd::store_aligned(tmp_dist3, xsimd::sqrt(dist2) * dist2);
@@ -872,7 +872,7 @@ private:
                     auto [res_x, res_y, res_z] = res_ptrs;
                     for (; i < vec_size; i += b_size, tmp_x += b_size, tmp_y += b_size, tmp_z += b_size,
                                          tmp_dist3 += b_size, res_x += b_size, res_y += b_size, res_z += b_size) {
-                        const b_type m_com_dist3_vec = has_fast_inv_sqrt_3<b_type>
+                        const b_type m_com_dist3_vec = has_fast_inv_sqrt<b_type>
                                                            ? m_com * xsimd::load_aligned(tmp_dist3)
                                                            : m_com / xsimd::load_aligned(tmp_dist3);
                         const b_type xdiff = xsimd::load_aligned(tmp_x);

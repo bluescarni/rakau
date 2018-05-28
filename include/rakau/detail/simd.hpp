@@ -60,6 +60,11 @@ inline constexpr unsigned sse_version =
 #endif
     ;
 
+// Rotate left by 1 the input batch x. That is, if the input
+// contains the values [0, 1, 2, 3], the output will contain
+// the values [1, 2, 3, 0].
+// NOTE: on AVX/SSE this looks like a *right* rotation because
+// of the way vector element are indexed in AVX/SSE intrinsics.
 template <typename F, std::size_t N>
 inline xsimd::batch<F, N> rotate(xsimd::batch<F, N> x)
 {
@@ -110,6 +115,13 @@ inline xsimd::batch<F, N> rotate(xsimd::batch<F, N> x)
     }
 }
 
+// Small variable template helper to establish if a fast implementation
+// of the inverse sqrt for an xsimd batch of type B is available.
+template <typename B>
+inline constexpr bool has_fast_inv_sqrt
+    = avx_version &&std::is_same_v<typename xsimd::simd_batch_traits<B>::value_type, float>
+          &&xsimd::simd_batch_traits<B>::size == 8u;
+
 // Newton iteration step for the computation of 1/sqrt(x) with starting point y0:
 // y1 = y0/2 * (3 - x*y0**2).
 template <typename F, std::size_t N>
@@ -122,7 +134,7 @@ inline xsimd::batch<F, N> inv_sqrt_newton_iter(xsimd::batch<F, N> y0, xsimd::bat
     return half_y0 * three_minus_muls;
 }
 
-// Compute 1/sqrt(x)**3.
+// Compute 1/sqrt(x)**3. This will use fast rsqrt if available.
 template <typename F, std::size_t N>
 inline xsimd::batch<F, N> inv_sqrt_3(xsimd::batch<F, N> x)
 {
@@ -135,13 +147,6 @@ inline xsimd::batch<F, N> inv_sqrt_3(xsimd::batch<F, N> x)
         return tmp * tmp * tmp;
     }
 }
-
-// Small variable template helper to establish if a fast implementation
-// of inv_sqrt_3 of an xsimd batch of type B is available.
-template <typename B>
-inline constexpr bool has_fast_inv_sqrt_3
-    = avx_version &&std::is_same_v<typename xsimd::simd_batch_traits<B>::value_type, float>
-          &&xsimd::simd_batch_traits<B>::size == 8u;
 
 } // namespace detail
 
