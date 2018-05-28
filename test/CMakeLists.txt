@@ -16,3 +16,4 @@ function(ADD_RAKAU_TESTCASE arg1)
 endfunction()
 
 ADD_RAKAU_TESTCASE(basic)
+ADD_RAKAU_TESTCASE(simd)

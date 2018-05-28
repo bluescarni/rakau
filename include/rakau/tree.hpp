@@ -13,7 +13,9 @@
 #include <array>
 #include <bitset>
 #include <cassert>
+#if defined(RAKAU_WITH_TIMER)
 #include <chrono>
+#endif
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -29,12 +31,6 @@
 #include <type_traits>
 #include <utility>
 #include <vector>
-
-#if defined(__AVX2__) || defined(__AVX__)
-
-#include <immintrin.h>
-
-#endif
 
 #include <boost/iterator/permutation_iterator.hpp>
 #include <boost/numeric/conversion/cast.hpp>
@@ -58,6 +54,7 @@
 #endif
 
 #include <rakau/detail/libmorton/morton.h>
+#include <rakau/detail/simd.hpp>
 
 #if defined(__clang__) || defined(__GNUC__)
 
@@ -172,9 +169,9 @@ inline unsigned clz(UInt n)
     assert(n);
     if constexpr (std::is_same_v<UInt, unsigned>) {
         return static_cast<unsigned>(__builtin_clz(n));
-    } else if (std::is_same_v<UInt, unsigned long>) {
+    } else if constexpr (std::is_same_v<UInt, unsigned long>) {
         return static_cast<unsigned>(__builtin_clzl(n));
-    } else if (std::is_same_v<UInt, unsigned long long>) {
+    } else if constexpr (std::is_same_v<UInt, unsigned long long>) {
         return static_cast<unsigned>(__builtin_clzll(n));
     } else {
         // In this case we are dealing with an unsigned integral type which
@@ -216,81 +213,6 @@ inline bool node_compare(UInt n1, UInt n2)
     const auto s_n2 = n2 << ((cbits - tl2) * NDim);
     return s_n1 < s_n2 || (s_n1 == s_n2 && tl1 < tl2);
 }
-
-inline constexpr unsigned avx_version =
-#if defined(__AVX2__)
-    2
-#elif defined(__AVX__)
-    1
-#else
-    0
-#endif
-    ;
-
-#if defined(__AVX2__)
-
-// Rotate a vector of AVX single-precision floats using AVX2.
-inline __m256 rotate_simd_vec(__m256 x)
-{
-    // NOTE: this is an AVX2 specific intrinsic. We can emulate it in terms
-    // of AVX with 3 instructions (see below).
-    return _mm256_permutevar8x32_ps(x, _mm256_set_epi32(0, 7, 6, 5, 4, 3, 2, 1));
-}
-
-#elif defined(__AVX__)
-
-// Rotate a vector of AVX single-precision floats using AVX.
-//
-// See the second answer here:
-// https://stackoverflow.com/questions/19516585/shifting-sse-avx-registers-32-bits-left-and-right-while-shifting-in-zeros
-//
-// This is slightly modified in the second line as we don't want the zeroing
-// feature provided by _mm256_permute2f128_ps.
-inline __m256 rotate_simd_vec(__m256 x)
-{
-    // NOTE: 0x39 == 0011 1001, 0x88 == 1000 1000.
-    // NOTE: x = [x7 x6 ... x0].
-    const __m256 t0 = _mm256_permute_ps(x, 0x39);        // [x4  x7  x6  x5  x0  x3  x2  x1]
-    const __m256 t1 = _mm256_permute2f128_ps(t0, t0, 1); // [x0  x3  x2  x1  x4  x7  x6  x5]
-    return _mm256_blend_ps(t0, t1, 0x88);                // [x0  x7  x6  x5  x4  x3  x2  x1]
-}
-
-#endif
-
-#if defined(__AVX__)
-
-// Rotate a vector of AVX double-precision floats using AVX.
-// NOTE: it seems like there's no AVX2-specific way of doing this,
-// so we do it the vanilla AVX way.
-inline __m256d rotate_simd_vec(__m256d x)
-{
-    // NOTE: same idea as above, just different constants.
-    // NOTE: x = [x3 x2 x1 x0].
-    const __m256d t0 = _mm256_permute_pd(x, 5);           // [x2 x3 x0 x1]
-    const __m256d t1 = _mm256_permute2f128_pd(t0, t0, 1); // [x0 x1 x2 x3]
-    return _mm256_blend_pd(t0, t1, 10);                   // [x0 x3 x2 x1]
-}
-
-// Newton iteration step for the computation of 1/sqrt(x) with starting point y0:
-// y1 = y0/2 * (3 - x*y0**2).
-template <typename F, std::size_t N>
-inline xsimd::batch<F, N> inv_sqrt_newton_iter(xsimd::batch<F, N> y0, xsimd::batch<F, N> x)
-{
-    const xsimd::batch<F, N> three(F(3));
-    const xsimd::batch<F, N> xy0 = x * y0;
-    const xsimd::batch<F, N> half_y0 = y0 * (F(1) / F(2));
-    const xsimd::batch<F, N> three_minus_muls = xsimd::fnma(xy0, y0, three);
-    return half_y0 * three_minus_muls;
-}
-
-// Compute 1/sqrt(x)**3 using the AVX intrinsic _mm256_rsqrt_ps, refined with a Newton iteration.
-inline xsimd::batch<float, 8> inv_sqrt_3(xsimd::batch<float, 8> x)
-{
-    const auto tmp = inv_sqrt_newton_iter(xsimd::batch<float, 8>(_mm256_rsqrt_ps(x)), x);
-    return tmp * tmp * tmp;
-}
-
-#endif
 
 // Apply the indirect sort defined by the vector of indices 'perm'
 // into the 'values' vector. E.g., if in input
@@ -383,6 +305,10 @@ class tree
     // to enable aligned loads/stores where possible.
     template <typename T>
     using v_type = std::vector<T, XSIMD_DEFAULT_ALLOCATOR(T)>;
+    // xsimd batch type.
+    using b_type = xsimd::simd_type<F>;
+    // Size of b_type.
+    static constexpr auto b_size = b_type::size;
 
 public:
     using size_type = typename v_type<F>::size_type;
@@ -823,7 +749,7 @@ private:
         const B diff_z = z2 - zvec1;
         const B dist2 = diff_x * diff_x + diff_y * diff_y + diff_z * diff_z;
         B m2_dist3;
-        if constexpr (avx_version && std::is_same_v<F, float>) {
+        if constexpr (has_fast_inv_sqrt_3<B>) {
             m2_dist3 = m2 * inv_sqrt_3(dist2);
         } else {
             const B dist = xsimd::sqrt(dist2);
@@ -871,21 +797,25 @@ private:
             }
             // Copy locally the COM coords of the source.
             const auto com_pos = get<3>(m_tree[begin]);
+            // Flag to determine whether, in the scalar part of the code,
+            // we should be using the square root or its inverse.
+            // The inverse square root is used in vectorized mode
+            // if the instruction set has a fast reciprocal square root implementation.
+            // NOTE: currently the vectorized mode is activated only for NDim == 3u.
+            constexpr bool use_inv_sqrt = (NDim == 3u) && has_fast_inv_sqrt_3<b_type>;
             // Check the distances of all the particles of the target
             // node from the COM of the source.
             bool bh_flag = true;
             size_type i = 0;
             if constexpr (NDim == 3u) {
                 // The SIMD-accelerated part.
-                using b_type = xsimd::simd_type<F>;
-                constexpr auto inc = b_type::size;
-                const auto vec_size = static_cast<size_type>(size - size % inc);
+                const auto vec_size = static_cast<size_type>(size - size % b_size);
                 const b_type node_size2_vec = xsimd::set_simd(node_size2);
                 auto [x_ptr, y_ptr, z_ptr] = c_ptrs;
                 const auto [x_com, y_com, z_com] = com_pos;
                 auto [tmp_x, tmp_y, tmp_z, tmp_dist3] = tmp_ptrs;
-                for (; i < vec_size; i += inc, x_ptr += inc, y_ptr += inc, z_ptr += inc, tmp_x += inc, tmp_y += inc,
-                                     tmp_z += inc, tmp_dist3 += inc) {
+                for (; i < vec_size; i += b_size, x_ptr += b_size, y_ptr += b_size, z_ptr += b_size, tmp_x += b_size,
+                                     tmp_y += b_size, tmp_z += b_size, tmp_dist3 += b_size) {
                     const b_type xvec = xsimd::load_unaligned(x_ptr);
                     const b_type yvec = xsimd::load_unaligned(y_ptr);
                     const b_type zvec = xsimd::load_unaligned(z_ptr);
@@ -904,7 +834,7 @@ private:
                     xsimd::store_aligned(tmp_x, diffx);
                     xsimd::store_aligned(tmp_y, diffy);
                     xsimd::store_aligned(tmp_z, diffz);
-                    if constexpr (avx_version && std::is_same_v<F, float>) {
+                    if constexpr (has_fast_inv_sqrt_3<b_type>) {
                         xsimd::store_aligned(tmp_dist3, inv_sqrt_3(dist2));
                     } else {
                         xsimd::store_aligned(tmp_dist3, xsimd::sqrt(dist2) * dist2);
@@ -926,8 +856,7 @@ private:
                     break;
                 }
                 // Store dist3 (or 1/dist3) for later use.
-                tmp_ptrs[NDim][i] = (avx_version && std::is_same_v<F, float>) ? F(1) / (std::sqrt(dist2) * dist2)
-                                                                              : std::sqrt(dist2) * dist2;
+                tmp_ptrs[NDim][i] = use_inv_sqrt ? F(1) / (std::sqrt(dist2) * dist2) : std::sqrt(dist2) * dist2;
             }
             if (bh_flag) {
                 // The source node satisfies the BH criterion for
@@ -938,14 +867,12 @@ private:
                 i = 0;
                 if constexpr (NDim == 3u) {
                     // The SIMD-accelerated part.
-                    using b_type = xsimd::simd_type<F>;
-                    constexpr auto inc = b_type::size;
-                    const auto vec_size = static_cast<size_type>(size - size % inc);
+                    const auto vec_size = static_cast<size_type>(size - size % b_size);
                     auto [tmp_x, tmp_y, tmp_z, tmp_dist3] = tmp_ptrs;
                     auto [res_x, res_y, res_z] = res_ptrs;
-                    for (; i < vec_size; i += inc, tmp_x += inc, tmp_y += inc, tmp_z += inc, tmp_dist3 += inc,
-                                         res_x += inc, res_y += inc, res_z += inc) {
-                        const b_type m_com_dist3_vec = (avx_version && std::is_same_v<F, float>)
+                    for (; i < vec_size; i += b_size, tmp_x += b_size, tmp_y += b_size, tmp_z += b_size,
+                                         tmp_dist3 += b_size, res_x += b_size, res_y += b_size, res_z += b_size) {
+                        const b_type m_com_dist3_vec = has_fast_inv_sqrt_3<b_type>
                                                            ? m_com * xsimd::load_aligned(tmp_dist3)
                                                            : m_com / xsimd::load_aligned(tmp_dist3);
                         const b_type xdiff = xsimd::load_aligned(tmp_x);
@@ -957,8 +884,7 @@ private:
                     }
                 }
                 for (; i < size; ++i) {
-                    const auto m_com_dist3 = (avx_version && std::is_same_v<F, float>) ? m_com * tmp_ptrs[NDim][i]
-                                                                                       : m_com / tmp_ptrs[NDim][i];
+                    const auto m_com_dist3 = use_inv_sqrt ? m_com * tmp_ptrs[NDim][i] : m_com / tmp_ptrs[NDim][i];
                     for (std::size_t j = 0; j < NDim; ++j) {
                         res_ptrs[j][i] += tmp_ptrs[j][i] * m_com_dist3;
                     }
@@ -982,19 +908,17 @@ private:
                 const auto leaf_begin = get<1>(m_tree[begin])[0];
                 const auto leaf_end = get<1>(m_tree[begin])[1];
                 size_type i1 = 0;
-                if constexpr (NDim == 3u && avx_version) {
+                if constexpr (NDim == 3u) {
                     // The number of particles in the source node.
                     const auto size_leaf = leaf_end - leaf_begin;
-                    using b_type = xsimd::simd_type<F>;
-                    constexpr auto inc = b_type::size;
                     // Vector size of the target node.
-                    const auto vec_size1 = static_cast<size_type>(size - size % inc);
+                    const auto vec_size1 = static_cast<size_type>(size - size % b_size);
                     // Vector size of the source node.
-                    const auto vec_size2 = static_cast<size_type>(size_leaf - size_leaf % inc);
+                    const auto vec_size2 = static_cast<size_type>(size_leaf - size_leaf % b_size);
                     auto [x_ptr1, y_ptr1, z_ptr1] = c_ptrs;
                     auto [res_x, res_y, res_z] = res_ptrs;
-                    for (; i1 < vec_size1; i1 += inc, x_ptr1 += inc, y_ptr1 += inc, z_ptr1 += inc, res_x += inc,
-                                           res_y += inc, res_z += inc) {
+                    for (; i1 < vec_size1; i1 += b_size, x_ptr1 += b_size, y_ptr1 += b_size, z_ptr1 += b_size,
+                                           res_x += b_size, res_y += b_size, res_z += b_size) {
                         // Load the current batch of target data.
                         const b_type xvec1 = xsimd::load_unaligned(x_ptr1);
                         const b_type yvec1 = xsimd::load_unaligned(y_ptr1);
@@ -1010,22 +934,23 @@ private:
                         b_type res_y_vec = xsimd::load_aligned(res_y);
                         b_type res_z_vec = xsimd::load_aligned(res_z);
                         size_type i2 = 0;
-                        for (; i2 < vec_size2; i2 += inc, x_ptr2 += inc, y_ptr2 += inc, z_ptr2 += inc, m_ptr2 += inc) {
+                        for (; i2 < vec_size2;
+                             i2 += b_size, x_ptr2 += b_size, y_ptr2 += b_size, z_ptr2 += b_size, m_ptr2 += b_size) {
                             b_type xvec2 = xsimd::load_unaligned(x_ptr2);
                             b_type yvec2 = xsimd::load_unaligned(y_ptr2);
                             b_type zvec2 = xsimd::load_unaligned(z_ptr2);
                             b_type mvec2 = xsimd::load_unaligned(m_ptr2);
                             batch_bs_3d(res_x_vec, res_y_vec, res_z_vec, xvec1, yvec1, zvec1, xvec2, yvec2, zvec2,
                                         mvec2);
-                            for (std::size_t j = 1; j < inc; ++j) {
+                            for (std::size_t j = 1; j < b_size; ++j) {
                                 // Above we computed the element-wise accelerations of a source batch
                                 // onto a target batch. We need to rotate the source batch
-                                // inc - 1 times and perform again the computation in order
+                                // b_size - 1 times and perform again the computation in order
                                 // to compute all possible particle-particle interactions.
-                                xvec2 = rotate_simd_vec(xvec2);
-                                yvec2 = rotate_simd_vec(yvec2);
-                                zvec2 = rotate_simd_vec(zvec2);
-                                mvec2 = rotate_simd_vec(mvec2);
+                                xvec2 = rotate(xvec2);
+                                yvec2 = rotate(yvec2);
+                                zvec2 = rotate(zvec2);
+                                mvec2 = rotate(mvec2);
                                 batch_bs_3d(res_x_vec, res_y_vec, res_z_vec, xvec1, yvec1, zvec1, xvec2, yvec2, zvec2,
                                             mvec2);
                             }
@@ -1092,7 +1017,7 @@ private:
         // Prepare common pointers to the input and output data.
         auto &tmp_res = vec_acc_tmp_res();
         const auto m_ptr = m_masses.data() + node_begin;
-        if constexpr (NDim == 3u && avx_version) {
+        if constexpr (NDim == 3u) {
             // Shortcuts to the node coordinates/masses.
             const auto x_ptr = m_coords[0].data() + node_begin;
             const auto y_ptr = m_coords[1].data() + node_begin;
@@ -1101,13 +1026,11 @@ private:
             auto res_x = tmp_res[0].data();
             auto res_y = tmp_res[1].data();
             auto res_z = tmp_res[2].data();
-            using b_type = xsimd::simd_type<F>;
-            constexpr auto inc = b_type::size;
-            const auto vec_size = static_cast<size_type>(npart - npart % inc);
+            const auto vec_size = static_cast<size_type>(npart - npart % b_size);
             auto [x_ptr1, y_ptr1, z_ptr1] = std::make_tuple(x_ptr, y_ptr, z_ptr);
             size_type i1 = 0;
-            for (; i1 < vec_size;
-                 i1 += inc, x_ptr1 += inc, y_ptr1 += inc, z_ptr1 += inc, res_x += inc, res_y += inc, res_z += inc) {
+            for (; i1 < vec_size; i1 += b_size, x_ptr1 += b_size, y_ptr1 += b_size, z_ptr1 += b_size, res_x += b_size,
+                                  res_y += b_size, res_z += b_size) {
                 // Load the current accelerations from the temporary result vectors.
                 b_type res_x_vec = xsimd::load_aligned(res_x);
                 b_type res_y_vec = xsimd::load_aligned(res_y);
@@ -1120,7 +1043,8 @@ private:
                 // on the particles under consideration.
                 auto [x_ptr2, y_ptr2, z_ptr2, m_ptr2] = std::make_tuple(x_ptr, y_ptr, z_ptr, m_ptr);
                 size_type i2 = 0;
-                for (; i2 < vec_size; i2 += inc, x_ptr2 += inc, y_ptr2 += inc, z_ptr2 += inc, m_ptr2 += inc) {
+                for (; i2 < vec_size;
+                     i2 += b_size, x_ptr2 += b_size, y_ptr2 += b_size, z_ptr2 += b_size, m_ptr2 += b_size) {
                     // Load the current batch of particles exerting gravity.
                     b_type xvec2 = xsimd::load_unaligned(x_ptr2);
                     b_type yvec2 = xsimd::load_unaligned(y_ptr2);
@@ -1133,11 +1057,11 @@ private:
                     }
                     // Iterate over all the other possible batch-batch permutations
                     // by rotating the data in xvec2, yvec2, zvec2.
-                    for (std::size_t j = 1; j < inc; ++j) {
-                        xvec2 = rotate_simd_vec(xvec2);
-                        yvec2 = rotate_simd_vec(yvec2);
-                        zvec2 = rotate_simd_vec(zvec2);
-                        mvec2 = rotate_simd_vec(mvec2);
+                    for (std::size_t j = 1; j < b_size; ++j) {
+                        xvec2 = rotate(xvec2);
+                        yvec2 = rotate(yvec2);
+                        zvec2 = rotate(zvec2);
+                        mvec2 = rotate(mvec2);
                         batch_bs_3d(res_x_vec, res_y_vec, res_z_vec, xvec1, yvec1, zvec1, xvec2, yvec2, zvec2, mvec2);
                     }
                 }
