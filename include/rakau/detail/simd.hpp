@@ -122,7 +122,11 @@ inline xsimd::batch<double, 2> rotate(xsimd::batch<double, 2> x)
 
 // Small variable template helper to establish if a fast implementation
 // of the inverse sqrt for an xsimd batch of type B is available.
-// Currently, this is true for AVX512 16-floats batches and AVX 8-floats batches.
+// Currently, this is true for:
+// - AVX 8-floats batches,
+// - AVX512 16-floats batches.
+// NOTE: there are intrinsics in SSE for rsqrt as well, but they don't seem to
+// improve performance for our use case.
 template <typename B>
 inline constexpr bool has_fast_inv_sqrt =
 #if XSIMD_X86_INSTR_SET >= XSIMD_X86_AVX_VERSION
@@ -157,9 +161,9 @@ inline xsimd::batch<F, N> inv_sqrt_3(xsimd::batch<F, N> x)
     return tmp * tmp * tmp;
 }
 
+// On various versions of AVX, we have intrinsics for fast rsqrt.
 #if XSIMD_X86_INSTR_SET >= XSIMD_X86_AVX512F_VERSION
 
-// On various versions of AVX/SSE, we have intrinsics for fast rsqrt.
 template <>
 inline xsimd::batch<float, 16> inv_sqrt_3(xsimd::batch<float, 16> x)
 {
@@ -175,17 +179,6 @@ template <>
 inline xsimd::batch<float, 8> inv_sqrt_3(xsimd::batch<float, 8> x)
 {
     const auto tmp = inv_sqrt_newton_iter(xsimd::batch<float, 8>(_mm256_rsqrt_ps(x)), x);
-    return tmp * tmp * tmp;
-}
-
-#endif
-
-#if XSIMD_X86_INSTR_SET >= XSIMD_X86_SSE_VERSION
-
-template <>
-inline xsimd::batch<float, 4> inv_sqrt_3(xsimd::batch<float, 4> x)
-{
-    const auto tmp = inv_sqrt_newton_iter(xsimd::batch<float, 4>(_mm_rsqrt_ps(x)), x);
     return tmp * tmp * tmp;
 }
 
