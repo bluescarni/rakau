@@ -1,4 +1,4 @@
-find_package(Boost 1.55.0 REQUIRED)
+find_package(Boost 1.54.0 REQUIRED)
 # Might need to recreate targets if they are missing (e.g., older CMake versions).
 if(NOT TARGET Boost::boost)
     message(STATUS "The 'Boost::boost' target is missing, creating it.")
