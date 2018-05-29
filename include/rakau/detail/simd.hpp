@@ -45,17 +45,11 @@ inline xsimd::batch<F, N> rotate(xsimd::batch<F, N> x)
 // NOTE: on AVX/SSE this looks like a *right* rotation because
 // of the way vector element are indexed in AVX/SSE intrinsics.
 
-// AVX512 versions, for both float and double.
+// AVX512, float.
 template <>
 inline xsimd::batch<float, 16> rotate(xsimd::batch<float, 16> x)
 {
-    return _mm512_permutexvar_ps(x, _mm512_set_epi32(0, 15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1));
-}
-
-template <>
-inline xsimd::batch<double, 8> rotate(xsimd::batch<double, 8> x)
-{
-    return _mm512_permutexvar_pd(x, _mm512_set_epi64(0, 7, 6, 5, 4, 3, 2, 1));
+    return _mm512_permutexvar_ps(_mm512_set_epi32(0, 15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1), x);
 }
 
 #endif
@@ -135,8 +129,9 @@ inline constexpr bool has_fast_inv_sqrt =
     (std::is_same_v<typename xsimd::simd_batch_traits<B>::value_type,
                     float> && xsimd::simd_batch_traits<B>::size == 16u)
     ||
-#elif XSIMD_X86_INSTR_SET >= XSIMD_X86_AVX_VERSION
     (std::is_same_v<typename xsimd::simd_batch_traits<B>::value_type, float> && xsimd::simd_batch_traits<B>::size == 8u)
+#elif XSIMD_X86_INSTR_SET >= XSIMD_X86_AVX_VERSION
+(std::is_same_v<typename xsimd::simd_batch_traits<B>::value_type, float> && xsimd::simd_batch_traits<B>::size == 8u)
 #else
     false
 #endif
