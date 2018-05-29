@@ -1,4 +1,5 @@
-find_package(Boost 1.54.0 REQUIRED)
+# Boost spreadsort is available since 1.58.
+find_package(Boost 1.58.0 REQUIRED)
 # Might need to recreate targets if they are missing (e.g., older CMake versions).
 if(NOT TARGET Boost::boost)
     message(STATUS "The 'Boost::boost' target is missing, creating it.")
