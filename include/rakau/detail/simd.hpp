@@ -167,7 +167,9 @@ inline xsimd::batch<F, N> inv_sqrt_3(xsimd::batch<F, N> x)
 template <>
 inline xsimd::batch<float, 16> inv_sqrt_3(xsimd::batch<float, 16> x)
 {
-    const auto tmp = _mm512_rsqrt28_ps(x);
+    // NOTE: AVX512-ER has an intrinsic for 28-bit precision (rather than 14-bit)
+    // rsqrt, but it does not seem to be widely available yet.
+    const auto tmp = inv_sqrt_newton_iter(xsimd::batch<float, 16>(_mm512_rsqrt14_ps(x)), x);
     return tmp * tmp * tmp;
 }
 
@@ -180,6 +182,25 @@ inline xsimd::batch<float, 8> inv_sqrt_3(xsimd::batch<float, 8> x)
 {
     const auto tmp = inv_sqrt_newton_iter(xsimd::batch<float, 8>(_mm256_rsqrt_ps(x)), x);
     return tmp * tmp * tmp;
+}
+
+#endif
+
+// Return true if at least 1 element of a is greater-than or equal to
+// the corresponding element of b, false otherwise.
+template <typename F, std::size_t N>
+inline bool any_geq(xsimd::batch<F, N> a, xsimd::batch<F, N> b)
+{
+    return xsimd::any(a >= b);
+}
+
+#if XSIMD_X86_INSTR_SET >= XSIMD_X86_AVX512F_VERSION
+
+// We can optimise this in AVX512.
+template <>
+inline bool any_geq(xsimd::batch<float, 16> a, xsimd::batch<float, 16> b)
+{
+    return _mm512_cmp_ps_mask(a, b, _CMP_GE_OQ);
 }
 
 #endif
