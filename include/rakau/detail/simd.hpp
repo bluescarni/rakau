@@ -125,13 +125,12 @@ inline xsimd::batch<double, 2> rotate(xsimd::batch<double, 2> x)
 // Currently, this is true for AVX512 16-floats batches and AVX 8-floats batches.
 template <typename B>
 inline constexpr bool has_fast_inv_sqrt =
-#if XSIMD_X86_INSTR_SET >= XSIMD_X86_AVX512F_VERSION
-    (std::is_same_v<typename xsimd::simd_batch_traits<B>::value_type,
-                    float> && xsimd::simd_batch_traits<B>::size == 16u)
-    ||
+#if XSIMD_X86_INSTR_SET >= XSIMD_X86_AVX_VERSION
     (std::is_same_v<typename xsimd::simd_batch_traits<B>::value_type, float> && xsimd::simd_batch_traits<B>::size == 8u)
-#elif XSIMD_X86_INSTR_SET >= XSIMD_X86_AVX_VERSION
-(std::is_same_v<typename xsimd::simd_batch_traits<B>::value_type, float> && xsimd::simd_batch_traits<B>::size == 8u)
+#if XSIMD_X86_INSTR_SET >= XSIMD_X86_AVX512F_VERSION
+    || (std::is_same_v<typename xsimd::simd_batch_traits<B>::value_type,
+                       float> && xsimd::simd_batch_traits<B>::size == 16u)
+#endif
 #else
     false
 #endif
@@ -164,7 +163,8 @@ inline xsimd::batch<F, N> inv_sqrt_3(xsimd::batch<F, N> x)
 template <>
 inline xsimd::batch<float, 16> inv_sqrt_3(xsimd::batch<float, 16> x)
 {
-    const auto tmp = inv_sqrt_newton_iter(xsimd::batch<float, 16>(_mm512_rsqrt14_ps(x)), x);
+    // const auto tmp = inv_sqrt_newton_iter(xsimd::batch<float, 16>(_mm512_rsqrt14_ps(x)), x);
+    const auto tmp = _mm512_rsqrt28_ps(x);
     return tmp * tmp * tmp;
 }
 
