@@ -159,11 +159,10 @@ inline xsimd::batch<F, N> inv_sqrt_3(xsimd::batch<F, N> x)
 
 #if XSIMD_X86_INSTR_SET >= XSIMD_X86_AVX512F_VERSION
 
-// On various versions of AVX, we have intrinsics for fast rsqrt.
+// On various versions of AVX/SSE, we have intrinsics for fast rsqrt.
 template <>
 inline xsimd::batch<float, 16> inv_sqrt_3(xsimd::batch<float, 16> x)
 {
-    // const auto tmp = inv_sqrt_newton_iter(xsimd::batch<float, 16>(_mm512_rsqrt14_ps(x)), x);
     const auto tmp = _mm512_rsqrt28_ps(x);
     return tmp * tmp * tmp;
 }
@@ -176,6 +175,17 @@ template <>
 inline xsimd::batch<float, 8> inv_sqrt_3(xsimd::batch<float, 8> x)
 {
     const auto tmp = inv_sqrt_newton_iter(xsimd::batch<float, 8>(_mm256_rsqrt_ps(x)), x);
+    return tmp * tmp * tmp;
+}
+
+#endif
+
+#if XSIMD_X86_INSTR_SET >= XSIMD_X86_SSE_VERSION
+
+template <>
+inline xsimd::batch<float, 4> inv_sqrt_3(xsimd::batch<float, 4> x)
+{
+    const auto tmp = inv_sqrt_newton_iter(xsimd::batch<float, 4>(_mm_rsqrt_ps(x)), x);
     return tmp * tmp * tmp;
 }
 
