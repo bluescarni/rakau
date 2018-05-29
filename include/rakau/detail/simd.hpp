@@ -74,7 +74,7 @@ inline xsimd::batch<F, N> rotate(xsimd::batch<F, N> x)
     // because inside we are calling functions which do not depend
     // on any template parameter, and thus name lookup happens before
     // instantiation.
-#if defined(__AVX512F__) && false
+#if defined(__AVX512F__)
     if constexpr (avx_version == 3u && std::is_same_v<F, float> && N == 16u) {
         return _mm512_permutexvar_ps(x, _mm512_set_epi32(0, 15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1));
     } else if constexpr (avx_version == 3u && std::is_same_v<F, double> && N == 8u) {
