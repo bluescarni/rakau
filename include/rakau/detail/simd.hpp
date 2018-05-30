@@ -186,25 +186,6 @@ inline xsimd::batch<float, 8> inv_sqrt_3(xsimd::batch<float, 8> x)
 
 #endif
 
-// Return true if at least 1 element of a is greater-than or equal to
-// the corresponding element of b, false otherwise.
-template <typename F, std::size_t N>
-inline bool any_geq(xsimd::batch<F, N> a, xsimd::batch<F, N> b)
-{
-    return xsimd::any(a >= b);
-}
-
-#if XSIMD_X86_INSTR_SET >= XSIMD_X86_AVX512_VERSION
-
-// We can optimise this in AVX512.
-template <>
-inline bool any_geq(xsimd::batch<float, 16> a, xsimd::batch<float, 16> b)
-{
-    return _mm512_cmp_ps_mask(a, b, _CMP_GE_OQ);
-}
-
-#endif
-
 } // namespace detail
 
 } // namespace rakau

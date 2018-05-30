@@ -823,7 +823,7 @@ private:
                     const b_type diffy = y_com - yvec;
                     const b_type diffz = z_com - zvec;
                     const b_type dist2 = diffx * diffx + diffy * diffy + diffz * diffz;
-                    if (any_geq(node_size2_vec, theta2 * dist2)) {
+                    if (xsimd::any(node_size2_vec >= theta2 * dist2)) {
                         // At least one particle in the current batch fails the BH criterion
                         // check. Mark the bh_flag as false, and set i to size in order
                         // to skip the scalar calculation later. Then break out.
