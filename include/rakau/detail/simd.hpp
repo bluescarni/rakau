@@ -52,6 +52,13 @@ inline xsimd::batch<float, 16> rotate(xsimd::batch<float, 16> x)
     return _mm512_permutexvar_ps(_mm512_set_epi32(0, 15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1), x);
 }
 
+// AVX512, double.
+template <>
+inline xsimd::batch<double, 8> rotate(xsimd::batch<double, 8> x)
+{
+    return _mm512_permutexvar_pd(_mm512_set_epi64(0, 7, 6, 5, 4, 3, 2, 1), x);
+}
+
 #endif
 
 #if XSIMD_X86_INSTR_SET >= XSIMD_X86_AVX2_VERSION
@@ -120,26 +127,6 @@ inline xsimd::batch<double, 2> rotate(xsimd::batch<double, 2> x)
 
 #endif
 
-// Small variable template helper to establish if a fast implementation
-// of the inverse sqrt for an xsimd batch of type B is available.
-// Currently, this is true for:
-// - AVX 8-floats batches,
-// - AVX512 16-floats batches.
-// NOTE: there are intrinsics in SSE for rsqrt as well, but they don't seem to
-// improve performance for our use case.
-template <typename B>
-inline constexpr bool has_fast_inv_sqrt =
-#if XSIMD_X86_INSTR_SET >= XSIMD_X86_AVX_VERSION
-    (std::is_same_v<typename xsimd::simd_batch_traits<B>::value_type, float> && xsimd::simd_batch_traits<B>::size == 8u)
-#if XSIMD_X86_INSTR_SET >= XSIMD_X86_AVX512_VERSION
-    || (std::is_same_v<typename xsimd::simd_batch_traits<B>::value_type,
-                       float> && xsimd::simd_batch_traits<B>::size == 16u)
-#endif
-#else
-    false
-#endif
-    ;
-
 // Newton iteration step for the computation of 1/sqrt(x) with starting point y0:
 // y1 = y0/2 * (3 - x*y0**2).
 template <typename F, std::size_t N>
@@ -185,6 +172,26 @@ inline xsimd::batch<float, 8> inv_sqrt_3(xsimd::batch<float, 8> x)
 }
 
 #endif
+
+// Small variable template helper to establish if a fast implementation
+// of the inverse sqrt for an xsimd batch of type B is available.
+// Currently, this is true for:
+// - AVX 8-floats batches,
+// - AVX512 16-floats batches.
+// NOTE: there are intrinsics in SSE for rsqrt as well, but they don't seem to
+// improve performance for our use case.
+template <typename B>
+inline constexpr bool has_fast_inv_sqrt =
+#if XSIMD_X86_INSTR_SET >= XSIMD_X86_AVX_VERSION
+    (std::is_same_v<typename xsimd::simd_batch_traits<B>::value_type, float> && xsimd::simd_batch_traits<B>::size == 8u)
+#if XSIMD_X86_INSTR_SET >= XSIMD_X86_AVX512_VERSION
+    || (std::is_same_v<typename xsimd::simd_batch_traits<B>::value_type,
+                       float> && xsimd::simd_batch_traits<B>::size == 16u)
+#endif
+#else
+    false
+#endif
+    ;
 
 } // namespace detail
 
