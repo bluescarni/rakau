@@ -40,7 +40,7 @@ inline xsimd::batch<F, N> rotate(xsimd::batch<F, N> x)
     return xsimd::batch<F, N>(tmp, xsimd::aligned_mode{});
 }
 
-#if XSIMD_X86_INSTR_SET >= XSIMD_X86_AVX512F_VERSION
+#if XSIMD_X86_INSTR_SET >= XSIMD_X86_AVX512_VERSION
 
 // NOTE: on AVX/SSE this looks like a *right* rotation because
 // of the way vector element are indexed in AVX/SSE intrinsics.
@@ -131,7 +131,7 @@ template <typename B>
 inline constexpr bool has_fast_inv_sqrt =
 #if XSIMD_X86_INSTR_SET >= XSIMD_X86_AVX_VERSION
     (std::is_same_v<typename xsimd::simd_batch_traits<B>::value_type, float> && xsimd::simd_batch_traits<B>::size == 8u)
-#if XSIMD_X86_INSTR_SET >= XSIMD_X86_AVX512F_VERSION
+#if XSIMD_X86_INSTR_SET >= XSIMD_X86_AVX512_VERSION
     || (std::is_same_v<typename xsimd::simd_batch_traits<B>::value_type,
                        float> && xsimd::simd_batch_traits<B>::size == 16u)
 #endif
@@ -162,7 +162,7 @@ inline xsimd::batch<F, N> inv_sqrt_3(xsimd::batch<F, N> x)
 }
 
 // On various versions of AVX, we have intrinsics for fast rsqrt.
-#if XSIMD_X86_INSTR_SET >= XSIMD_X86_AVX512F_VERSION
+#if XSIMD_X86_INSTR_SET >= XSIMD_X86_AVX512_VERSION
 
 template <>
 inline xsimd::batch<float, 16> inv_sqrt_3(xsimd::batch<float, 16> x)
@@ -194,7 +194,7 @@ inline bool any_geq(xsimd::batch<F, N> a, xsimd::batch<F, N> b)
     return xsimd::any(a >= b);
 }
 
-#if XSIMD_X86_INSTR_SET >= XSIMD_X86_AVX512F_VERSION
+#if XSIMD_X86_INSTR_SET >= XSIMD_X86_AVX512_VERSION
 
 // We can optimise this in AVX512.
 template <>
