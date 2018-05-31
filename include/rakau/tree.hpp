@@ -32,6 +32,23 @@
 #include <utility>
 #include <vector>
 
+// We use the BitScanReverse(64) intrinsic in the implementation of clz(), but
+// only if we are *not* on clang-cl: there, we can use GCC-style intrinsics.
+// https://msdn.microsoft.com/en-us/library/fbxyd7zd.aspx
+#if !defined(__clang__) && defined(_MSC_VER)
+
+#include <intrin.h>
+
+#if _WIN64
+
+#pragma intrinsic(_BitScanReverse64)
+
+#endif
+
+#pragma intrinsic(_BitScanReverse)
+
+#endif
+
 #include <boost/iterator/permutation_iterator.hpp>
 #include <boost/numeric/conversion/cast.hpp>
 #include <boost/sort/spreadsort/spreadsort.hpp>
@@ -68,10 +85,20 @@ namespace rakau
 inline namespace detail
 {
 
+// Helper to ignore unused args in functions.
 template <typename... Args>
 inline void ignore_args(const Args &...)
 {
 }
+
+// Dependent false for static_assert in if constexpr.
+// http://en.cppreference.com/w/cpp/language/if#Constexpr_If
+template <typename T>
+struct dependent_false : std::false_type {
+};
+
+template <typename T>
+inline constexpr bool dependent_false_v = dependent_false<T>::value;
 
 class simple_timer
 {
@@ -167,6 +194,8 @@ inline unsigned clz(UInt n)
 {
     static_assert(std::is_integral_v<UInt> && std::is_unsigned_v<UInt>);
     assert(n);
+#if defined(__clang__) || defined(__GNUC__)
+    // Implementation using GCC's and clang's builtins.
     if constexpr (std::is_same_v<UInt, unsigned>) {
         return static_cast<unsigned>(__builtin_clz(n));
     } else if constexpr (std::is_same_v<UInt, unsigned long>) {
@@ -184,6 +213,35 @@ inline unsigned clz(UInt n)
             = static_cast<unsigned>(std::numeric_limits<unsigned>::digits - std::numeric_limits<UInt>::digits);
         return ret_u - extra_nbits;
     }
+#elif defined(_MSC_VER)
+    // Implementation using MSVC's intrinsics.
+    unsigned long index;
+    if constexpr (std::is_same_v<UInt, unsigned long long>) {
+#if _WIN64
+        // On 64-bit builds, we have a specific intrinsic for 64-bit ints.
+        _BitScanReverse64(&index, n);
+        return 63u - static_cast<unsigned>(index);
+#else
+        // On 32-bit builds, we split the computation in two parts.
+        if (n >> 32) {
+            // The high half of n contains something. The total bsr
+            // will be the bsr of the high half augmented by 32 bits.
+            _BitScanReverse(&index, static_cast<unsigned long>(n >> 32));
+            return static_cast<unsigned>(31u - index);
+        } else {
+            // The high half of n does not contain anything. Only
+            // the low half contributes to the bsr.
+            _BitScanReverse(&index, static_cast<unsigned long>(n));
+            return static_cast<unsigned>(63u - index);
+        }
+#endif
+    } else {
+        _BitScanReverse(&index, static_cast<unsigned long>(n));
+        return static_cast<unsigned>(std::numeric_limits<UInt>::digits) - 1u - static_cast<unsigned>(index);
+    }
+#else
+    static_assert(dependent_false_v<UInt>, "No clz() implementation is available on this platform.");
+#endif
 }
 
 // Small helper to get the tree level of a nodal code.
