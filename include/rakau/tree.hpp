@@ -71,13 +71,14 @@
 #endif
 
 #include <rakau/detail/libmorton/morton.h>
-#include <rakau/detail/simd.hpp>
 
 #if defined(__clang__) || defined(__GNUC__)
 
 #pragma GCC diagnostic pop
 
 #endif
+
+#include <rakau/detail/simd.hpp>
 
 namespace rakau
 {
