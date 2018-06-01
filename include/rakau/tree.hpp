@@ -51,7 +51,10 @@
 
 #include <boost/iterator/permutation_iterator.hpp>
 #include <boost/numeric/conversion/cast.hpp>
-#include <boost/sort/spreadsort/spreadsort.hpp>
+
+#include <tbb/blocked_range.h>
+#include <tbb/parallel_for.h>
+#include <tbb/parallel_sort.h>
 
 #include <xsimd/xsimd.hpp>
 
@@ -274,7 +277,7 @@ inline bool node_compare(UInt n1, UInt n2)
 }
 
 // Apply the indirect sort defined by the vector of indices 'perm'
-// into the 'values' vector. E.g., if in input
+// to the 'values' vector. E.g., if in input
 //
 // values = [a, c, d, b]
 // perm = [0, 3, 1, 2]
@@ -282,62 +285,19 @@ inline bool node_compare(UInt n1, UInt n2)
 // then in output
 //
 // values = [a, b, c, d]
-//
-// and perm is unchanged (but it will be subject to writes inside this function).
 template <typename VVec, typename PVec>
-inline void apply_isort(VVec &values, PVec &perm)
+inline void apply_isort(VVec &values, const PVec &perm)
 {
-    using std::swap;
-    using idx_t = typename PVec::value_type;
     assert(values.size() == perm.size());
-#if !defined(NDEBUG)
-    const auto orig_perm = perm;
-#endif
-    const auto size = perm.size();
-    for (decltype(perm.size()) i = 0; i < size; ++i) {
-        if (perm[i] >= (idx_t(1) << (std::numeric_limits<idx_t>::digits - 1))) {
-            // The value was swapped into the correct position
-            // in an earlier iteration. Flip back the permutation
-            // index and move to the next value.
-            perm[i] = static_cast<idx_t>(-perm[i] - 1u);
-            continue;
-        }
-        auto j = perm[i];
-        if (i != j) {
-            // The current value is not at its correct position. The idea
-            // is then to keep on swapping the current value with other
-            // values to the right, until it eventually falls into the correct
-            // place. The other values swapped in this process are all put
-            // into the correct position.
-            auto k = i;
-            while (true) {
-                // Move into the current position the correct value,
-                // swapping out the incorrect value.
-                swap(values[k], values[j]);
-                // The current position now contains the correct value.
-                // Mark the permutation index with the negative of the original index.
-                perm[k] = static_cast<idx_t>(idx_t(-1) - perm[k]);
-                if (perm[j] == i) {
-                    // The previously incorrect value was swapped into its correct
-                    // position (note that the original index of the incorrect value
-                    // is i). Mark the corresponding index and break out.
-                    perm[j] = static_cast<idx_t>(idx_t(-1) - perm[j]);
-                    break;
-                }
-                // The previously incorrect value was swapped into another
-                // incorrect position. Iterate the procedure.
-                k = j;
-                j = perm[k];
-            }
-            // NOTE: during the first iteration of the cycle above we certainly
-            // negated the i-th slot of perm at the first swapout of the incorrect
-            // value. Since at the next iteration we will move to i + 1, we won't
-            // have any chance to restore the original permutation index, so we do
-            // it here.
-            perm[i] = static_cast<idx_t>(-perm[i] - 1u);
-        }
-    }
-    assert(perm == orig_perm);
+    VVec values_new;
+    values_new.resize(values.size());
+    tbb::parallel_for(tbb::blocked_range<decltype(perm.size())>(0u, perm.size()),
+                      [&values_new, &values, &perm](const auto &range) {
+                          for (auto i = range.begin(); i != range.end(); ++i) {
+                              values_new[i] = values[perm[i]];
+                          }
+                      });
+    values = std::move(values_new);
 }
 
 // Little helper to verify that we can index into ElementIt
@@ -564,6 +524,28 @@ private:
         }
         return retval;
     }
+    // Small helper to determine m_ord_ind based on the indirect sorting vector m_isort.
+    // This is used when (re)building the tree.
+    void isort_to_ord_ind()
+    {
+        tbb::parallel_for(tbb::blocked_range<size_type>(0u, m_masses.size()), [this](const auto &range) {
+            for (auto i = range.begin(); i != range.end(); ++i) {
+                this->m_ord_ind[this->m_isort[i]] = i;
+            }
+        });
+    }
+    // Indirect code sort. The input range, which must point to values of type size_type,
+    // will be sorted so that, after sorting, [m_codes[*begin], m_codes[*(begin + 1)], ... ]
+    // yields the values in m_codes in ascending order. This is used when (re)building the tree.
+    template <typename It>
+    void indirect_code_sort(It begin, It end) const
+    {
+        static_assert(std::is_same_v<size_type, typename std::iterator_traits<It>::value_type>);
+        simple_timer st("indirect code sorting");
+        tbb::parallel_sort(begin, end, [codes_ptr = m_codes.data()](const size_type &idx1, const size_type &idx2) {
+            return codes_ptr[idx1] < codes_ptr[idx2];
+        });
+    }
 
 public:
     template <typename It>
@@ -600,53 +582,54 @@ public:
         m_codes.resize(boost::numeric_cast<decltype(m_codes.size())>(N));
         m_isort.resize(boost::numeric_cast<decltype(m_isort.size())>(N));
         m_ord_ind.resize(boost::numeric_cast<decltype(m_ord_ind.size())>(N));
-        // Temporary structure used in the encoding.
-        std::array<F, NDim> tmp_coord;
-        // The encoder object.
-        morton_encoder<NDim, UInt> me;
-        // Determine the particles' codes, and fill in the particles' data.
-        for (size_type i = 0; i < N; ++i, ++m_it) {
-            // Write the coords in the temp structure and in the data members.
-            for (std::size_t j = 0; j < NDim; ++j) {
-                tmp_coord[j] = *c_it[j];
-                m_coords[j][i] = *c_it[j];
+        {
+            // Do the Morton encoding.
+            simple_timer st("morton encoding");
+            // NOTE: in the parallel for, we need to index into the random-access iterator
+            // type It up to the value N. Make sure we can do that.
+            using it_diff_t = typename std::iterator_traits<It>::difference_type;
+            using it_udiff_t = std::make_unsigned_t<it_diff_t>;
+            if (m_masses.size() > static_cast<it_udiff_t>(std::numeric_limits<it_diff_t>::max())) {
+                throw std::overflow_error("the number of particles (" + std::to_string(m_masses.size())
+                                          + ") is too large, and it results in an overflow condition");
             }
-            // Store the mass.
-            m_masses[i] = *m_it;
-            // Compute and store the code.
-            m_codes[i] = me(disc_coords(tmp_coord.begin(), m_box_size).begin());
-            // Store the index for indirect sorting.
-            m_isort[i] = i;
-            // Increase the coordinates iterators.
-            for (auto &_ : c_it) {
-                ++_;
-            }
-        }
-        // Do the sorting of m_isort.
-        boost::sort::spreadsort::integer_sort(
-            m_isort.begin(), m_isort.end(),
-            [codes_ptr = m_codes.data()](const size_type &idx, unsigned offset) { return codes_ptr[idx] >> offset; },
-            [codes_ptr = m_codes.data()](const size_type &idx1, const size_type &idx2) {
-                return codes_ptr[idx1] < codes_ptr[idx2];
+            tbb::parallel_for(tbb::blocked_range<size_type>(0u, N), [this, &c_it, &m_it](const auto &range) {
+                // Temporary structure used in the encoding.
+                std::array<F, NDim> tmp_coord;
+                // The encoder object.
+                morton_encoder<NDim, UInt> me;
+                // Determine the particles' codes, and fill in the particles' data.
+                for (auto i = range.begin(); i != range.end(); ++i) {
+                    // Write the coords in the temp structure and in the data members.
+                    for (std::size_t j = 0; j < NDim; ++j) {
+                        tmp_coord[j] = *(c_it[j] + static_cast<it_diff_t>(i));
+                        this->m_coords[j][i] = *(c_it[j] + static_cast<it_diff_t>(i));
+                    }
+                    // Store the mass.
+                    this->m_masses[i] = *(m_it + static_cast<it_diff_t>(i));
+                    // Compute and store the code.
+                    this->m_codes[i] = me(this->disc_coords(tmp_coord.begin(), this->m_box_size).begin());
+                    // Store the index for indirect sorting.
+                    this->m_isort[i] = i;
+                }
             });
-        // Apply the permutation to the data members.
-        // NOTE: the indices range is [0, N - 1]. The apply_isort() function requires the maximum
-        // value in the indices vector (N - 1, in this case) to be less than 2**(nbits - 1), as it
-        // uses the highest bit internally for a special purpose.
-        if (N > (size_type(1) << (std::numeric_limits<size_type>::digits - 1))) {
-            throw std::overflow_error("the number of particles (" + std::to_string(N)
-                                      + ") is too large, and it results in an overflow condition");
         }
-        apply_isort(m_codes, m_isort);
-        // Make sure the sort worked as intended.
-        assert(std::is_sorted(m_codes.begin(), m_codes.end()));
-        for (std::size_t j = 0; j < NDim; ++j) {
-            apply_isort(m_coords[j], m_isort);
+        {
+            // Do the sorting of m_isort.
+            indirect_code_sort(m_isort.begin(), m_isort.end());
         }
-        apply_isort(m_masses, m_isort);
-        // Establish the indices for ordered iteration.
-        for (size_type i = 0; i < N; ++i) {
-            m_ord_ind[m_isort[i]] = i;
+        {
+            // Apply the permutation to the data members.
+            simple_timer st("permute");
+            apply_isort(m_codes, m_isort);
+            // Make sure the sort worked as intended.
+            assert(std::is_sorted(m_codes.begin(), m_codes.end()));
+            for (std::size_t j = 0; j < NDim; ++j) {
+                apply_isort(m_coords[j], m_isort);
+            }
+            apply_isort(m_masses, m_isort);
+            // Establish the indices for ordered iteration.
+            isort_to_ord_ind();
         }
         // Now let's proceed to the tree construction.
         build_tree();
@@ -1466,26 +1449,28 @@ private:
     {
         // Let's start with generating the new codes.
         const auto nparts = m_masses.size();
-        std::array<F, NDim> tmp_coord;
-        morton_encoder<NDim, UInt> me;
-        for (size_type i = 0; i < nparts; ++i) {
-            for (std::size_t j = 0; j != NDim; ++j) {
-                tmp_coord[j] = m_coords[j][i];
+        tbb::parallel_for(tbb::blocked_range<decltype(m_masses.size())>(0u, nparts), [this](const auto &range) {
+            std::array<F, NDim> tmp_coord;
+            morton_encoder<NDim, UInt> me;
+            for (auto i = range.begin(); i != range.end(); ++i) {
+                for (std::size_t j = 0; j != NDim; ++j) {
+                    tmp_coord[j] = this->m_coords[j][i];
+                }
+                this->m_codes[i] = me(disc_coords(tmp_coord.begin(), this->m_box_size).begin());
             }
-            m_codes[i] = me(disc_coords(tmp_coord.begin(), m_box_size).begin());
-        }
+        });
         // Like on construction, do the indirect sorting of the new codes.
         // Use a new temp vector for the new indirect sorting.
         v_type<size_type> v_ind;
         v_ind.resize(boost::numeric_cast<decltype(v_ind.size())>(nparts));
-        std::iota(v_ind.begin(), v_ind.end(), size_type(0));
+        // NOTE: this is just a iota.
+        tbb::parallel_for(tbb::blocked_range<decltype(m_masses.size())>(0u, nparts), [&v_ind](const auto &range) {
+            for (auto i = range.begin(); i != range.end(); ++i) {
+                v_ind[i] = i;
+            }
+        });
         // Do the sorting.
-        boost::sort::spreadsort::integer_sort(
-            v_ind.begin(), v_ind.end(),
-            [codes_ptr = m_codes.data()](const size_type &idx, unsigned offset) { return codes_ptr[idx] >> offset; },
-            [codes_ptr = m_codes.data()](const size_type &idx1, const size_type &idx2) {
-                return codes_ptr[idx1] < codes_ptr[idx2];
-            });
+        indirect_code_sort(v_ind.begin(), v_ind.end());
         // Apply the indirect sorting.
         // NOTE: upon tree construction, we already checked that the number of particles does not
         // overflow the limit imposed by apply_isort().
@@ -1499,9 +1484,7 @@ private:
         // Apply the new indirect sorting to the original one.
         apply_isort(m_isort, v_ind);
         // Establish the indices for ordered iteration (in the original order).
-        for (size_type i = 0; i < nparts; ++i) {
-            m_ord_ind[m_isort[i]] = i;
-        }
+        isort_to_ord_ind();
         // Re-construct the tree.
         m_tree.clear();
         build_tree();

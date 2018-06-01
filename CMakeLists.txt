@@ -70,8 +70,11 @@ include(RakauFindBoost)
 # Find xsimd.
 find_package(xsimd REQUIRED)
 
+# Find TBB.
+find_package(TBB REQUIRED)
+
 # Link the deps.
-target_link_libraries(rakau INTERFACE Boost::boost xsimd)
+target_link_libraries(rakau INTERFACE Boost::boost xsimd TBB::tbb)
 
 # Finish setting up the rakau interface target.
 target_include_directories(rakau INTERFACE
@@ -84,6 +87,7 @@ target_include_directories(rakau INTERFACE
 install(TARGETS rakau EXPORT rakau_export)
 install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/rakau-config.cmake" DESTINATION "lib/cmake/rakau")
 install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RakauFindBoost.cmake" DESTINATION "lib/cmake/rakau")
+install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/cmake/FindTBB.cmake" DESTINATION "lib/cmake/rakau")
 install(EXPORT rakau_export NAMESPACE rakau:: DESTINATION lib/cmake/rakau)
 # Take care of versioning.
 include(CMakePackageConfigHelpers)
