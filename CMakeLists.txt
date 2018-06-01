@@ -16,6 +16,7 @@ endif()
 
 # The build options.
 option(RAKAU_BUILD_TESTS "Build unit tests." OFF)
+option(RAKAU_BUILD_BENCHMARKS "Build benchmarks." OFF)
 
 include(YACMACompilerLinkerSettings)
 include(CheckCXXCompilerFlag)
@@ -96,4 +97,8 @@ install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/include/rakau" DESTINATION includ
 if(RAKAU_BUILD_TESTS)
     enable_testing()
     add_subdirectory(test)
+endif()
+
+if(RAKAU_BUILD_BENCHMARKS)
+    add_subdirectory(benchmark)
 endif()
