@@ -471,27 +471,33 @@ private:
     void build_tree_properties()
     {
         simple_timer st("tree properties");
-        for (auto &tup : m_tree) {
-            // Get the indices and the size for the current node.
-            const auto begin = get<1>(tup)[0];
-            const auto end = get<1>(tup)[1];
-            assert(end > begin);
-            const auto size = end - begin;
-            // Compute the total mass.
-            const auto tot_mass = std::accumulate(m_masses.data() + begin, m_masses.data() + end, F(0));
-            // Compute the COM for the coordinates.
-            for (std::size_t j = 0; j < NDim; ++j) {
-                F acc(0);
-                auto m_ptr = m_masses.data() + begin;
-                auto c_ptr = m_coords[j].data() + begin;
-                for (std::remove_const_t<decltype(size)> i = 0; i < size; ++i) {
-                    acc += m_ptr[i] * c_ptr[i];
+        // NOTE: we check in build_tree() that m_tree.size() can be safely cast
+        // to size_type.
+        const auto tree_size = static_cast<size_type>(m_tree.size());
+        tbb::parallel_for(tbb::blocked_range<size_type>(0u, tree_size), [this](const auto &range) {
+            for (auto i = range.begin(); i != range.end(); ++i) {
+                auto &tup = this->m_tree[i];
+                // Get the indices and the size for the current node.
+                const auto begin = get<1>(tup)[0];
+                const auto end = get<1>(tup)[1];
+                assert(end > begin);
+                const auto size = end - begin;
+                // Compute the total mass.
+                const auto tot_mass = std::accumulate(this->m_masses.data() + begin, this->m_masses.data() + end, F(0));
+                // Compute the COM for the coordinates.
+                for (std::size_t j = 0; j < NDim; ++j) {
+                    F acc(0);
+                    auto m_ptr = this->m_masses.data() + begin;
+                    auto c_ptr = this->m_coords[j].data() + begin;
+                    for (std::remove_const_t<decltype(size)> i = 0; i < size; ++i) {
+                        acc += m_ptr[i] * c_ptr[i];
+                    }
+                    get<3>(tup)[j] = acc / tot_mass;
                 }
-                get<3>(tup)[j] = acc / tot_mass;
+                // Store the total mass.
+                get<2>(tup) = tot_mass;
             }
-            // Store the total mass.
-            get<2>(tup) = tot_mass;
-        }
+        });
     }
     // Function to discretise the input NDim floating-point coordinates starting at 'it'
     // into a box of a given size box_size.
