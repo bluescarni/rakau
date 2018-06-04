@@ -12,7 +12,7 @@
 
 #include <boost/math/constants/constants.hpp>
 
-static constexpr unsigned nparts = 1'000'000;
+static constexpr unsigned nparts = 50'000'000;
 static constexpr float bsize = 10.f;
 
 static std::mt19937 rng;
@@ -25,7 +25,8 @@ inline std::vector<F> get_uniform_particles(std::size_t n, F size)
     std::uniform_real_distribution<F> mdist(F(0), F(1));
     std::generate(retval.begin(), retval.begin() + n, [&mdist]() { return mdist(rng); });
     // Positions.
-    std::uniform_real_distribution<F> rdist(-size / F(2) /*+ size * F(0.01)*/, size / F(2) /*- size * F(0.01)*/);
+    const auto size_limit = size / F(2) - F(0.01);
+    std::uniform_real_distribution<F> rdist(-size_limit, size_limit);
     std::generate(retval.begin() + n, retval.end(), [&rdist]() { return rdist(rng); });
     return retval;
 }
@@ -55,8 +56,9 @@ inline std::vector<F> get_plummer_sphere(std::size_t n, F size)
         const F x = r * std::cos(lon) * std::sin(colat);
         const F y = r * std::sin(lon) * std::sin(colat);
         const F z = r * std::cos(colat);
-        if (x >= -size / F(2) && x < size / F(2) && y >= -size / F(2) && y < size / F(2) && z >= -size / F(2)
-            && z < size / F(2)) {
+        const auto size_limit = size / F(2) - F(0.01);
+        if (x >= -size_limit && x < size_limit && y >= -size_limit && y < size_limit && z >= -size_limit
+            && z < size_limit) {
             // Assign coordinates only if we fall into the domain. Otherwise, try again.
             *(retval.begin() + n + i) = x;
             *(retval.begin() + 2 * n + i) = y;
