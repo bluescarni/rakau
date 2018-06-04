@@ -333,6 +333,8 @@ public:
     using size_type = typename v_type<F>::size_type;
 
 private:
+    // The internal tree type.
+    using tree_type = v_type<std::tuple<UInt, std::array<size_type, 3>, F, std::array<F, NDim>>>;
     template <unsigned ParentLevel, typename CTuple, typename CIt>
     void build_tree_impl(std::deque<size_type> &children_count, CTuple &ct, UInt parent_code, CIt begin, CIt end)
     {
@@ -343,13 +345,14 @@ private:
             // of all the particles belonging to the parent node.
             // parent_code is the nodal code of the parent node.
             //
-            // We want to iterate over the current children nodes
+            // We want to iterate over the children nodes at the current level
             // (of which there might be up to 2**NDim). A child exists if
             // it contains at least 1 particle. If it contains > m_max_leaf_n particles,
             // it is an internal (i.e., non-leaf) node and we go deeper. If it contains <= m_max_leaf_n
             // particles, it is a leaf node, we stop going deeper and move to its sibling.
             //
-            // This is the node prefix: it is the nodal code of the parent without the most significant bit.
+            // This is the node prefix: it is the nodal code of the parent with the most significant bit
+            // switched off.
             const auto node_prefix = parent_code - (UInt(1) << (ParentLevel * NDim));
             for (UInt i = 0; i < (UInt(1) << NDim); ++i) {
                 // Compute the first and last possible codes for the current child node.
@@ -1581,7 +1584,7 @@ private:
     // and so on.
     v_type<size_type> m_ord_ind;
     // The tree structure.
-    v_type<std::tuple<UInt, std::array<size_type, 3>, F, std::array<F, NDim>>> m_tree;
+    tree_type m_tree;
 };
 
 template <typename UInt, typename F>
