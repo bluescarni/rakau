@@ -334,8 +334,11 @@ public:
     using size_type = typename v_type<F>::size_type;
 
 private:
+    // The internal node type.
+    using node_type = std::tuple<UInt, std::array<size_type, 3>, F, std::array<F, NDim>>;
     // The internal tree type.
-    using tree_type = v_type<std::tuple<UInt, std::array<size_type, 3>, F, std::array<F, NDim>>>;
+    using tree_type = v_type<node_type>;
+    // Serial implementation of tree building.
     template <unsigned ParentLevel, typename CTuple, typename CIt>
     void build_tree_impl(std::deque<size_type> &children_count, CTuple &ct, UInt parent_code, CIt begin, CIt end)
     {
