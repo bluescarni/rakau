@@ -11,6 +11,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <bitset>
 #include <cassert>
 #if defined(RAKAU_WITH_TIMER)
@@ -53,6 +54,7 @@
 #include <boost/numeric/conversion/cast.hpp>
 
 #include <tbb/blocked_range.h>
+#include <tbb/enumerable_thread_specific.h>
 #include <tbb/parallel_for.h>
 #include <tbb/parallel_sort.h>
 #include <tbb/task_group.h>
@@ -131,6 +133,31 @@ private:
 #else
     simple_timer(const char *) {}
 #endif
+};
+
+// A simple spinlock built on top of std::atomic_flag. See for reference:
+// http://en.cppreference.com/w/cpp/atomic/atomic_flag
+// http://stackoverflow.com/questions/26583433/c11-implementation-of-spinlock-using-atomic
+// The memory order specification is to squeeze out some extra performance with respect to the
+// default behaviour of atomic types.
+struct atomic_lock_guard {
+    explicit atomic_lock_guard(std::atomic_flag &af) : m_af(af)
+    {
+        while (m_af.test_and_set(std::memory_order_acquire)) {
+        }
+    }
+    ~atomic_lock_guard()
+    {
+        m_af.clear(std::memory_order_release);
+    }
+    // Delete explicitly all other ctors/assignment operators.
+    atomic_lock_guard() = delete;
+    atomic_lock_guard(const atomic_lock_guard &) = delete;
+    atomic_lock_guard(atomic_lock_guard &&) = delete;
+    atomic_lock_guard &operator=(const atomic_lock_guard &) = delete;
+    atomic_lock_guard &operator=(atomic_lock_guard &&) = delete;
+    // Data members.
+    std::atomic_flag &m_af;
 };
 
 template <std::size_t NDim, typename Out>
@@ -546,6 +573,120 @@ private:
             subtree.shrink_to_fit();
         }
     }
+    template <unsigned ParentLevel, typename CIt, typename Mutex, typename Buffers>
+    void build_tree_par_impl2(UInt parent_code, CIt begin, CIt end, Mutex &mut, Buffers &buffers)
+    {
+        if constexpr (ParentLevel < cbits) {
+            // We should never be invoking this on an empty range.
+            assert(begin != end);
+            // On entry, the range [begin, end) contains the codes
+            // of all the particles belonging to the parent node.
+            // parent_code is the nodal code of the parent node.
+            //
+            // We want to iterate over the children nodes at the current level
+            // (of which there might be up to 2**NDim). A child exists if
+            // it contains at least 1 particle. If it contains > m_max_leaf_n particles,
+            // it is an internal (i.e., non-leaf) node and we go deeper. If it contains <= m_max_leaf_n
+            // particles, it is a leaf node, we stop going deeper and move to its sibling.
+            //
+            // This is the node prefix: it is the nodal code of the parent with the most significant bit
+            // switched off.
+            // NOTE: overflow is prevented by the if constexpr above.
+            const auto node_prefix = parent_code - (UInt(1) << (ParentLevel * NDim));
+            tbb::task_group tg;
+            // NOTE: overflow is prevented in get_cbits().
+            for (UInt i = 0; i < (UInt(1) << NDim); ++i) {
+                auto runner = [node_prefix, i, begin, end, parent_code, this, &mut, &buffers] {
+                    auto &local_buffer = buffers.local();
+                    // Compute the first and last possible codes for the current child node.
+                    // They both start with (from MSB to LSB):
+                    // - current node prefix,
+                    // - i.
+                    // The first possible code is then right-padded with all zeroes, the last possible
+                    // code is right-padded with ones.
+                    const auto p_first = static_cast<UInt>((node_prefix << ((cbits - ParentLevel) * NDim))
+                                                           + (i << ((cbits - ParentLevel - 1u) * NDim)));
+                    const auto p_last
+                        = static_cast<UInt>(p_first + ((UInt(1) << ((cbits - ParentLevel - 1u) * NDim)) - 1u));
+                    // TODO fix.
+                    // Verify that begin contains the first value equal to or greater than p_first.
+                    const auto node_begin = std::lower_bound(begin, end, p_first);
+                    // Determine the end of the child node: node_end will point to the first value greater
+                    // than the largest possible code for the current child node.
+                    const auto node_end = std::upper_bound(node_begin, end, p_last);
+                    // Compute the number of particles.
+                    const auto npart = std::distance(node_begin, node_end);
+                    assert(npart >= 0);
+                    if (npart) {
+                        // npart > 0, we have a node. Compute its nodal code by moving up the
+                        // parent nodal code by NDim and adding the current child node index i.
+                        const auto cur_code = static_cast<UInt>((parent_code << NDim) + i);
+                        // Add the node to the tree.
+                        local_buffer.emplace_back(
+                            cur_code,
+                            std::array<size_type, 3>{static_cast<size_type>(std::distance(m_codes.begin(), node_begin)),
+                                                     static_cast<size_type>(std::distance(m_codes.begin(), node_end)),
+                                                     // NOTE: the children count gets inited to zero. It
+                                                     // will be filled in later.
+                                                     size_type(0)},
+                            // NOTE: make sure mass and coords are initialised in a known state (i.e.,
+                            // zero for C++ floating-point).
+                            0, std::array<F, NDim>{});
+                        if (local_buffer.size() == 100000u && false) {
+                            {
+                                atomic_lock_guard lock(mut);
+                                const auto old_size = this->m_tree.size();
+                                const auto cap = this->m_tree.capacity();
+                                if (cap < old_size + 100000u) {
+                                    this->m_tree.reserve(cap * 2u);
+                                }
+                                this->m_tree.resize(this->m_tree.size() + 100000u);
+                                std::move(local_buffer.begin(), local_buffer.end(), this->m_tree.begin() + old_size);
+                            }
+                            local_buffer.clear();
+                        }
+                        if (static_cast<std::make_unsigned_t<decltype(std::distance(node_begin, node_end))>>(npart)
+                            > m_max_leaf_n) {
+                            // The node is an internal one, go deeper but only if we are not at the last
+                            // possible level.
+                            if constexpr (ParentLevel + 1u < cbits) {
+                                build_tree_par_impl2<ParentLevel + 1u>(cur_code, node_begin, node_end, mut, buffers);
+                            }
+                        }
+                    }
+                };
+                tg.run(runner);
+            }
+            tg.wait();
+        }
+    }
+    void build_tree_par2()
+    {
+        simple_timer st("parallel node building");
+        // Make sure we always have an empty tree when invoking this method.
+        assert(m_tree.empty());
+        // Exit early if there are no particles.
+        if (!m_codes.size()) {
+            return;
+        }
+        // Add the root node.
+        m_tree.emplace_back(1,
+                            std::array<size_type, 3>{size_type(0), size_type(m_codes.size()),
+                                                     // NOTE: the children count gets inited to zero. It
+                                                     // will be filled in later.
+                                                     size_type(0)},
+                            // NOTE: make sure mass and COM coords are initialised in a known state (i.e.,
+                            // zero for C++ floating-point).
+                            0, std::array<F, NDim>{});
+        std::atomic_flag mut = ATOMIC_FLAG_INIT;
+        tbb::enumerable_thread_specific<tree_type> buffers;
+        build_tree_par_impl2<0>(1, m_codes.begin(), m_codes.end(), mut, buffers);
+        for (auto &b : buffers) {
+            tbb::parallel_sort(b.begin(), b.end(), [](const auto &n1, const auto &n2) {
+                return node_compare<NDim>(get<0>(n1), get<0>(n2));
+            });
+        }
+    }
     void build_tree()
     {
         simple_timer st("node building");
@@ -775,7 +916,8 @@ public:
             isort_to_ord_ind();
         }
         // Now let's proceed to the tree construction.
-        build_tree();
+        build_tree_par2();
+        std::exit(0);
         // Now move to the computation of the COM of the nodes.
         build_tree_properties();
         // NOTE: whenever we need ordered iteration on the particles' data,
