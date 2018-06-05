@@ -642,11 +642,23 @@ private:
                             0, std::array<F, NDim>{});
         tbb::enumerable_thread_specific<tree_type> buffers;
         build_tree_par_impl2<0>(1, m_codes.begin(), m_codes.end(), buffers);
-        for (auto &b : buffers) {
-            tbb::parallel_sort(b.begin(), b.end(), [](const auto &n1, const auto &n2) {
-                return node_compare<NDim>(get<0>(n1), get<0>(n2));
-            });
+        v_type<size_type> cum_sizes;
+        cum_sizes.emplace_back(0);
+        for (const auto &b : buffers) {
+            // TODO checks.
+            cum_sizes.emplace_back(cum_sizes.back() + b.size());
         }
+        m_tree.resize(cum_sizes.back());
+        tbb::parallel_for(tbb::blocked_range<decltype(cum_sizes.size())>(0u, cum_sizes.size() - 1u),
+                          [this, &cum_sizes, &buffers](const auto &range) {
+                              for (auto i = range.begin(); i != range.end(); ++i) {
+                                  // TODO checks?
+                                  std::move((buffers.begin() + i)->begin(), (buffers.begin() + i)->end(),
+                                            m_tree.begin() + cum_sizes[i]);
+                              }
+                          });
+        tbb::parallel_sort(m_tree.begin(), m_tree.end(),
+                           [](const auto &n1, const auto &n2) { return node_compare<NDim>(get<0>(n1), get<0>(n2)); });
     }
     void build_tree()
     {
