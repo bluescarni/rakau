@@ -11,7 +11,6 @@
 
 #include <algorithm>
 #include <array>
-#include <atomic>
 #include <bitset>
 #include <cassert>
 #if defined(RAKAU_WITH_TIMER)
@@ -133,31 +132,6 @@ private:
 #else
     simple_timer(const char *) {}
 #endif
-};
-
-// A simple spinlock built on top of std::atomic_flag. See for reference:
-// http://en.cppreference.com/w/cpp/atomic/atomic_flag
-// http://stackoverflow.com/questions/26583433/c11-implementation-of-spinlock-using-atomic
-// The memory order specification is to squeeze out some extra performance with respect to the
-// default behaviour of atomic types.
-struct atomic_lock_guard {
-    explicit atomic_lock_guard(std::atomic_flag &af) : m_af(af)
-    {
-        while (m_af.test_and_set(std::memory_order_acquire)) {
-        }
-    }
-    ~atomic_lock_guard()
-    {
-        m_af.clear(std::memory_order_release);
-    }
-    // Delete explicitly all other ctors/assignment operators.
-    atomic_lock_guard() = delete;
-    atomic_lock_guard(const atomic_lock_guard &) = delete;
-    atomic_lock_guard(atomic_lock_guard &&) = delete;
-    atomic_lock_guard &operator=(const atomic_lock_guard &) = delete;
-    atomic_lock_guard &operator=(atomic_lock_guard &&) = delete;
-    // Data members.
-    std::atomic_flag &m_af;
 };
 
 template <std::size_t NDim, typename Out>
@@ -573,8 +547,8 @@ private:
             subtree.shrink_to_fit();
         }
     }
-    template <unsigned ParentLevel, typename CIt, typename Mutex, typename Buffers>
-    void build_tree_par_impl2(UInt parent_code, CIt begin, CIt end, Mutex &mut, Buffers &buffers)
+    template <unsigned ParentLevel, typename CIt, typename Buffers>
+    void build_tree_par_impl2(UInt parent_code, CIt begin, CIt end, Buffers &buffers)
     {
         if constexpr (ParentLevel < cbits) {
             // We should never be invoking this on an empty range.
@@ -596,7 +570,8 @@ private:
             tbb::task_group tg;
             // NOTE: overflow is prevented in get_cbits().
             for (UInt i = 0; i < (UInt(1) << NDim); ++i) {
-                auto runner = [node_prefix, i, begin, end, parent_code, this, &mut, &buffers] {
+                auto runner = [node_prefix, i, begin, end, parent_code, this, &buffers] {
+                    // Get a reference to the local buffer.
                     auto &local_buffer = buffers.local();
                     // Compute the first and last possible codes for the current child node.
                     // They both start with (from MSB to LSB):
@@ -608,8 +583,8 @@ private:
                                                            + (i << ((cbits - ParentLevel - 1u) * NDim)));
                     const auto p_last
                         = static_cast<UInt>(p_first + ((UInt(1) << ((cbits - ParentLevel - 1u) * NDim)) - 1u));
-                    // TODO fix.
-                    // Verify that begin contains the first value equal to or greater than p_first.
+                    // Compute the starting point of the node: node_begin will point to the first value equal to
+                    // or greater than p_first.
                     const auto node_begin = std::lower_bound(begin, end, p_first);
                     // Determine the end of the child node: node_end will point to the first value greater
                     // than the largest possible code for the current child node.
@@ -621,7 +596,7 @@ private:
                         // npart > 0, we have a node. Compute its nodal code by moving up the
                         // parent nodal code by NDim and adding the current child node index i.
                         const auto cur_code = static_cast<UInt>((parent_code << NDim) + i);
-                        // Add the node to the tree.
+                        // Add the node to the local tree.
                         local_buffer.emplace_back(
                             cur_code,
                             std::array<size_type, 3>{static_cast<size_type>(std::distance(m_codes.begin(), node_begin)),
@@ -632,25 +607,12 @@ private:
                             // NOTE: make sure mass and coords are initialised in a known state (i.e.,
                             // zero for C++ floating-point).
                             0, std::array<F, NDim>{});
-                        if (local_buffer.size() == 100000u && false) {
-                            {
-                                atomic_lock_guard lock(mut);
-                                const auto old_size = this->m_tree.size();
-                                const auto cap = this->m_tree.capacity();
-                                if (cap < old_size + 100000u) {
-                                    this->m_tree.reserve(cap * 2u);
-                                }
-                                this->m_tree.resize(this->m_tree.size() + 100000u);
-                                std::move(local_buffer.begin(), local_buffer.end(), this->m_tree.begin() + old_size);
-                            }
-                            local_buffer.clear();
-                        }
                         if (static_cast<std::make_unsigned_t<decltype(std::distance(node_begin, node_end))>>(npart)
                             > m_max_leaf_n) {
                             // The node is an internal one, go deeper but only if we are not at the last
                             // possible level.
                             if constexpr (ParentLevel + 1u < cbits) {
-                                build_tree_par_impl2<ParentLevel + 1u>(cur_code, node_begin, node_end, mut, buffers);
+                                build_tree_par_impl2<ParentLevel + 1u>(cur_code, node_begin, node_end, buffers);
                             }
                         }
                     }
@@ -678,9 +640,8 @@ private:
                             // NOTE: make sure mass and COM coords are initialised in a known state (i.e.,
                             // zero for C++ floating-point).
                             0, std::array<F, NDim>{});
-        std::atomic_flag mut = ATOMIC_FLAG_INIT;
         tbb::enumerable_thread_specific<tree_type> buffers;
-        build_tree_par_impl2<0>(1, m_codes.begin(), m_codes.end(), mut, buffers);
+        build_tree_par_impl2<0>(1, m_codes.begin(), m_codes.end(), buffers);
         for (auto &b : buffers) {
             tbb::parallel_sort(b.begin(), b.end(), [](const auto &n1, const auto &n2) {
                 return node_compare<NDim>(get<0>(n1), get<0>(n2));

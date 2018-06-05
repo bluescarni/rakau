@@ -35,6 +35,7 @@ inline std::vector<F> get_uniform_particles(std::size_t n, F size)
 template <typename F>
 inline std::vector<F> get_plummer_sphere(std::size_t n, F size)
 {
+    rakau::simple_timer st("plummer init");
     std::vector<F> retval(n * 4u);
     // Uniform [0, 1) dist.
     std::uniform_real_distribution<F> udist(F(0), F(1));
