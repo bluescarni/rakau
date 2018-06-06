@@ -343,6 +343,7 @@ private:
     template <unsigned ParentLevel, typename CTuple, typename CIt>
     void build_tree_impl(std::deque<size_type> &children_count, CTuple &ct, UInt parent_code, CIt begin, CIt end)
     {
+        // TODO more checks, like in the par implementation.
         if constexpr (ParentLevel < cbits) {
             // We should never be invoking this on an empty range.
             assert(begin != end);
@@ -390,7 +391,7 @@ private:
                                                  // NOTE: the children count gets inited to zero. It
                                                  // will be filled in later.
                                                  size_type(0)},
-                        // NOTE: make sure mass and coords are initialised in a known state (i.e.,
+                        // NOTE: make sure mass and COM coords are initialised in a known state (i.e.,
                         // zero for C++ floating-point).
                         0, std::array<F, NDim>{});
                     // Add a counter to the deque. The newly-added node has zero children initially.
@@ -475,7 +476,7 @@ private:
                                                      // NOTE: the children count gets inited to zero. It
                                                      // will be filled in later.
                                                      size_type(0)},
-                            // NOTE: make sure mass and coords are initialised in a known state (i.e.,
+                            // NOTE: make sure mass and COM coords are initialised in a known state (i.e.,
                             // zero for C++ floating-point).
                             0, std::array<F, NDim>{});
                         if (static_cast<std::make_unsigned_t<decltype(std::distance(node_begin, it_end))>>(npart)
@@ -604,7 +605,7 @@ private:
                                                      // NOTE: the children count gets inited to zero. It
                                                      // will be filled in later.
                                                      size_type(0)},
-                            // NOTE: make sure mass and coords are initialised in a known state (i.e.,
+                            // NOTE: make sure mass and COM coords are initialised in a known state (i.e.,
                             // zero for C++ floating-point).
                             0, std::array<F, NDim>{});
                         if (static_cast<std::make_unsigned_t<decltype(std::distance(node_begin, node_end))>>(npart)
