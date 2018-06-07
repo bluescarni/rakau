@@ -548,8 +548,8 @@ private:
             subtree.shrink_to_fit();
         }
     }
-    template <unsigned ParentLevel, typename CIt, typename Buffers>
-    void build_tree_par_impl2(UInt parent_code, CIt begin, CIt end, Buffers &buffers)
+    template <unsigned ParentLevel, typename CIt, typename TreeBuffers>
+    void build_tree_par_impl2(UInt parent_code, CIt begin, CIt end, TreeBuffers &buffers)
     {
         if constexpr (ParentLevel < cbits) {
             // We should never be invoking this on an empty range.
@@ -641,20 +641,20 @@ private:
                             // NOTE: make sure mass and COM coords are initialised in a known state (i.e.,
                             // zero for C++ floating-point).
                             0, std::array<F, NDim>{});
-        tbb::enumerable_thread_specific<tree_type> buffers;
-        build_tree_par_impl2<0>(1, m_codes.begin(), m_codes.end(), buffers);
+        tbb::enumerable_thread_specific<tree_type> tree_buffers;
+        build_tree_par_impl2<0>(1, m_codes.begin(), m_codes.end(), tree_buffers);
         v_type<size_type> cum_sizes;
         cum_sizes.emplace_back(0);
-        for (const auto &b : buffers) {
+        for (const auto &b : tree_buffers) {
             // TODO checks.
             cum_sizes.emplace_back(cum_sizes.back() + b.size());
         }
         m_tree.resize(cum_sizes.back());
         tbb::parallel_for(tbb::blocked_range<decltype(cum_sizes.size())>(0u, cum_sizes.size() - 1u),
-                          [this, &cum_sizes, &buffers](const auto &range) {
+                          [this, &cum_sizes, &tree_buffers](const auto &range) {
                               for (auto i = range.begin(); i != range.end(); ++i) {
                                   // TODO checks?
-                                  std::move((buffers.begin() + i)->begin(), (buffers.begin() + i)->end(),
+                                  std::move((tree_buffers.begin() + i)->begin(), (tree_buffers.begin() + i)->end(),
                                             m_tree.begin() + cum_sizes[i]);
                               }
                           });
