@@ -12,7 +12,7 @@
 
 #include <boost/math/constants/constants.hpp>
 
-static constexpr unsigned nparts = 10'000'000;
+static constexpr unsigned nparts = 1'000'000;
 static constexpr float bsize = 10.f;
 
 static std::mt19937 rng;
