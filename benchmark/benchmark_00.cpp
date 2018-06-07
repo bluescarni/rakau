@@ -12,7 +12,7 @@
 
 #include <boost/math/constants/constants.hpp>
 
-static constexpr unsigned nparts = 50'000'000;
+static constexpr unsigned nparts = 10'000'000;
 static constexpr float bsize = 10.f;
 
 static std::mt19937 rng;
@@ -20,6 +20,7 @@ static std::mt19937 rng;
 template <std::size_t D, typename F>
 inline std::vector<F> get_uniform_particles(std::size_t n, F size)
 {
+    rakau::simple_timer st("uniform init");
     std::vector<F> retval(n * (D + 1u));
     // Mass.
     std::uniform_real_distribution<F> mdist(F(0), F(1));
