@@ -11,6 +11,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <bitset>
 #include <cassert>
 #if defined(RAKAU_WITH_TIMER)
@@ -596,7 +597,7 @@ private:
                         // npart > 0, we have a node. Compute its nodal code by moving up the
                         // parent nodal code by NDim and adding the current child node index i.
                         const auto cur_code = static_cast<UInt>((parent_code << NDim) + i);
-                        // Add the node to the local tree.
+                        // Add the node to the local buffer.
                         local_buffer.emplace_back(
                             cur_code,
                             std::array<size_type, 3>{static_cast<size_type>(std::distance(m_codes.begin(), node_begin)),
