@@ -28,6 +28,7 @@
 #include <numeric>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <tuple>
 #include <type_traits>
 #include <utility>
@@ -55,7 +56,6 @@
 
 #include <tbb/blocked_range.h>
 #include <tbb/concurrent_vector.h>
-#include <tbb/enumerable_thread_specific.h>
 #include <tbb/parallel_for.h>
 #include <tbb/parallel_sort.h>
 #include <tbb/task_group.h>
@@ -182,20 +182,6 @@ constexpr unsigned get_cbits()
 template <typename UInt, std::size_t NDim>
 inline constexpr unsigned cbits_v = get_cbits<UInt, NDim>();
 
-template <typename T, std::size_t... N>
-inline void increase_children_count(T &tup, const std::index_sequence<N...> &)
-{
-    auto inc = [](auto &n) {
-        if (n == std::numeric_limits<std::remove_reference_t<decltype(n)>>::max()) {
-            throw std::overflow_error(
-                "overflow error when incrementing the children count during the construction of a tree");
-        }
-        ++n;
-    };
-    ignore_args(inc);
-    (..., inc(get<N>(tup)));
-}
-
 // clz wrapper. n must be a nonzero unsigned integral.
 template <typename UInt>
 inline unsigned clz(UInt n)
@@ -316,6 +302,27 @@ inline bool check_perm_it_range(Index max_index)
     return max_index <= static_cast<udiff_t>(std::numeric_limits<diff_t>::max());
 }
 
+// Small helpers for the checked in-place addition of (atomic) unsigned integrals.
+template <typename T>
+inline void checked_uinc(T &out, T add)
+{
+    static_assert(std::is_integral_v<T> && std::is_unsigned_v<T>);
+    if (out > std::numeric_limits<T>::max() - add) {
+        throw std::overflow_error("overflow in the addition of two unsigned integral values");
+    }
+    out += add;
+}
+
+template <typename T>
+inline void checked_uinc(std::atomic<T> &out, T add)
+{
+    static_assert(std::is_integral_v<T> && std::is_unsigned_v<T>);
+    const auto prev = out.fetch_add(add);
+    if (prev > std::numeric_limits<T>::max() - add) {
+        throw std::overflow_error("overflow in the addition of two unsigned integral values");
+    }
+}
+
 } // namespace detail
 
 template <typename UInt, typename F, std::size_t NDim>
@@ -341,12 +348,11 @@ private:
     using node_type = std::tuple<UInt, std::array<size_type, 3>, F, std::array<F, NDim>>;
     // The internal tree type.
     using tree_type = v_type<node_type>;
-    // Serial implementation of tree building.
-    template <unsigned ParentLevel, typename CTuple, typename CIt>
-    void build_tree_impl(std::deque<size_type> &children_count, CTuple &ct, UInt parent_code, CIt begin, CIt end)
+    template <unsigned ParentLevel, typename Out, typename CIt>
+    size_type build_tree_ser_impl(Out &tree, UInt parent_code, CIt begin, CIt end)
     {
-        // TODO more checks, like in the par implementation.
         if constexpr (ParentLevel < cbits) {
+            size_type retval = 0;
             // We should never be invoking this on an empty range.
             assert(begin != end);
             // On entry, the range [begin, end) contains the codes
@@ -361,7 +367,9 @@ private:
             //
             // This is the node prefix: it is the nodal code of the parent with the most significant bit
             // switched off.
+            // NOTE: overflow is prevented by the if constexpr above.
             const auto node_prefix = parent_code - (UInt(1) << (ParentLevel * NDim));
+            // NOTE: overflow is prevented in get_cbits().
             for (UInt i = 0; i < (UInt(1) << NDim); ++i) {
                 // Compute the first and last possible codes for the current child node.
                 // They both start with (from MSB to LSB):
@@ -373,22 +381,23 @@ private:
                                                        + (i << ((cbits - ParentLevel - 1u) * NDim)));
                 const auto p_last
                     = static_cast<UInt>(p_first + ((UInt(1) << ((cbits - ParentLevel - 1u) * NDim)) - 1u));
-                // Verify that begin contains the first value equal to or greater than p_first.
-                assert(begin == std::lower_bound(begin, end, p_first));
+                // Compute the starting point of the node: it_start will point to the first value equal to
+                // or greater than p_first.
+                const auto it_start = std::lower_bound(begin, end, p_first);
                 // Determine the end of the child node: it_end will point to the first value greater
                 // than the largest possible code for the current child node.
-                const auto it_end = std::upper_bound(begin, end, p_last);
+                const auto it_end = std::upper_bound(it_start, end, p_last);
                 // Compute the number of particles.
-                const auto npart = std::distance(begin, it_end);
+                const auto npart = std::distance(it_start, it_end);
                 assert(npart >= 0);
                 if (npart) {
                     // npart > 0, we have a node. Compute its nodal code by moving up the
                     // parent nodal code by NDim and adding the current child node index i.
                     const auto cur_code = static_cast<UInt>((parent_code << NDim) + i);
                     // Add the node to the tree.
-                    m_tree.emplace_back(
+                    tree.emplace_back(
                         cur_code,
-                        std::array<size_type, 3>{static_cast<size_type>(std::distance(m_codes.begin(), begin)),
+                        std::array<size_type, 3>{static_cast<size_type>(std::distance(m_codes.begin(), it_start)),
                                                  static_cast<size_type>(std::distance(m_codes.begin(), it_end)),
                                                  // NOTE: the children count gets inited to zero. It
                                                  // will be filled in later.
@@ -396,301 +405,94 @@ private:
                         // NOTE: make sure mass and COM coords are initialised in a known state (i.e.,
                         // zero for C++ floating-point).
                         0, std::array<F, NDim>{});
-                    // Add a counter to the deque. The newly-added node has zero children initially.
-                    children_count.emplace_back(0);
-                    // Increase the children count of the parents.
-                    increase_children_count(ct, std::make_index_sequence<std::tuple_size_v<CTuple>>{});
-                    if (static_cast<std::make_unsigned_t<decltype(std::distance(begin, it_end))>>(npart)
+                    // Store the tree size before possibly adding more nodes.
+                    const auto tree_size = tree.size();
+                    if (static_cast<std::make_unsigned_t<decltype(std::distance(it_start, it_end))>>(npart)
                         > m_max_leaf_n) {
-                        // Add a new element to the children counter tuple, pointing to
-                        // the value we just added to the deque.
-                        auto new_ct = std::tuple_cat(ct, std::tie(children_count.back()));
-                        // The node is an internal one, go deeper.
-                        build_tree_impl<ParentLevel + 1u>(children_count, new_ct, cur_code, begin, it_end);
+                        // The node is an internal one, go deeper, and update the children count
+                        // for the newly-added node.
+                        // NOTE: do this in 2 parts, rather than assigning directly the children count into
+                        // the tree, as the computation of the children count might enlarge the tree and thus
+                        // invalidate references to its elements.
+                        const auto children_count
+                            = build_tree_ser_impl<ParentLevel + 1u>(tree, cur_code, it_start, it_end);
+                        get<1>(tree[tree_size - 1u])[2] = children_count;
                     }
+                    // The total children count will be augmented by the children count of the
+                    // newly-added node, +1 for the node itself.
+                    checked_uinc(retval, get<1>(tree[tree_size - 1u])[2]);
+                    checked_uinc(retval, size_type(1));
                 }
-                // Move to the next child node.
-                begin += npart;
             }
+            return retval;
         } else {
             // NOTE: if we end up here, it means we walked through all the recursion levels
-            // and we cannot go any deeper. This will be a children with a number of particles
-            // greater than m_max_leaf_n.
+            // and we cannot go any deeper.
             // GCC warnings about unused params.
             ignore_args(parent_code, end);
-        }
-    }
-    template <unsigned ParentLevel, typename CIt>
-    auto build_tree_par_impl(UInt parent_code, CIt begin, CIt end)
-    {
-        if constexpr (ParentLevel < cbits) {
-            // We should never be invoking this on an empty range.
-            assert(begin != end);
-            // Init the return value.
-            static_assert(NDim < unsigned(std::numeric_limits<std::size_t>::digits));
-            std::array<tree_type, (std::size_t(1) << NDim)> ret;
-            // On entry, the range [begin, end) contains the codes
-            // of all the particles belonging to the parent node.
-            // parent_code is the nodal code of the parent node.
-            //
-            // We want to iterate over the children nodes at the current level
-            // (of which there might be up to 2**NDim). A child exists if
-            // it contains at least 1 particle. If it contains > m_max_leaf_n particles,
-            // it is an internal (i.e., non-leaf) node and we go deeper. If it contains <= m_max_leaf_n
-            // particles, it is a leaf node, we stop going deeper and move to its sibling.
-            //
-            // This is the node prefix: it is the nodal code of the parent with the most significant bit
-            // switched off.
-            // NOTE: overflow is prevented by the if constexpr above.
-            const auto node_prefix = parent_code - (UInt(1) << (ParentLevel * NDim));
-            tbb::task_group tg;
-            // NOTE: overflow is prevented in get_cbits().
-            for (UInt i = 0; i < (UInt(1) << NDim); ++i) {
-                auto runner = [node_prefix, i, begin, end, parent_code, &ret, this] {
-                    // Compute the first and last possible codes for the current child node.
-                    // They both start with (from MSB to LSB):
-                    // - current node prefix,
-                    // - i.
-                    // The first possible code is then right-padded with all zeroes, the last possible
-                    // code is right-padded with ones.
-                    const auto p_first = static_cast<UInt>((node_prefix << ((cbits - ParentLevel) * NDim))
-                                                           + (i << ((cbits - ParentLevel - 1u) * NDim)));
-                    const auto p_last
-                        = static_cast<UInt>(p_first + ((UInt(1) << ((cbits - ParentLevel - 1u) * NDim)) - 1u));
-                    // TODO fix.
-                    // Verify that begin contains the first value equal to or greater than p_first.
-                    const auto node_begin = std::lower_bound(begin, end, p_first);
-                    // Determine the end of the child node: it_end will point to the first value greater
-                    // than the largest possible code for the current child node.
-                    const auto it_end = std::upper_bound(node_begin, end, p_last);
-                    // Compute the number of particles.
-                    const auto npart = std::distance(node_begin, it_end);
-                    assert(npart >= 0);
-                    if (npart) {
-                        // npart > 0, we have a node. Compute its nodal code by moving up the
-                        // parent nodal code by NDim and adding the current child node index i.
-                        const auto cur_code = static_cast<UInt>((parent_code << NDim) + i);
-                        // Add the node to the tree.
-                        ret[i].emplace_back(
-                            cur_code,
-                            std::array<size_type, 3>{static_cast<size_type>(std::distance(m_codes.begin(), node_begin)),
-                                                     static_cast<size_type>(std::distance(m_codes.begin(), it_end)),
-                                                     // NOTE: the children count gets inited to zero. It
-                                                     // will be filled in later.
-                                                     size_type(0)},
-                            // NOTE: make sure mass and COM coords are initialised in a known state (i.e.,
-                            // zero for C++ floating-point).
-                            0, std::array<F, NDim>{});
-                        if (static_cast<std::make_unsigned_t<decltype(std::distance(node_begin, it_end))>>(npart)
-                            > m_max_leaf_n) {
-                            // The node is an internal one, go deeper but only if we are not at the last
-                            // possible level.
-                            if constexpr (ParentLevel + 1u < cbits) {
-                                auto sub_ret = build_tree_par_impl<ParentLevel + 1u>(cur_code, node_begin, it_end);
-                                for (auto &subtree : sub_ret) {
-                                    const auto subtree_size = subtree.size();
-                                    const auto old_size = ret[i].size();
-                                    // TODO overflow checks for these additions.
-                                    if (subtree_size) {
-                                        get<1>(ret[i][0])[2] += get<1>(subtree[0])[2] + 1u;
-                                    }
-                                    ret[i].resize(old_size + subtree_size);
-                                    for (size_type j = 0; j < subtree_size; ++j) {
-                                        ret[i][old_size + j] = std::move(subtree[j]);
-                                    }
-                                    subtree.clear();
-                                    subtree.shrink_to_fit();
-                                }
-                            }
-                        }
-                    }
-                };
-                tg.run(runner);
-            }
-            tg.wait();
-            return ret;
-        }
-    }
-    void build_tree_par()
-    {
-        simple_timer st("parallel node building");
-        // Make sure we always have an empty tree when invoking this method.
-        assert(m_tree.empty());
-        // Exit early if there are no particles.
-        if (!m_codes.size()) {
-            return;
-        }
-        // Add the root node.
-        m_tree.emplace_back(1,
-                            std::array<size_type, 3>{size_type(0), size_type(m_codes.size()),
-                                                     // NOTE: the children count gets inited to zero. It
-                                                     // will be filled in later.
-                                                     size_type(0)},
-                            // NOTE: make sure mass and COM coords are initialised in a known state (i.e.,
-                            // zero for C++ floating-point).
-                            0, std::array<F, NDim>{});
-        auto ret = build_tree_par_impl<0>(1, m_codes.begin(), m_codes.end());
-        size_type extra_s = 0;
-        for (const auto &subtree : ret) {
-            extra_s += subtree.size();
-        }
-        m_tree.reserve(m_tree.size() + extra_s);
-        for (auto &subtree : ret) {
-            const auto subtree_size = subtree.size();
-            const auto old_size = m_tree.size();
-            // TODO overflow checks for these additions.
-            if (subtree_size) {
-                get<1>(m_tree[0])[2] += get<1>(subtree[0])[2] + 1u;
-            }
-            m_tree.resize(old_size + subtree_size);
-            for (size_type j = 0; j < subtree_size; ++j) {
-                m_tree[old_size + j] = std::move(subtree[j]);
-            }
-            subtree.clear();
-            subtree.shrink_to_fit();
-        }
-    }
-    template <unsigned ParentLevel, typename CIt, typename TreeBuffers>
-    void build_tree_par_impl2(UInt parent_code, CIt begin, CIt end, TreeBuffers &buffers)
-    {
-        if constexpr (ParentLevel < cbits) {
-            // We should never be invoking this on an empty range.
-            assert(begin != end);
-            // On entry, the range [begin, end) contains the codes
-            // of all the particles belonging to the parent node.
-            // parent_code is the nodal code of the parent node.
-            //
-            // We want to iterate over the children nodes at the current level
-            // (of which there might be up to 2**NDim). A child exists if
-            // it contains at least 1 particle. If it contains > m_max_leaf_n particles,
-            // it is an internal (i.e., non-leaf) node and we go deeper. If it contains <= m_max_leaf_n
-            // particles, it is a leaf node, we stop going deeper and move to its sibling.
-            //
-            // This is the node prefix: it is the nodal code of the parent with the most significant bit
-            // switched off.
-            // NOTE: overflow is prevented by the if constexpr above.
-            const auto node_prefix = parent_code - (UInt(1) << (ParentLevel * NDim));
-            tbb::task_group tg;
-            // NOTE: overflow is prevented in get_cbits().
-            for (UInt i = 0; i < (UInt(1) << NDim); ++i) {
-                auto runner = [node_prefix, i, begin, end, parent_code, this, &buffers] {
-                    // Get a reference to the local buffer.
-                    auto &local_buffer = buffers.local();
-                    // Compute the first and last possible codes for the current child node.
-                    // They both start with (from MSB to LSB):
-                    // - current node prefix,
-                    // - i.
-                    // The first possible code is then right-padded with all zeroes, the last possible
-                    // code is right-padded with ones.
-                    const auto p_first = static_cast<UInt>((node_prefix << ((cbits - ParentLevel) * NDim))
-                                                           + (i << ((cbits - ParentLevel - 1u) * NDim)));
-                    const auto p_last
-                        = static_cast<UInt>(p_first + ((UInt(1) << ((cbits - ParentLevel - 1u) * NDim)) - 1u));
-                    // Compute the starting point of the node: node_begin will point to the first value equal to
-                    // or greater than p_first.
-                    const auto node_begin = std::lower_bound(begin, end, p_first);
-                    // Determine the end of the child node: node_end will point to the first value greater
-                    // than the largest possible code for the current child node.
-                    const auto node_end = std::upper_bound(node_begin, end, p_last);
-                    // Compute the number of particles.
-                    const auto npart = std::distance(node_begin, node_end);
-                    assert(npart >= 0);
-                    if (npart) {
-                        // npart > 0, we have a node. Compute its nodal code by moving up the
-                        // parent nodal code by NDim and adding the current child node index i.
-                        const auto cur_code = static_cast<UInt>((parent_code << NDim) + i);
-                        // Add the node to the local buffer.
-                        local_buffer.emplace_back(
-                            cur_code,
-                            std::array<size_type, 3>{static_cast<size_type>(std::distance(m_codes.begin(), node_begin)),
-                                                     static_cast<size_type>(std::distance(m_codes.begin(), node_end)),
-                                                     // NOTE: the children count gets inited to zero. It
-                                                     // will be filled in later.
-                                                     size_type(0)},
-                            // NOTE: make sure mass and COM coords are initialised in a known state (i.e.,
-                            // zero for C++ floating-point).
-                            0, std::array<F, NDim>{});
-                        if (static_cast<std::make_unsigned_t<decltype(std::distance(node_begin, node_end))>>(npart)
-                            > m_max_leaf_n) {
-                            // The node is an internal one, go deeper but only if we are not at the last
-                            // possible level.
-                            if constexpr (ParentLevel + 1u < cbits) {
-                                build_tree_par_impl2<ParentLevel + 1u>(cur_code, node_begin, node_end, buffers);
-                            }
-                        }
-                    }
-                };
-                tg.run(runner);
-            }
-            tg.wait();
-        }
-    }
-    template <unsigned ParentLevel, typename TreeIt, typename CritIndices>
-    size_type compute_nchildren_and_crits(UInt parent_code, TreeIt begin, TreeIt end, CritIndices &crit_indices)
-    {
-        if constexpr (ParentLevel < cbits) {
-            std::array<size_type, (UInt(1) << NDim)> retvals{};
-            // NOTE: overflow is prevented in get_cbits().
-            tbb::parallel_for(tbb::blocked_range<UInt>(0u, UInt(1) << NDim),
-                              [this, parent_code, begin, end, &crit_indices, &retvals](const auto &range) {
-                                  for (auto i = range.begin(); i != range.end(); ++i) {
-                                      const auto node_code = (parent_code << NDim) + i;
-                                      const auto node_it
-                                          = std::lower_bound(begin, end, node_code, [](const auto &n1, const auto &n2) {
-                                                return node_compare<NDim>(get<0>(n1), n2);
-                                            });
-                                      if (node_it != end && get<0>(*node_it) == node_code) {
-                                          const auto node_children = compute_nchildren_and_crits<ParentLevel + 1u>(
-                                              node_code, node_it, end, crit_indices);
-                                          std::get<1>(*node_it)[2] = node_children;
-                                          retvals[i] = node_children + 1u;
-                                      }
-                                  }
-                              });
-            return std::accumulate(retvals.begin(), retvals.end(), size_type(0));
-        } else {
             return 0;
         }
     }
-    void build_tree_par2()
+    template <unsigned ParentLevel, typename Out, typename CIt>
+    size_type build_tree_par_impl(Out &trees, UInt parent_code, CIt begin, CIt end, unsigned split_level)
     {
-        simple_timer st("parallel node building");
-        // Make sure we always have an empty tree when invoking this method.
-        assert(m_tree.empty());
-        // Exit early if there are no particles.
-        if (!m_codes.size()) {
-            return;
-        }
-        // Add the root node.
-        m_tree.emplace_back(1,
-                            std::array<size_type, 3>{size_type(0), size_type(m_codes.size()),
-                                                     // NOTE: the children count gets inited to zero. It
-                                                     // will be filled in later.
+        if constexpr (ParentLevel < cbits) {
+            // NOTE: the return value needs to be computed atomically as we are accumulating
+            // results from multiple concurrent tasks.
+            std::atomic<size_type> retval(0);
+            // NOTE: similar to the previous function, see comments there.
+            assert(begin != end);
+            const auto node_prefix = parent_code - (UInt(1) << (ParentLevel * NDim));
+            tbb::task_group tg;
+            for (UInt i = 0; i < (UInt(1) << NDim); ++i) {
+                tg.run([node_prefix, i, begin, end, &trees, parent_code, this, &retval, split_level] {
+                    const auto p_first = static_cast<UInt>((node_prefix << ((cbits - ParentLevel) * NDim))
+                                                           + (i << ((cbits - ParentLevel - 1u) * NDim)));
+                    const auto p_last
+                        = static_cast<UInt>(p_first + ((UInt(1) << ((cbits - ParentLevel - 1u) * NDim)) - 1u));
+                    const auto it_start = std::lower_bound(begin, end, p_first);
+                    const auto it_end = std::upper_bound(it_start, end, p_last);
+                    const auto npart = std::distance(it_start, it_end);
+                    assert(npart >= 0);
+                    if (npart) {
+                        const auto cur_code = static_cast<UInt>((parent_code << NDim) + i);
+                        // Add a new tree, and fill its first node.
+                        // NOTE: use push_back(tree_type{}) instead of emplace_back() because
+                        // TBB hates clang apparently.
+                        auto &new_tree = *trees.push_back(tree_type{});
+                        new_tree.emplace_back(
+                            cur_code,
+                            std::array<size_type, 3>{static_cast<size_type>(std::distance(m_codes.begin(), it_start)),
+                                                     static_cast<size_type>(std::distance(m_codes.begin(), it_end)),
                                                      size_type(0)},
-                            // NOTE: make sure mass and COM coords are initialised in a known state (i.e.,
-                            // zero for C++ floating-point).
                             0, std::array<F, NDim>{});
-        tbb::enumerable_thread_specific<tree_type> tree_buffers;
-        build_tree_par_impl2<0>(1, m_codes.begin(), m_codes.end(), tree_buffers);
-        v_type<size_type> cum_sizes;
-        cum_sizes.emplace_back(0);
-        for (const auto &b : tree_buffers) {
-            // TODO checks.
-            cum_sizes.emplace_back(cum_sizes.back() + b.size());
+                        if (static_cast<std::make_unsigned_t<decltype(std::distance(it_start, it_end))>>(npart)
+                            > m_max_leaf_n) {
+                            if (ParentLevel + 1u == split_level) {
+                                // NOTE: the current level is the split level: start building
+                                // the complete subtree of the newly-added node in a serial fashion.
+                                // NOTE: like in the other function, make sure we first compute the
+                                // children count and only later we assign it into the tree, as the computation
+                                // of the children count might end up modifying the tree.
+                                const auto children_count
+                                    = build_tree_ser_impl<ParentLevel + 1u>(new_tree, cur_code, it_start, it_end);
+                                get<1>(new_tree[0])[2] = children_count;
+                            } else {
+                                get<1>(new_tree[0])[2] = build_tree_par_impl<ParentLevel + 1u>(
+                                    trees, cur_code, it_start, it_end, split_level);
+                            }
+                        }
+                        checked_uinc(retval, get<1>(new_tree[0])[2]);
+                        checked_uinc(retval, size_type(1));
+                    }
+                });
+            }
+            tg.wait();
+            return retval.load();
+        } else {
+            ignore_args(parent_code, end);
+            return 0;
         }
-        m_tree.resize(cum_sizes.back() + 1u);
-        tbb::parallel_for(tbb::blocked_range<decltype(cum_sizes.size())>(0u, cum_sizes.size() - 1u),
-                          [this, &cum_sizes, &tree_buffers](const auto &range) {
-                              for (auto i = range.begin(); i != range.end(); ++i) {
-                                  // TODO checks?
-                                  std::move((tree_buffers.begin() + i)->begin(), (tree_buffers.begin() + i)->end(),
-                                            m_tree.begin() + 1 + cum_sizes[i]);
-                              }
-                          });
-        tbb::parallel_sort(m_tree.begin(), m_tree.end(),
-                           [](const auto &n1, const auto &n2) { return node_compare<NDim>(get<0>(n1), get<0>(n2)); });
-        tbb::enumerable_thread_specific<size_type> crit_indices;
-        get<1>(m_tree[0])[2] = compute_nchildren_and_crits<0>(1, m_tree.begin() + 1, m_tree.end(), crit_indices);
     }
     void build_tree()
     {
@@ -710,29 +512,69 @@ private:
             throw std::overflow_error("the number of particles (" + std::to_string(m_codes.size())
                                       + ") is too large, and it results in an overflow condition");
         }
-        // The structure to keep track of the children count. This
-        // has to be a deque (rather than a vector) because we need
-        // to keep references to elements in it as we grow it.
-        static thread_local std::deque<size_type> children_count;
-        children_count.clear();
-        // Add the counter for the root node.
-        children_count.emplace_back(0);
-        // The initial tuple containing the children counters for the parents
-        // of a node.
-        auto c_tuple = std::tie(children_count.back());
+        // Computation of the level at which we start building the subtrees serially.
+        // Based on the equation (2**NDim)**split_level >= number of cores. So, for instance,
+        // on a 16-core machine and 3 dimensions, this results in split_level == 2: we are
+        // switching to serial subtree building at the second level where we have up to
+        // 64 nodes.
+        const unsigned split_level = [] {
+            const auto hc = std::thread::hardware_concurrency();
+            if (hc) {
+                // NOTE: use UInt in the shift, as we now that UInt won't
+                // overflow thanks to the checks in cbits.
+                const auto tmp = std::log(hc) / std::log(UInt(1) << NDim);
+                // Make sure we don't return zero on single-core machines.
+                return std::max(1u, boost::numeric_cast<unsigned>(std::ceil(tmp)));
+            }
+            // Just return 1 if hardware_concurrency is not working.
+            return 1u;
+        }();
+        // The vector of partial trees. This will eventually contain a sequence of single-node trees
+        // and subtrees. A subtree starts with a node and contains all of its children, ordered
+        // according to the nodal code.
+        // NOTE: here we could use tbb::enumerable_thread_specific as well, but I see no reason
+        // to at the moment.
+        tbb::concurrent_vector<tree_type> trees;
         // Add the root node.
         m_tree.emplace_back(1,
                             std::array<size_type, 3>{size_type(0), size_type(m_codes.size()),
                                                      // NOTE: the children count gets inited to zero. It
                                                      // will be filled in later.
                                                      size_type(0)},
-                            // NOTE: make sure mass and coords are initialised in a known state (i.e.,
+                            // NOTE: make sure mass and COM coords are initialised in a known state (i.e.,
                             // zero for C++ floating-point).
                             0, std::array<F, NDim>{});
         // Build the rest.
-        build_tree_impl<0>(children_count, c_tuple, 1, m_codes.begin(), m_codes.end());
-        // Check the result.
-        assert(children_count.size() == m_tree.size());
+        get<1>(m_tree[0])[2] = build_tree_par_impl<0>(trees, 1, m_codes.begin(), m_codes.end(), split_level);
+        // NOTE: this sorting and the computation of the cumulative sizes can be done also in parallel,
+        // but it's probably not worth it since the size of trees should be rather small.
+        //
+        // Sort the subtrees according to the nodal code of the first node.
+        std::sort(trees.begin(), trees.end(), [](const auto &t1, const auto &t2) {
+            assert(t1.size() && t2.size());
+            return node_compare<NDim>(get<0>(t1[0]), get<0>(t2[0]));
+        });
+        // Compute the cumulative sizes in trees.
+        v_type<size_type> cum_sizes;
+        // NOTE: start from 1 in order to account for the root node (which is not accounted
+        // for in trees' sizes).
+        cum_sizes.emplace_back(1);
+        for (const auto &t : trees) {
+            cum_sizes.push_back(cum_sizes.back());
+            checked_uinc(cum_sizes.back(), boost::numeric_cast<size_type>(t.size()));
+        }
+        // Resize the tree and copy over the data from trees.
+        m_tree.resize(boost::numeric_cast<decltype(m_tree.size())>(cum_sizes.back()));
+        tbb::parallel_for(
+            tbb::blocked_range<decltype(cum_sizes.size())>(0u,
+                                                           // NOTE: cum_sizes is 1 element larger than trees.
+                                                           cum_sizes.size() - 1u),
+            [this, &cum_sizes, &trees](const auto &range) {
+                for (auto i = range.begin(); i != range.end(); ++i) {
+                    std::copy(trees[i].begin(), trees[i].end(),
+                              &m_tree[boost::numeric_cast<decltype(m_tree.size())>(cum_sizes[i])]);
+                }
+            });
         // Check the tree is sorted according to the nodal code comparison.
         assert(std::is_sorted(m_tree.begin(), m_tree.end(), [](const auto &t1, const auto &t2) {
             return node_compare<NDim>(get<0>(t1), get<0>(t2));
@@ -740,125 +582,11 @@ private:
         // Check that all the nodes contain at least 1 element.
         assert(
             std::all_of(m_tree.begin(), m_tree.end(), [](const auto &tup) { return get<1>(tup)[1] > get<1>(tup)[0]; }));
-        // Copy over the children count.
-        for (auto p = std::make_pair(children_count.begin(), m_tree.begin()); p.first != children_count.end();
-             ++p.first, ++p.second) {
-            get<1>(*p.second)[2] = *p.first;
-        }
         // Check that size_type can represent the size of the tree.
         if (m_tree.size() > std::numeric_limits<size_type>::max()) {
             throw std::overflow_error("the size of the tree (" + std::to_string(m_tree.size())
                                       + ") is too large, and it results in an overflow condition");
         }
-    }
-    template <unsigned ParentLevel, typename Out, typename CIt>
-    size_type build_tree_alt_impl(Out &tree, UInt parent_code, CIt begin, CIt end)
-    {
-        if constexpr (ParentLevel < cbits) {
-            std::atomic<size_type> retval(0);
-            // We should never be invoking this on an empty range.
-            assert(begin != end);
-            // On entry, the range [begin, end) contains the codes
-            // of all the particles belonging to the parent node.
-            // parent_code is the nodal code of the parent node.
-            //
-            // We want to iterate over the children nodes at the current level
-            // (of which there might be up to 2**NDim). A child exists if
-            // it contains at least 1 particle. If it contains > m_max_leaf_n particles,
-            // it is an internal (i.e., non-leaf) node and we go deeper. If it contains <= m_max_leaf_n
-            // particles, it is a leaf node, we stop going deeper and move to its sibling.
-            //
-            // This is the node prefix: it is the nodal code of the parent with the most significant bit
-            // switched off.
-            const auto node_prefix = parent_code - (UInt(1) << (ParentLevel * NDim));
-            tbb::task_group tg;
-            for (UInt i = 0; i < (UInt(1) << NDim); ++i) {
-                auto runner = [node_prefix, i, begin, end, &tree, parent_code, this, &retval]() {
-                    // Compute the first and last possible codes for the current child node.
-                    // They both start with (from MSB to LSB):
-                    // - current node prefix,
-                    // - i.
-                    // The first possible code is then right-padded with all zeroes, the last possible
-                    // code is right-padded with ones.
-                    const auto p_first = static_cast<UInt>((node_prefix << ((cbits - ParentLevel) * NDim))
-                                                           + (i << ((cbits - ParentLevel - 1u) * NDim)));
-                    const auto p_last
-                        = static_cast<UInt>(p_first + ((UInt(1) << ((cbits - ParentLevel - 1u) * NDim)) - 1u));
-                    // TODO
-                    // Verify that begin contains the first value equal to or greater than p_first.
-                    const auto it_start = std::lower_bound(begin, end, p_first);
-                    // Determine the end of the child node: it_end will point to the first value greater
-                    // than the largest possible code for the current child node.
-                    const auto it_end = std::upper_bound(it_start, end, p_last);
-                    // Compute the number of particles.
-                    const auto npart = std::distance(it_start, it_end);
-                    assert(npart >= 0);
-                    if (npart) {
-                        // npart > 0, we have a node. Compute its nodal code by moving up the
-                        // parent nodal code by NDim and adding the current child node index i.
-                        const auto cur_code = static_cast<UInt>((parent_code << NDim) + i);
-                        // Add the node to the tree.
-                        auto it_new = tree.emplace_back(
-                            cur_code,
-                            std::array<size_type, 3>{static_cast<size_type>(std::distance(m_codes.begin(), it_start)),
-                                                     static_cast<size_type>(std::distance(m_codes.begin(), it_end)),
-                                                     // NOTE: the children count gets inited to zero. It
-                                                     // will be filled in later.
-                                                     size_type(0)},
-                            // NOTE: make sure mass and coords are initialised in a known state (i.e.,
-                            // zero for C++ floating-point).
-                            0, std::array<F, NDim>{});
-                        if (static_cast<std::make_unsigned_t<decltype(std::distance(it_start, it_end))>>(npart)
-                            > m_max_leaf_n) {
-                            // The node is an internal one, go deeper.
-                            get<1>(*it_new)[2]
-                                = build_tree_alt_impl<ParentLevel + 1u>(tree, cur_code, it_start, it_end);
-                        }
-                        retval += get<1>(*it_new)[2] + 1u;
-                    }
-                };
-                tg.run(runner);
-            }
-            tg.wait();
-            return retval.load();
-        } else {
-            // NOTE: if we end up here, it means we walked through all the recursion levels
-            // and we cannot go any deeper. This will be a children with a number of particles
-            // greater than m_max_leaf_n.
-            // GCC warnings about unused params.
-            ignore_args(parent_code, end);
-            return 0;
-        }
-    }
-    void build_tree_alt()
-    {
-        simple_timer st("alt node building");
-        // Make sure we always have an empty tree when invoking this method.
-        assert(m_tree.empty());
-        // Exit early if there are no particles.
-        if (!m_codes.size()) {
-            return;
-        }
-        tbb::concurrent_vector<node_type> tree;
-        // Add the root node.
-        tree.emplace_back(1,
-                          std::array<size_type, 3>{size_type(0), size_type(m_codes.size()),
-                                                   // NOTE: the children count gets inited to zero. It
-                                                   // will be filled in later.
-                                                   size_type(0)},
-                          // NOTE: make sure mass and coords are initialised in a known state (i.e.,
-                          // zero for C++ floating-point).
-                          0, std::array<F, NDim>{});
-        // Build the rest.
-        get<1>(tree[0])[2] = build_tree_alt_impl<0>(tree, 1, m_codes.begin(), m_codes.end());
-        m_tree.resize(tree.size());
-        tbb::parallel_for(tbb::blocked_range<size_type>(0u, tree.size()), [this, &tree](const auto &range) {
-            for (auto i = range.begin(); i != range.end(); ++i) {
-                m_tree[i] = tree[i];
-            }
-        });
-        tbb::parallel_sort(m_tree.begin(), m_tree.end(),
-                           [](const auto &n1, const auto &n2) { return node_compare<NDim>(get<0>(n1), get<0>(n2)); });
     }
     void build_tree_properties()
     {
@@ -1030,7 +758,7 @@ public:
             isort_to_ord_ind();
         }
         // Now let's proceed to the tree construction.
-        build_tree_alt();
+        build_tree();
         // Now move to the computation of the COM of the nodes.
         build_tree_properties();
         // NOTE: whenever we need ordered iteration on the particles' data,
