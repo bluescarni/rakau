@@ -544,7 +544,7 @@ private:
             }
             m_tree.resize(old_size + subtree_size);
             for (size_type j = 0; j < subtree_size; ++j) {
-                this->m_tree[old_size + j] = std::move(subtree[j]);
+                m_tree[old_size + j] = std::move(subtree[j]);
             }
             subtree.clear();
             subtree.shrink_to_fit();
@@ -868,21 +868,21 @@ private:
         const auto tree_size = static_cast<size_type>(m_tree.size());
         tbb::parallel_for(tbb::blocked_range<size_type>(0u, tree_size), [this](const auto &range) {
             for (auto i = range.begin(); i != range.end(); ++i) {
-                auto &tup = this->m_tree[i];
+                auto &tup = m_tree[i];
                 // Get the indices and the size for the current node.
                 const auto begin = get<1>(tup)[0];
                 const auto end = get<1>(tup)[1];
                 assert(end > begin);
                 const auto size = end - begin;
                 // Compute the total mass.
-                const auto tot_mass = std::accumulate(this->m_masses.data() + begin, this->m_masses.data() + end, F(0));
+                const auto tot_mass = std::accumulate(m_masses.data() + begin, m_masses.data() + end, F(0));
                 // Compute the COM for the coordinates.
                 for (std::size_t j = 0; j < NDim; ++j) {
                     F acc(0);
-                    auto m_ptr = this->m_masses.data() + begin;
-                    auto c_ptr = this->m_coords[j].data() + begin;
-                    for (std::remove_const_t<decltype(size)> i = 0; i < size; ++i) {
-                        acc += m_ptr[i] * c_ptr[i];
+                    auto m_ptr = m_masses.data() + begin;
+                    auto c_ptr = m_coords[j].data() + begin;
+                    for (std::remove_const_t<decltype(size)> k = 0; k < size; ++k) {
+                        acc += m_ptr[k] * c_ptr[k];
                     }
                     get<3>(tup)[j] = acc / tot_mass;
                 }
@@ -928,7 +928,7 @@ private:
     {
         tbb::parallel_for(tbb::blocked_range<size_type>(0u, m_masses.size()), [this](const auto &range) {
             for (auto i = range.begin(); i != range.end(); ++i) {
-                this->m_ord_ind[this->m_isort[i]] = i;
+                m_ord_ind[m_isort[i]] = i;
             }
         });
     }
@@ -982,7 +982,7 @@ public:
         m_ord_ind.resize(boost::numeric_cast<decltype(m_ord_ind.size())>(N));
         {
             // Do the Morton encoding.
-            simple_timer st("morton encoding");
+            simple_timer st_m("morton encoding");
             // NOTE: in the parallel for, we need to index into the random-access iterator
             // type It up to the value N. Make sure we can do that.
             using it_diff_t = typename std::iterator_traits<It>::difference_type;
@@ -1001,14 +1001,14 @@ public:
                     // Write the coords in the temp structure and in the data members.
                     for (std::size_t j = 0; j < NDim; ++j) {
                         tmp_coord[j] = *(c_it[j] + static_cast<it_diff_t>(i));
-                        this->m_coords[j][i] = *(c_it[j] + static_cast<it_diff_t>(i));
+                        m_coords[j][i] = *(c_it[j] + static_cast<it_diff_t>(i));
                     }
                     // Store the mass.
-                    this->m_masses[i] = *(m_it + static_cast<it_diff_t>(i));
+                    m_masses[i] = *(m_it + static_cast<it_diff_t>(i));
                     // Compute and store the code.
-                    this->m_codes[i] = me(this->disc_coords(tmp_coord.begin(), this->m_box_size).begin());
+                    m_codes[i] = me(disc_coords(tmp_coord.begin(), m_box_size).begin());
                     // Store the index for indirect sorting.
-                    this->m_isort[i] = i;
+                    m_isort[i] = i;
                 }
             });
         }
@@ -1018,7 +1018,7 @@ public:
         }
         {
             // Apply the permutation to the data members.
-            simple_timer st("permute");
+            simple_timer st_p("permute");
             apply_isort(m_codes, m_isort);
             // Make sure the sort worked as intended.
             assert(std::is_sorted(m_codes.begin(), m_codes.end()));
@@ -1852,9 +1852,9 @@ private:
             morton_encoder<NDim, UInt> me;
             for (auto i = range.begin(); i != range.end(); ++i) {
                 for (std::size_t j = 0; j != NDim; ++j) {
-                    tmp_coord[j] = this->m_coords[j][i];
+                    tmp_coord[j] = m_coords[j][i];
                 }
-                this->m_codes[i] = me(disc_coords(tmp_coord.begin(), this->m_box_size).begin());
+                m_codes[i] = me(disc_coords(tmp_coord.begin(), m_box_size).begin());
             }
         });
         // Like on construction, do the indirect sorting of the new codes.

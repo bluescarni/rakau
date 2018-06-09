@@ -12,11 +12,14 @@
 #include <algorithm>
 #include <cstddef>
 #include <initializer_list>
+#include <iterator>
 #include <random>
 #include <tuple>
 #include <type_traits>
 #include <utility>
 #include <vector>
+
+#include <boost/numeric/conversion/cast.hpp>
 
 namespace rakau_test
 {
@@ -29,10 +32,17 @@ inline std::vector<F> get_uniform_particles(std::size_t n, F size, Rng &rng)
     std::vector<F> retval(n * (D + 1u));
     // Mass.
     std::uniform_real_distribution<F> mdist(F(0), F(1));
-    std::generate(retval.begin(), retval.begin() + n, [&mdist, &rng]() { return mdist(rng); });
+    std::generate(
+        retval.begin(),
+        retval.begin()
+            + boost::numeric_cast<typename std::iterator_traits<decltype(retval.begin())>::difference_type>(n),
+        [&mdist, &rng]() { return mdist(rng); });
     // Positions.
     std::uniform_real_distribution<F> rdist(-size / F(2), size / F(2));
-    std::generate(retval.begin() + n, retval.end(), [&rdist, &rng]() { return rdist(rng); });
+    std::generate(
+        retval.begin()
+            + boost::numeric_cast<typename std::iterator_traits<decltype(retval.begin())>::difference_type>(n),
+        retval.end(), [&rdist, &rng]() { return rdist(rng); });
     return retval;
 }
 
