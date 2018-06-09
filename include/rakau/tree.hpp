@@ -350,11 +350,15 @@ private:
     using tree_type = v_type<node_type>;
     // Serial construction of a subtree. The parent of the subtree is the node with code parent_code,
     // at the level ParentLevel. The particles in the children nodes have codes in the [begin, end)
-    // range. The children nodes will be appended in depth-first order to tree.
-    template <unsigned ParentLevel, typename CIt>
-    size_type build_tree_ser_impl(tree_type &tree, UInt parent_code, CIt begin, CIt end)
+    // range. The children nodes will be appended in depth-first order to tree. crit_nodes is the local
+    // list of critical nodes, crit_ancestor a flag signalling if the parent node or one of its ancestors is a critical
+    // node.
+    template <unsigned ParentLevel, typename CritNodes, typename CIt>
+    size_type build_tree_ser_impl(tree_type &tree, CritNodes &crit_nodes, UInt parent_code, CIt begin, CIt end,
+                                  bool crit_ancestor)
     {
         if constexpr (ParentLevel < cbits) {
+            assert(tree_level<NDim>(parent_code) == ParentLevel);
             assert(tree.size() && get<0>(tree.back()) == parent_code);
             size_type retval = 0;
             // We should never be invoking this on an empty range.
@@ -411,15 +415,34 @@ private:
                         0, std::array<F, NDim>{});
                     // Store the tree size before possibly adding more nodes.
                     const auto tree_size = tree.size();
-                    if (static_cast<std::make_unsigned_t<decltype(std::distance(it_start, it_end))>>(npart)
-                        > m_max_leaf_n) {
+                    // Cast npart to the unsigned counterpart.
+                    const auto u_npart
+                        = static_cast<std::make_unsigned_t<decltype(std::distance(it_start, it_end))>>(npart);
+                    // NOTE: we have a critical node only if there are no critical ancestors and either:
+                    // - the number of particles is leq m_ncrit (i.e., the definition of a
+                    //   critical node), or
+                    // - the number of particles is leq m_max_leaf_n (in which case this node will have no
+                    //   children, so it will be a critical node with a number of particles > m_ncrit), or
+                    // - the next recursion level is the last possible one (in which case the node will also
+                    //   have no children).
+                    const bool critical_node
+                        = !crit_ancestor
+                          && (u_npart <= m_ncrit || u_npart <= m_max_leaf_n || ParentLevel + 1u == cbits);
+                    if (critical_node) {
+                        // The node is a critical one, add its limits to the list of critical nodes for this subtree.
+                        crit_nodes.push_back({get<1>(tree.back())[0], get<1>(tree.back())[1]});
+                    }
+                    if (u_npart > m_max_leaf_n) {
                         // The node is an internal one, go deeper, and update the children count
                         // for the newly-added node.
                         // NOTE: do this in 2 parts, rather than assigning directly the children count into
                         // the tree, as the computation of the children count might enlarge the tree and thus
                         // invalidate references to its elements.
-                        const auto children_count
-                            = build_tree_ser_impl<ParentLevel + 1u>(tree, cur_code, it_start, it_end);
+                        const auto children_count = build_tree_ser_impl<ParentLevel + 1u>(
+                            tree, crit_nodes, cur_code, it_start, it_end,
+                            // NOTE: the children nodes have critical ancestors if either
+                            // the newly-added node is critical or one of its ancestors is.
+                            critical_node || crit_ancestor);
                         get<1>(tree[tree_size - 1u])[2] = children_count;
                     }
                     // The total children count will be augmented by the children count of the
@@ -437,13 +460,18 @@ private:
             return 0;
         }
     }
-    // Parallel tree construction. It will add single-node trees in parallel to the 'trees' concurrent
-    // container, up until the tree level split_level is reached. From there, whole subtrees will be constructed
-    // and added to the 'trees' container.
-    template <unsigned ParentLevel, typename Out, typename CIt>
-    size_type build_tree_par_impl(Out &trees, UInt parent_code, CIt begin, CIt end, unsigned split_level)
+    // Parallel tree construction. It will iterate in parallel over the children of a node with nodal code
+    // parent_code at level ParentLevel, add single nodes to the 'trees' concurrent container, and recurse down
+    // until the tree level split_level is reached. From there, whole subtrees (rather than single nodes) will be
+    // constructed and added to the 'trees' container via build_tree_ser_impl(). The particles in the children nodes
+    // have codes in the [begin, end) range. crit_nodes is the global list of critical nodes, crit_ancestor a flag
+    // signalling if the parent node or one of its ancestors is a critical node.
+    template <unsigned ParentLevel, typename Out, typename CritNodes, typename CIt>
+    size_type build_tree_par_impl(Out &trees, CritNodes &crit_nodes, UInt parent_code, CIt begin, CIt end,
+                                  unsigned split_level, bool crit_ancestor)
     {
         if constexpr (ParentLevel < cbits) {
+            assert(tree_level<NDim>(parent_code) == ParentLevel);
             // NOTE: the return value needs to be computed atomically as we are accumulating
             // results from multiple concurrent tasks.
             std::atomic<size_type> retval(0);
@@ -452,7 +480,8 @@ private:
             const auto node_prefix = parent_code - (UInt(1) << (ParentLevel * NDim));
             tbb::task_group tg;
             for (UInt i = 0; i < (UInt(1) << NDim); ++i) {
-                tg.run([node_prefix, i, begin, end, &trees, parent_code, this, &retval, split_level] {
+                tg.run([node_prefix, i, begin, end, &trees, parent_code, this, &retval, split_level, crit_ancestor,
+                        &crit_nodes] {
                     const auto p_first = static_cast<UInt>((node_prefix << ((cbits - ParentLevel) * NDim))
                                                            + (i << ((cbits - ParentLevel - 1u) * NDim)));
                     const auto p_last
@@ -473,20 +502,42 @@ private:
                                                      static_cast<size_type>(std::distance(m_codes.begin(), it_end)),
                                                      size_type(0)},
                             0, std::array<F, NDim>{});
-                        if (static_cast<std::make_unsigned_t<decltype(std::distance(it_start, it_end))>>(npart)
-                            > m_max_leaf_n) {
+                        const auto u_npart
+                            = static_cast<std::make_unsigned_t<decltype(std::distance(it_start, it_end))>>(npart);
+                        // NOTE: we have a critical node only if there are no critical ancestors and either:
+                        // - the number of particles is leq m_ncrit (i.e., the definition of a
+                        //   critical node), or
+                        // - the number of particles is leq m_max_leaf_n (in which case this node will have no
+                        //   children, so it will be a critical node with a number of particles > m_ncrit), or
+                        // - the next recursion level is the last possible one (in which case the node will also
+                        //   have no children).
+                        const bool critical_node
+                            = !crit_ancestor
+                              && (u_npart <= m_ncrit || u_npart <= m_max_leaf_n || ParentLevel + 1u == cbits);
+                        // Add a new entry to crit_nodes. If the only node of the new tree is critical, the new entry
+                        // will contain 1 element with the node's range, otherwise it will be an empty list. This empty
+                        // list may remain empty, or be used to accumulate the list of critical nodes during the serial
+                        // subtree construction.
+                        auto &new_crit_nodes
+                            = critical_node ? *crit_nodes.push_back({{get<1>(new_tree[0])[0], get<1>(new_tree[0])[1]}})
+                                            : *crit_nodes.push_back({});
+                        if (u_npart > m_max_leaf_n) {
                             if (ParentLevel + 1u == split_level) {
                                 // NOTE: the current level is the split level: start building
                                 // the complete subtree of the newly-added node in a serial fashion.
                                 // NOTE: like in the serial function, make sure we first compute the
                                 // children count and only later we assign it into the tree, as the computation
                                 // of the children count might end up modifying the tree.
-                                const auto children_count
-                                    = build_tree_ser_impl<ParentLevel + 1u>(new_tree, cur_code, it_start, it_end);
+                                const auto children_count = build_tree_ser_impl<ParentLevel + 1u>(
+                                    new_tree, new_crit_nodes, cur_code, it_start, it_end,
+                                    // NOTE: the children nodes have critical ancestors if either
+                                    // the newly-added node is critical or one of its ancestors is.
+                                    critical_node || crit_ancestor);
                                 get<1>(new_tree[0])[2] = children_count;
                             } else {
                                 get<1>(new_tree[0])[2] = build_tree_par_impl<ParentLevel + 1u>(
-                                    trees, cur_code, it_start, it_end, split_level);
+                                    trees, crit_nodes, cur_code, it_start, it_end, split_level,
+                                    critical_node || crit_ancestor);
                             }
                         }
                         checked_uinc(retval, get<1>(new_tree[0])[2]);
@@ -497,7 +548,7 @@ private:
             tg.wait();
             return retval.load();
         } else {
-            ignore_args(parent_code, begin, end, split_level);
+            ignore_args(parent_code, begin, end, split_level, crit_ancestor);
             return 0;
         }
     }
@@ -536,12 +587,15 @@ private:
             // Just return 1 if hardware_concurrency is not working.
             return 1u;
         }();
-        // The vector of partial trees. This will eventually contain a sequence of single-node trees
+        // Vector of partial trees. This will eventually contain a sequence of single-node trees
         // and subtrees. A subtree starts with a node and contains all of its children, ordered
         // according to the nodal code.
         // NOTE: here we could use tbb::enumerable_thread_specific as well, but I see no reason
         // to at the moment.
         tbb::concurrent_vector<tree_type> trees;
+        // List of critical nodes. We will accumulate here partial ordered lists of critical nodes,
+        // in a similar fashion to the vector of partial trees above.
+        tbb::concurrent_vector<v_type<std::pair<size_type, size_type>>> crit_nodes;
         // Add the root node.
         m_tree.emplace_back(1,
                             std::array<size_type, 3>{size_type(0), size_type(m_codes.size()),
@@ -551,8 +605,19 @@ private:
                             // NOTE: make sure mass and COM coords are initialised in a known state (i.e.,
                             // zero for C++ floating-point).
                             0, std::array<F, NDim>{});
-        // Build the rest.
-        get<1>(m_tree[0])[2] = build_tree_par_impl<0>(trees, 1, m_codes.begin(), m_codes.end(), split_level);
+        // Check if the root node is a critical node. It is a critical node if the number of particles is leq m_ncrit
+        // (the definition of critical node) or m_max_leaf_n (in which case it will have no children).
+        const bool root_is_crit = m_codes.size() <= m_ncrit || m_codes.size() <= m_max_leaf_n;
+        if (root_is_crit) {
+            // The root node is critical, add it to the list.
+            crit_nodes.push_back({{size_type(0), size_type(m_codes.size())}});
+        }
+        // Build the rest, if needed.
+        if (m_codes.size() > m_max_leaf_n) {
+            get<1>(m_tree[0])[2] = build_tree_par_impl<0>(trees, crit_nodes, 1, m_codes.begin(), m_codes.end(),
+                                                          split_level, root_is_crit);
+        }
+
         // NOTE: this sorting and the computation of the cumulative sizes can be done also in parallel,
         // but it's probably not worth it since the size of trees should be rather small.
         //
@@ -592,6 +657,58 @@ private:
         // Check that size_type can represent the size of the tree.
         if (m_tree.size() > std::numeric_limits<size_type>::max()) {
             throw std::overflow_error("the size of the tree (" + std::to_string(m_tree.size())
+                                      + ") is too large, and it results in an overflow condition");
+        }
+
+        // NOTE: as above, we could do some of these things in parallel but it does not seem worth it at this time.
+        // Sort the critical nodes lists according to their first values.
+        std::sort(crit_nodes.begin(), crit_nodes.end(), [](const auto &v1, const auto &v2) {
+            // NOTE: we may have empty lists, put them at the beginning.
+            if (v1.empty()) {
+                // v1 empty, if v2 is not empty then v1 < v2, otherwise v1 >= v2.
+                return !v2.empty();
+            }
+            if (v2.empty()) {
+                // NOTE: v1 is not empty at this point, thus v1 >= v2.
+                return false;
+            }
+            // v1 and v2 are not empty, compars the starting points of their first critical nodes.
+            return v1[0].first < v2[0].first;
+        });
+        // Compute the cumulative sizes in crit_nodes. Re-use cum_sizes.
+        cum_sizes.clear();
+        cum_sizes.emplace_back(0);
+        for (const auto &c : crit_nodes) {
+            cum_sizes.push_back(cum_sizes.back());
+            checked_uinc(cum_sizes.back(), boost::numeric_cast<size_type>(c.size()));
+        }
+        // Resize the critical nodes list and copy over the data from crit_nodes.
+        m_crit_nodes.resize(boost::numeric_cast<decltype(m_crit_nodes.size())>(cum_sizes.back()));
+        tbb::parallel_for(
+            tbb::blocked_range<decltype(cum_sizes.size())>(0u,
+                                                           // NOTE: cum_sizes is 1 element larger than crit_nodes.
+                                                           cum_sizes.size() - 1u),
+            [this, &cum_sizes, &crit_nodes](const auto &range) {
+                for (auto i = range.begin(); i != range.end(); ++i) {
+                    std::copy(crit_nodes[i].begin(), crit_nodes[i].end(),
+                              &m_crit_nodes[boost::numeric_cast<decltype(m_crit_nodes.size())>(cum_sizes[i])]);
+                }
+            });
+        // In a non-empty domain, we must have at least 1 critical node.
+        assert(!m_crit_nodes.empty());
+        // The list of critical nodes must start with the first particle and end with the last particle.
+        assert(m_crit_nodes[0].first == 0u);
+        assert(m_crit_nodes.back().second == m_codes.size());
+#if !defined(NDEBUG)
+        // Verify that the critical nodes list contains all the particles in the domain, and
+        // that the critical nodes' limits are contiguous.
+        for (decltype(m_crit_nodes.size()) i = 1; i < m_crit_nodes.size(); ++i) {
+            assert(m_crit_nodes[i - 1u].second == m_crit_nodes[i].first);
+        }
+#endif
+        // Check that size_type can represent the size of the critical nodes list.
+        if (m_crit_nodes.size() > std::numeric_limits<size_type>::max()) {
+            throw std::overflow_error("the size of the critical nodes list (" + std::to_string(m_crit_nodes.size())
                                       + ") is too large, and it results in an overflow condition");
         }
     }
@@ -747,10 +864,8 @@ public:
                 }
             });
         }
-        {
-            // Do the sorting of m_isort.
-            indirect_code_sort(m_isort.begin(), m_isort.end());
-        }
+        // Do the sorting of m_isort.
+        indirect_code_sort(m_isort.begin(), m_isort.end());
         {
             // Apply the permutation to the data members.
             simple_timer st_p("permute");
@@ -790,13 +905,15 @@ private:
         m_isort.clear();
         m_ord_ind.clear();
         m_tree.clear();
+        m_crit_nodes.clear();
     }
 
 public:
     tree(tree &&other) noexcept
         : m_box_size(std::move(other.m_box_size)), m_max_leaf_n(other.m_max_leaf_n), m_ncrit(other.m_ncrit),
           m_masses(std::move(other.m_masses)), m_coords(std::move(other.m_coords)), m_codes(std::move(other.m_codes)),
-          m_isort(std::move(other.m_isort)), m_ord_ind(std::move(other.m_ord_ind)), m_tree(std::move(other.m_tree))
+          m_isort(std::move(other.m_isort)), m_ord_ind(std::move(other.m_ord_ind)), m_tree(std::move(other.m_tree)),
+          m_crit_nodes(std::move(other.m_crit_nodes))
     {
         // Make sure other is left in an empty state, otherwise we might
         // have in principle assertions failures in the destructor of other
@@ -816,6 +933,7 @@ public:
                 m_isort = other.m_isort;
                 m_ord_ind = other.m_ord_ind;
                 m_tree = other.m_tree;
+                m_crit_nodes = other.m_crit_nodes;
             }
             return *this;
         } catch (...) {
@@ -838,6 +956,7 @@ public:
             m_isort = std::move(other.m_isort);
             m_ord_ind = std::move(other.m_ord_ind);
             m_tree = std::move(other.m_tree);
+            m_crit_nodes = std::move(other.m_crit_nodes);
             // Make sure other is left in an empty state, otherwise we might
             // have in principle assertions failures in the destructor of other
             // in debug mode.
@@ -1709,6 +1828,8 @@ private:
     v_type<size_type> m_ord_ind;
     // The tree structure.
     tree_type m_tree;
+    // The list of critical nodes.
+    v_type<std::pair<size_type, size_type>> m_crit_nodes;
 };
 
 template <typename UInt, typename F>
