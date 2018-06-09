@@ -348,10 +348,14 @@ private:
     using node_type = std::tuple<UInt, std::array<size_type, 3>, F, std::array<F, NDim>>;
     // The internal tree type.
     using tree_type = v_type<node_type>;
-    template <unsigned ParentLevel, typename Out, typename CIt>
-    size_type build_tree_ser_impl(Out &tree, UInt parent_code, CIt begin, CIt end)
+    // Serial construction of a subtree. The parent of the subtree is the node with code parent_code,
+    // at the level ParentLevel. The particles in the children nodes have codes in the [begin, end)
+    // range. The children nodes will be appended in depth-first order to tree.
+    template <unsigned ParentLevel, typename CIt>
+    size_type build_tree_ser_impl(tree_type &tree, UInt parent_code, CIt begin, CIt end)
     {
         if constexpr (ParentLevel < cbits) {
+            assert(tree.size() && get<0>(tree.back()) == parent_code);
             size_type retval = 0;
             // We should never be invoking this on an empty range.
             assert(begin != end);
@@ -433,6 +437,9 @@ private:
             return 0;
         }
     }
+    // Parallel tree construction. It will add single-node trees in parallel to the 'trees' concurrent
+    // container, up until the tree level split_level is reached. From there, whole subtrees will be constructed
+    // and added to the 'trees' container.
     template <unsigned ParentLevel, typename Out, typename CIt>
     size_type build_tree_par_impl(Out &trees, UInt parent_code, CIt begin, CIt end, unsigned split_level)
     {
@@ -471,7 +478,7 @@ private:
                             if (ParentLevel + 1u == split_level) {
                                 // NOTE: the current level is the split level: start building
                                 // the complete subtree of the newly-added node in a serial fashion.
-                                // NOTE: like in the other function, make sure we first compute the
+                                // NOTE: like in the serial function, make sure we first compute the
                                 // children count and only later we assign it into the tree, as the computation
                                 // of the children count might end up modifying the tree.
                                 const auto children_count
