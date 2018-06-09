@@ -37,6 +37,7 @@ TEST_CASE("accuracy")
 {
     tuple_for_each(fp_types{}, [](auto x) {
         using fp_type = decltype(x);
+        constexpr auto theta = static_cast<fp_type>(.75);
         auto sizes = {10u, 100u, 1000u, 5000u};
         auto max_leaf_ns = {1u, 2u, 8u, 16u};
         auto ncrits = {1u, 16u, 128u, 256u};
@@ -61,7 +62,7 @@ TEST_CASE("accuracy")
                     octree<std::uint64_t, fp_type> t(
                         bsize, parts.begin(), {parts.begin() + s, parts.begin() + 2u * s, parts.begin() + 3u * s}, s,
                         max_leaf_n, ncrit);
-                    t.accs_o(accs, fp_type(0.75));
+                    t.accs_o(accs, theta);
                     for (auto i = 0u; i < s; ++i) {
                         auto eacc = t.exact_acc_o(i);
                         x_diff.emplace_back(std::abs((eacc[0] - accs[0][i]) / eacc[0]));
