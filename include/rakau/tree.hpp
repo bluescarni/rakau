@@ -429,7 +429,7 @@ private:
             // NOTE: if we end up here, it means we walked through all the recursion levels
             // and we cannot go any deeper.
             // GCC warnings about unused params.
-            ignore_args(parent_code, end);
+            ignore_args(parent_code, begin, end);
             return 0;
         }
     }
@@ -490,7 +490,7 @@ private:
             tg.wait();
             return retval.load();
         } else {
-            ignore_args(parent_code, end);
+            ignore_args(parent_code, begin, end, split_level);
             return 0;
         }
     }
