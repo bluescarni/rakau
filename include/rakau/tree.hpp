@@ -429,8 +429,9 @@ private:
                         = !crit_ancestor
                           && (u_npart <= m_ncrit || u_npart <= m_max_leaf_n || ParentLevel + 1u == cbits);
                     if (critical_node) {
-                        // The node is a critical one, add its limits to the list of critical nodes for this subtree.
-                        crit_nodes.push_back({get<1>(tree.back())[0], get<1>(tree.back())[1]});
+                        // The node is a critical one, add its code and limits to the list of critical nodes for this
+                        // subtree.
+                        crit_nodes.push_back({get<0>(tree.back()), get<1>(tree.back())[0], get<1>(tree.back())[1]});
                     }
                     if (u_npart > m_max_leaf_n) {
                         // The node is an internal one, go deeper, and update the children count
@@ -515,11 +516,12 @@ private:
                             = !crit_ancestor
                               && (u_npart <= m_ncrit || u_npart <= m_max_leaf_n || ParentLevel + 1u == cbits);
                         // Add a new entry to crit_nodes. If the only node of the new tree is critical, the new entry
-                        // will contain 1 element with the node's range, otherwise it will be an empty list. This empty
-                        // list may remain empty, or be used to accumulate the list of critical nodes during the serial
-                        // subtree construction.
+                        // will contain 1 element with the node's code and range, otherwise it will be an empty list.
+                        // This empty list may remain empty, or be used to accumulate the list of critical nodes during
+                        // the serial subtree construction.
                         auto &new_crit_nodes
-                            = critical_node ? *crit_nodes.push_back({{get<1>(new_tree[0])[0], get<1>(new_tree[0])[1]}})
+                            = critical_node ? *crit_nodes.push_back({{get<0>(new_tree[0]), get<1>(new_tree[0])[0],
+                                                                      get<1>(new_tree[0])[1]}})
                                             : *crit_nodes.push_back({});
                         if (u_npart > m_max_leaf_n) {
                             if (ParentLevel + 1u == split_level) {
@@ -593,9 +595,9 @@ private:
         // NOTE: here we could use tbb::enumerable_thread_specific as well, but I see no reason
         // to at the moment.
         tbb::concurrent_vector<tree_type> trees;
-        // List of critical nodes. We will accumulate here partial ordered lists of critical nodes,
-        // in a similar fashion to the vector of partial trees above.
-        tbb::concurrent_vector<v_type<std::pair<size_type, size_type>>> crit_nodes;
+        // List of critical nodes, represented as a nodal code and a range. We will accumulate here partial ordered
+        // lists of critical nodes, in a similar fashion to the vector of partial trees above.
+        tbb::concurrent_vector<v_type<std::tuple<UInt, size_type, size_type>>> crit_nodes;
         // Add the root node.
         m_tree.emplace_back(1,
                             std::array<size_type, 3>{size_type(0), size_type(m_codes.size()),
@@ -610,7 +612,7 @@ private:
         const bool root_is_crit = m_codes.size() <= m_ncrit || m_codes.size() <= m_max_leaf_n;
         if (root_is_crit) {
             // The root node is critical, add it to the list.
-            crit_nodes.push_back({{size_type(0), size_type(m_codes.size())}});
+            crit_nodes.push_back({{UInt(1), size_type(0), size_type(m_codes.size())}});
         }
         // Build the rest, if needed.
         if (m_codes.size() > m_max_leaf_n) {
@@ -661,7 +663,7 @@ private:
         }
 
         // NOTE: as above, we could do some of these things in parallel but it does not seem worth it at this time.
-        // Sort the critical nodes lists according to their first values.
+        // Sort the critical nodes lists according to the starting points of the ranges.
         std::sort(crit_nodes.begin(), crit_nodes.end(), [](const auto &v1, const auto &v2) {
             // NOTE: we may have empty lists, put them at the beginning.
             if (v1.empty()) {
@@ -672,8 +674,8 @@ private:
                 // NOTE: v1 is not empty at this point, thus v1 >= v2.
                 return false;
             }
-            // v1 and v2 are not empty, compars the starting points of their first critical nodes.
-            return v1[0].first < v2[0].first;
+            // v1 and v2 are not empty, compare the starting points of their first critical nodes.
+            return get<1>(v1[0]) < get<1>(v2[0]);
         });
         // Compute the cumulative sizes in crit_nodes. Re-use cum_sizes.
         cum_sizes.clear();
@@ -697,15 +699,23 @@ private:
         // In a non-empty domain, we must have at least 1 critical node.
         assert(!m_crit_nodes.empty());
         // The list of critical nodes must start with the first particle and end with the last particle.
-        assert(m_crit_nodes[0].first == 0u);
-        assert(m_crit_nodes.back().second == m_codes.size());
+        assert(get<1>(m_crit_nodes[0]) == 0u);
+        assert(get<2>(m_crit_nodes.back()) == m_codes.size());
 #if !defined(NDEBUG)
-        // Verify that the critical nodes list contains all the particles in the domain, and
-        // that the critical nodes' limits are contiguous.
-        for (decltype(m_crit_nodes.size()) i = 1; i < m_crit_nodes.size(); ++i) {
-            assert(m_crit_nodes[i - 1u].second == m_crit_nodes[i].first);
+        // Verify that the critical nodes list contains all the particles in the domain,
+        // that the critical nodes' limits are contiguous, and that the critical nodes are not empty.
+        for (decltype(m_crit_nodes.size()) i = 0; i < m_crit_nodes.size() - 1u; ++i) {
+            assert(get<1>(m_crit_nodes[i]) < get<2>(m_crit_nodes[i]));
+            if (i == m_crit_nodes.size() - 1u) {
+                break;
+            }
+            assert(get<2>(m_crit_nodes[i]) == get<1>(m_crit_nodes[i + 1u]));
         }
 #endif
+        // Check the critical nodes are ordered according to the nodal code.
+        assert(std::is_sorted(m_crit_nodes.begin(), m_crit_nodes.end(), [](const auto &t1, const auto &t2) {
+            return node_compare<NDim>(get<0>(t1), get<0>(t2));
+        }));
         // Check that size_type can represent the size of the critical nodes list.
         if (m_crit_nodes.size() > std::numeric_limits<size_type>::max()) {
             throw std::overflow_error("the size of the critical nodes list (" + std::to_string(m_crit_nodes.size())
@@ -1059,13 +1069,7 @@ private:
     // node. begin/end is the range, in the tree structure, encompassing the source node and its children.
     // node_size2 is the square of the size of the source node. The accelerations will be written into the
     // temporary storage provided by vec_acc_tmp_res().
-    // NOTE: this is templatised over Level (in addition to SLevel) because
-    // like that we get better performance (~4% or so). This probably has to
-    // do with the fact that, with 2 templ. params, we get a unique version
-    // of this function each time it is invoked, whereas with 1 templ. param
-    // we have multiple calls to the same function throughout a tree traversal.
-    // Probably this impacts inlining, recursion, etc.
-    template <unsigned Level, unsigned SLevel>
+    template <unsigned SLevel>
     void vec_acc_from_node(const F &theta2, size_type pidx, size_type size, size_type begin, size_type end,
                            const F &node_size2) const
     {
@@ -1292,8 +1296,8 @@ private:
             const F next_node_size2 = next_node_size * next_node_size;
             // Bump up begin to move to the first child.
             for (++begin; begin != end; begin += get<1>(m_tree[begin])[2] + 1u) {
-                vec_acc_from_node<Level, SLevel + 1u>(theta2, pidx, size, begin, begin + get<1>(m_tree[begin])[2] + 1u,
-                                                      next_node_size2);
+                vec_acc_from_node<SLevel + 1u>(theta2, pidx, size, begin, begin + get<1>(m_tree[begin])[2] + 1u,
+                                               next_node_size2);
             }
         } else {
             ignore_args(pidx, size, begin, end);
@@ -1443,106 +1447,90 @@ private:
     // Compute the total acceleration on the particles in a target node. node_begin is the starting index
     // of the target in the particles' arrays, npart the number of particles in the node. [sib_begin, sib_end)
     // is the index range, in the tree structure, encompassing the target, its parent and its parent's siblings at the
-    // tree level CurLevel. NodeLevel is the level of the node itself. nodal_code is the nodal code of the
-    // target.
-    template <unsigned CurLevel, unsigned NodeLevel>
+    // tree level Level. nodal_code is the nodal code of the target, node_level its level.
+    template <unsigned Level>
     void vec_acc_on_node(const F &theta2, size_type node_begin, size_type npart, UInt nodal_code, size_type sib_begin,
-                         size_type sib_end) const
-    {
-        // We proceed breadth-first examining all the siblings of the target's parent
-        // (or of the node itself, at the last iteration) at the current level.
-        //
-        // Compute the shifted code. This is the nodal code of the target's parent
-        // at the current level (or the nodal code of the target itself at the last
-        // iteration).
-        const auto s_code = nodal_code >> ((NodeLevel - CurLevel) * NDim);
-        auto new_sib_begin = sib_end;
-        // Determine the size of the target at the current level.
-        const F node_size = m_box_size / (UInt(1) << CurLevel);
-        const F node_size2 = node_size * node_size;
-        for (auto idx = sib_begin; idx != sib_end; idx += get<1>(m_tree[idx])[2] + 1u) {
-            if (get<0>(m_tree[idx]) == s_code) {
-                // We are in the target's parent, or the target itself.
-                if (CurLevel == NodeLevel) {
-                    // Last iteration, we are in the target itself. Compute the
-                    // self-interactions within the target.
-                    vec_node_self_interactions(node_begin, npart);
-                } else {
-                    // We identified the parent of the target at the current
-                    // level. Store its starting index for later.
-                    new_sib_begin = idx;
-                }
-            } else {
-                // Compute the accelerations from the current sibling.
-                vec_acc_from_node<CurLevel, CurLevel>(theta2, node_begin, npart, idx, idx + 1u + get<1>(m_tree[idx])[2],
-                                                      node_size2);
-            }
-        }
-        if (CurLevel != NodeLevel) {
-            // If we are not at the last iteration, we must have changed
-            // new_sib_begin in the loop above.
-            assert(new_sib_begin != sib_end);
-        } else {
-            ignore_args(new_sib_begin);
-        }
-        if constexpr (CurLevel < NodeLevel) {
-            // We are not at the level of the target yet. Recurse down.
-            vec_acc_on_node<CurLevel + 1u, NodeLevel>(theta2, node_begin, npart, nodal_code, new_sib_begin + 1u,
-                                                      new_sib_begin + 1u + get<1>(m_tree[new_sib_begin])[2]);
-        }
-    }
-    // Top level function fo the vectorised computation of the accelerations. This function does
-    // a depth-first tree traversal until it finds a target node with a number of particles npart <= m_ncrit.
-    // When it finds one, it will compute the accelerations on the target's particles by all the other
-    // particles in the domain. When that is done, it will continue the traversal (except that all the
-    // children of the target node will be skipped) and repeat the procedure for the next target node.
-    template <unsigned Level, typename It>
-    void vec_accs_impl(std::array<It, NDim> &out, const F &theta2, size_type begin, size_type end) const
+                         size_type sib_end, unsigned node_level) const
     {
         if constexpr (Level <= cbits) {
-            for (auto idx = begin; idx != end;
-                 // NOTE: when incrementing idx, we need to add 1 to the
-                 // total number of children in order to point to the next sibling.
-                 idx += get<1>(m_tree[idx])[2] + 1u) {
-                const auto [node_begin, node_end, n_children] = get<1>(m_tree[idx]);
-                const auto npart = node_end - node_begin;
-                if (Level == cbits || npart <= m_ncrit || !n_children) {
-                    // Either:
-                    // - this is the last possible recursion level, or
-                    // - the number of particles is low enough, or
-                    // - this is a leaf node.
-                    // Then, proceed to the vectorised calculation of the accelerations
-                    // on the particles belonging to this target node.
-                    //
-                    // Prepare the temporary vectors containing the result.
-                    auto &tmp_res = vec_acc_tmp_res();
-                    for (auto &v : tmp_res) {
-                        // Resize and fill with zeroes.
-                        v.resize(boost::numeric_cast<decltype(v.size())>(npart));
-                        std::fill(v.begin(), v.end(), F(0));
-                    }
-                    // Do the computation.
-                    vec_acc_on_node<0, Level>(theta2, node_begin, npart, get<0>(m_tree[idx]), size_type(0),
-                                              size_type(m_tree.size()));
-                    // Write out the result.
-                    for (std::size_t j = 0; j != NDim; ++j) {
-                        using it_diff_t = typename std::iterator_traits<It>::difference_type;
-                        std::copy(tmp_res[j].begin(), tmp_res[j].end(),
-                                  out[j] + boost::numeric_cast<it_diff_t>(node_begin));
+            // We proceed breadth-first examining all the siblings of the target's parent
+            // (or of the node itself, at the last iteration) at the current level.
+            //
+            // Compute the shifted code. This is the nodal code of the target's parent
+            // at the current level (or the nodal code of the target itself at the last
+            // iteration).
+            assert(node_level == tree_level<NDim>(nodal_code));
+            const auto s_code = nodal_code >> ((node_level - Level) * NDim);
+            auto new_sib_begin = sib_end;
+            // Determine the size of the target at the current level.
+            const F node_size = m_box_size / (UInt(1) << Level);
+            const F node_size2 = node_size * node_size;
+            for (auto idx = sib_begin; idx != sib_end; idx += get<1>(m_tree[idx])[2] + 1u) {
+                if (get<0>(m_tree[idx]) == s_code) {
+                    // We are in the target's parent, or the target itself.
+                    if (Level == node_level) {
+                        // Last iteration, we are in the target itself. Compute the
+                        // self-interactions within the target.
+                        vec_node_self_interactions(node_begin, npart);
+                    } else {
+                        // We identified the parent of the target at the current
+                        // level. Store its starting index for later.
+                        new_sib_begin = idx;
                     }
                 } else {
-                    // We are not at the last recursion level, npart > m_ncrit and
-                    // the node has at least one children. Go deeper.
-                    vec_accs_impl<Level + 1u>(out, theta2, idx + 1u, idx + 1u + n_children);
+                    // Compute the accelerations from the current sibling.
+                    vec_acc_from_node<Level>(theta2, node_begin, npart, idx, idx + 1u + get<1>(m_tree[idx])[2],
+                                             node_size2);
                 }
             }
+            if (Level != node_level) {
+                // If we are not at the last iteration, we must have changed
+                // new_sib_begin in the loop above.
+                assert(new_sib_begin != sib_end);
+            } else {
+                ignore_args(new_sib_begin);
+            }
+            if (Level < node_level) {
+                // We are not at the level of the target yet. Recurse down.
+                vec_acc_on_node<Level + 1u>(theta2, node_begin, npart, nodal_code, new_sib_begin + 1u,
+                                            new_sib_begin + 1u + get<1>(m_tree[new_sib_begin])[2], node_level);
+            }
         } else {
-            ignore_args(begin, end);
-            // NOTE: we can never end up here, as we have reached the maximum tree level
-            // and we are prevented from reaching this point at runtime by the Level == cbits
-            // check above.
+            ignore_args(node_begin, npart, nodal_code, sib_begin, sib_end);
+            // NOTE: we can never get to a level higher than cbits, which is the maximum node level.
+            // This is prevented at runtime by the Level < node_level check.
             assert(false);
         }
+    }
+    // Top level function fo the vectorised computation of the accelerations.
+    template <typename It>
+    void vec_accs_impl(std::array<It, NDim> &out, const F &theta2) const
+    {
+        tbb::parallel_for(tbb::blocked_range<decltype(m_crit_nodes.size())>(0u, m_crit_nodes.size()),
+                          [this, &theta2, &out](const auto &range) {
+                              auto &tmp_res = vec_acc_tmp_res();
+                              for (auto i = range.begin(); i != range.end(); ++i) {
+                                  const auto nodal_code = get<0>(m_crit_nodes[i]);
+                                  const auto node_begin = get<1>(m_crit_nodes[i]);
+                                  const auto npart = get<2>(m_crit_nodes[i]) - node_begin;
+                                  const auto node_level = tree_level<NDim>(nodal_code);
+                                  // Prepare the temporary vectors containing the result.
+                                  for (auto &v : tmp_res) {
+                                      // Resize and fill with zeroes.
+                                      v.resize(boost::numeric_cast<decltype(v.size())>(npart));
+                                      std::fill(v.begin(), v.end(), F(0));
+                                  }
+                                  // Do the computation.
+                                  vec_acc_on_node<0>(theta2, node_begin, npart, nodal_code, size_type(0),
+                                                     size_type(m_tree.size()), node_level);
+                                  // Write out the result.
+                                  for (std::size_t j = 0; j != NDim; ++j) {
+                                      using it_diff_t = typename std::iterator_traits<It>::difference_type;
+                                      std::copy(tmp_res[j].begin(), tmp_res[j].end(),
+                                                out[j] + boost::numeric_cast<it_diff_t>(node_begin));
+                                  }
+                              }
+                          });
     }
     // Top level dispatcher for the accs functions. It will run a few checks and then invoke vec_accs_impl().
     template <bool Ordered, typename Output>
@@ -1579,9 +1567,9 @@ private:
             for (std::size_t j = 0; j != NDim; ++j) {
                 out_pits[j] = boost::make_permutation_iterator(out[j], m_isort.begin());
             }
-            vec_accs_impl<0>(out_pits, theta2, size_type(0), size_type(m_tree.size()));
+            vec_accs_impl(out_pits, theta2);
         } else {
-            vec_accs_impl<0>(out, theta2, size_type(0), size_type(m_tree.size()));
+            vec_accs_impl(out, theta2);
         }
     }
     // Helper overload for an array of vectors. It will prepare the vectors and then
@@ -1829,7 +1817,7 @@ private:
     // The tree structure.
     tree_type m_tree;
     // The list of critical nodes.
-    v_type<std::pair<size_type, size_type>> m_crit_nodes;
+    v_type<std::tuple<UInt, size_type, size_type>> m_crit_nodes;
 };
 
 template <typename UInt, typename F>
