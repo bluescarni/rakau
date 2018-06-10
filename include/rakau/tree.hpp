@@ -344,17 +344,21 @@ public:
     using size_type = typename v_type<F>::size_type;
 
 private:
-    // The internal node type.
+    // The node type.
     using node_type = std::tuple<UInt, std::array<size_type, 3>, F, std::array<F, NDim>>;
-    // The internal tree type.
+    // The tree type.
     using tree_type = v_type<node_type>;
+    // The critical node descriptor type (nodal code and particle range).
+    using cnode_type = std::tuple<UInt, size_type, size_type>;
+    // List of critical nodes.
+    using cnode_list_type = v_type<cnode_type>;
     // Serial construction of a subtree. The parent of the subtree is the node with code parent_code,
     // at the level ParentLevel. The particles in the children nodes have codes in the [begin, end)
     // range. The children nodes will be appended in depth-first order to tree. crit_nodes is the local
     // list of critical nodes, crit_ancestor a flag signalling if the parent node or one of its ancestors is a critical
     // node.
-    template <unsigned ParentLevel, typename CritNodes, typename CIt>
-    size_type build_tree_ser_impl(tree_type &tree, CritNodes &crit_nodes, UInt parent_code, CIt begin, CIt end,
+    template <unsigned ParentLevel, typename CIt>
+    size_type build_tree_ser_impl(tree_type &tree, cnode_list_type &crit_nodes, UInt parent_code, CIt begin, CIt end,
                                   bool crit_ancestor)
     {
         if constexpr (ParentLevel < cbits) {
@@ -429,8 +433,7 @@ private:
                         = !crit_ancestor
                           && (u_npart <= m_ncrit || u_npart <= m_max_leaf_n || ParentLevel + 1u == cbits);
                     if (critical_node) {
-                        // The node is a critical one, add its code and limits to the list of critical nodes for this
-                        // subtree.
+                        // The node is a critical one, add it to the list of critical nodes for this subtree.
                         crit_nodes.push_back({get<0>(tree.back()), get<1>(tree.back())[0], get<1>(tree.back())[1]});
                     }
                     if (u_npart > m_max_leaf_n) {
@@ -465,8 +468,8 @@ private:
     // parent_code at level ParentLevel, add single nodes to the 'trees' concurrent container, and recurse down
     // until the tree level split_level is reached. From there, whole subtrees (rather than single nodes) will be
     // constructed and added to the 'trees' container via build_tree_ser_impl(). The particles in the children nodes
-    // have codes in the [begin, end) range. crit_nodes is the global list of critical nodes, crit_ancestor a flag
-    // signalling if the parent node or one of its ancestors is a critical node.
+    // have codes in the [begin, end) range. crit_nodes is the global list of lists of critical nodes, crit_ancestor a
+    // flag signalling if the parent node or one of its ancestors is a critical node.
     template <unsigned ParentLevel, typename Out, typename CritNodes, typename CIt>
     size_type build_tree_par_impl(Out &trees, CritNodes &crit_nodes, UInt parent_code, CIt begin, CIt end,
                                   unsigned split_level, bool crit_ancestor)
@@ -516,9 +519,8 @@ private:
                             = !crit_ancestor
                               && (u_npart <= m_ncrit || u_npart <= m_max_leaf_n || ParentLevel + 1u == cbits);
                         // Add a new entry to crit_nodes. If the only node of the new tree is critical, the new entry
-                        // will contain 1 element with the node's code and range, otherwise it will be an empty list.
-                        // This empty list may remain empty, or be used to accumulate the list of critical nodes during
-                        // the serial subtree construction.
+                        // will contain 1 element, otherwise it will be an empty list. This empty list may remain empty,
+                        // or be used to accumulate the list of critical nodes during the serial subtree construction.
                         auto &new_crit_nodes
                             = critical_node ? *crit_nodes.push_back({{get<0>(new_tree[0]), get<1>(new_tree[0])[0],
                                                                       get<1>(new_tree[0])[1]}})
@@ -595,9 +597,9 @@ private:
         // NOTE: here we could use tbb::enumerable_thread_specific as well, but I see no reason
         // to at the moment.
         tbb::concurrent_vector<tree_type> trees;
-        // List of critical nodes, represented as a nodal code and a range. We will accumulate here partial ordered
+        // List of lists of critical nodes. We will accumulate here partial ordered
         // lists of critical nodes, in a similar fashion to the vector of partial trees above.
-        tbb::concurrent_vector<v_type<std::tuple<UInt, size_type, size_type>>> crit_nodes;
+        tbb::concurrent_vector<cnode_list_type> crit_nodes;
         // Add the root node.
         m_tree.emplace_back(1,
                             std::array<size_type, 3>{size_type(0), size_type(m_codes.size()),
@@ -611,7 +613,7 @@ private:
         // (the definition of critical node) or m_max_leaf_n (in which case it will have no children).
         const bool root_is_crit = m_codes.size() <= m_ncrit || m_codes.size() <= m_max_leaf_n;
         if (root_is_crit) {
-            // The root node is critical, add it to the list.
+            // The root node is critical, add it to the global list.
             crit_nodes.push_back({{UInt(1), size_type(0), size_type(m_codes.size())}});
         }
         // Build the rest, if needed.
@@ -1068,12 +1070,15 @@ private:
     // node (the source). pidx and size are the starting index (in the particles arrays) and the size of the target
     // node. begin/end is the range, in the tree structure, encompassing the source node and its children.
     // node_size2 is the square of the size of the source node. The accelerations will be written into the
-    // temporary storage provided by vec_acc_tmp_res().
+    // temporary storage provided by vec_acc_tmp_res(). SLevel is the tree level of the source node.
     template <unsigned SLevel>
     void vec_acc_from_node(const F &theta2, size_type pidx, size_type size, size_type begin, size_type end,
                            const F &node_size2) const
     {
         if constexpr (SLevel <= cbits) {
+            // Check that the source node level is consistent between SLevel and
+            // the tree data.
+            assert(tree_level<NDim>(get<0>(m_tree[begin])) == SLevel);
             // Check that node_size2 is correct.
             assert(node_size2 == m_box_size / (UInt(1) << SLevel) * m_box_size / (UInt(1) << SLevel));
             // Prepare pointers to the input and output data.
@@ -1453,13 +1458,14 @@ private:
                          size_type sib_end, unsigned node_level) const
     {
         if constexpr (Level <= cbits) {
+            // Make sure the node level is consistent with the nodal code.
+            assert(node_level == tree_level<NDim>(nodal_code));
             // We proceed breadth-first examining all the siblings of the target's parent
             // (or of the node itself, at the last iteration) at the current level.
             //
             // Compute the shifted code. This is the nodal code of the target's parent
             // at the current level (or the nodal code of the target itself at the last
             // iteration).
-            assert(node_level == tree_level<NDim>(nodal_code));
             const auto s_code = nodal_code >> ((node_level - Level) * NDim);
             auto new_sib_begin = sib_end;
             // Determine the size of the target at the current level.
@@ -1512,7 +1518,9 @@ private:
                               for (auto i = range.begin(); i != range.end(); ++i) {
                                   const auto nodal_code = get<0>(m_crit_nodes[i]);
                                   const auto node_begin = get<1>(m_crit_nodes[i]);
-                                  const auto npart = get<2>(m_crit_nodes[i]) - node_begin;
+                                  const auto npart = static_cast<size_type>(get<2>(m_crit_nodes[i]) - node_begin);
+                                  // NOTE: in principle this could be pre-computed during the construction of the tree
+                                  // (perhaps for free?). Not sure if it's worth it.
                                   const auto node_level = tree_level<NDim>(nodal_code);
                                   // Prepare the temporary vectors containing the result.
                                   for (auto &v : tmp_res) {
@@ -1524,8 +1532,8 @@ private:
                                   vec_acc_on_node<0>(theta2, node_begin, npart, nodal_code, size_type(0),
                                                      size_type(m_tree.size()), node_level);
                                   // Write out the result.
+                                  using it_diff_t = typename std::iterator_traits<It>::difference_type;
                                   for (std::size_t j = 0; j != NDim; ++j) {
-                                      using it_diff_t = typename std::iterator_traits<It>::difference_type;
                                       std::copy(tmp_res[j].begin(), tmp_res[j].end(),
                                                 out[j] + boost::numeric_cast<it_diff_t>(node_begin));
                                   }
@@ -1817,7 +1825,7 @@ private:
     // The tree structure.
     tree_type m_tree;
     // The list of critical nodes.
-    v_type<std::tuple<UInt, size_type, size_type>> m_crit_nodes;
+    cnode_list_type m_crit_nodes;
 };
 
 template <typename UInt, typename F>
