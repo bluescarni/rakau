@@ -405,17 +405,16 @@ class tree
     static_assert(NDim);
     // cbits shortcut.
     static constexpr unsigned cbits = cbits_v<UInt, NDim>;
-    // Main vector type for storing floating-point values. It uses custom alignment to enabled
+    // Main vector type for storing floating-point values. It uses custom alignment to enable
     // aligned loads/stores whenever possible.
-    template <typename T>
-    using fp_vector = std::vector<T, di_aligned_allocator<T, XSIMD_DEFAULT_ALIGNMENT>>;
+    using fp_vector = std::vector<F, di_aligned_allocator<F, XSIMD_DEFAULT_ALIGNMENT>>;
     // xsimd batch type.
     using b_type = xsimd::simd_type<F>;
     // Size of b_type.
     static constexpr auto b_size = b_type::size;
 
 public:
-    using size_type = typename fp_vector<F>::size_type;
+    using size_type = typename fp_vector::size_type;
 
 private:
     // The node type.
@@ -429,8 +428,8 @@ private:
     // Serial construction of a subtree. The parent of the subtree is the node with code parent_code,
     // at the level ParentLevel. The particles in the children nodes have codes in the [begin, end)
     // range. The children nodes will be appended in depth-first order to tree. crit_nodes is the local
-    // list of critical nodes, crit_ancestor a flag signalling if the parent node or one of its ancestors is a critical
-    // node.
+    // list of critical nodes, crit_ancestor a flag signalling if the parent node or one of its
+    // ancestors is a critical node.
     template <unsigned ParentLevel, typename CIt>
     size_type build_tree_ser_impl(tree_type &tree, cnode_list_type &crit_nodes, UInt parent_code, CIt begin, CIt end,
                                   bool crit_ancestor)
@@ -1105,7 +1104,7 @@ private:
     // of a node and the COM of another node while traversing the tree.
     static auto &vec_acc_tmp_vecs()
     {
-        static thread_local std::array<fp_vector<F>, NDim + 1u> tmp_vecs;
+        static thread_local std::array<fp_vector, NDim + 1u> tmp_vecs;
         return tmp_vecs;
     }
     // Temporary storage to accumulate the accelerations induced on the
@@ -1114,7 +1113,7 @@ private:
     // particles/nodes in the domain have been computed.
     static auto &vec_acc_tmp_res()
     {
-        static thread_local std::array<fp_vector<F>, NDim> tmp_res;
+        static thread_local std::array<fp_vector, NDim> tmp_res;
         return tmp_res;
     }
     // Compute the element-wise attraction on the batch of particles at xvec1, yvec1, zvec1 by the
@@ -1875,9 +1874,9 @@ private:
     // particles in that node in a vectorised fashion.
     size_type m_ncrit;
     // The particles' masses.
-    fp_vector<F> m_masses;
+    fp_vector m_masses;
     // The particles' coordinates.
-    std::array<fp_vector<F>, NDim> m_coords;
+    std::array<fp_vector, NDim> m_coords;
     // The particles' Morton codes.
     std::vector<UInt, di_aligned_allocator<UInt>> m_codes;
     // The indirect sorting vector. It establishes how to re-order the
