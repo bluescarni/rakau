@@ -359,7 +359,10 @@ struct di_aligned_allocator {
             // http://en.cppreference.com/w/cpp/memory/c/aligned_alloc
             // A null pointer will be returned if invalid Alignment and/or size are supplied,
             // or if the allocation fails.
-            retval = std::aligned_alloc(Alignment, size);
+            // NOTE: some early versions of GCC put aligned_alloc in the root namespace rather
+            // than std, so let's try to workaround.
+            using namespace std;
+            retval = aligned_alloc(Alignment, size);
         }
         if (!retval) {
             // Throw on failure.
