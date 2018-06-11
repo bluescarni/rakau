@@ -1149,8 +1149,7 @@ private:
                            const F &node_size2) const
     {
         if constexpr (SLevel <= cbits) {
-            // Check that the source node level is consistent between SLevel and
-            // the tree data.
+            // Check that SLevel is consistent with the tree data.
             assert(tree_level<NDim>(get<0>(m_tree[begin])) == SLevel);
             // Check that node_size2 is correct.
             assert(node_size2 == m_box_size / (UInt(1) << SLevel) * m_box_size / (UInt(1) << SLevel));
