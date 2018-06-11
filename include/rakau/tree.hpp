@@ -20,11 +20,13 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <deque>
 #include <initializer_list>
 #include <iostream>
 #include <iterator>
 #include <limits>
+#include <new>
 #include <numeric>
 #include <stdexcept>
 #include <string>
@@ -323,6 +325,78 @@ inline void checked_uinc(std::atomic<T> &out, T add)
     }
 }
 
+// A trivial allocator that supports custom alignment and does
+// default-initialisation instead of value-initialisation.
+template <typename T, std::size_t Alignment = 0>
+struct di_aligned_allocator {
+    // Alignment must be either zero or:
+    // - not less than the natural alignment of T,
+    // - a power of 2.
+    static_assert(!Alignment || (Alignment >= alignof(T) && (Alignment & (Alignment - 1u)) == 0u));
+    // value_type must always be present.
+    using value_type = T;
+    // Make sure the size_type is consistent with the size type returned
+    // by malloc() and friends.
+    using size_type = std::size_t;
+    // NOTE: rebind is needed because we have a non-type template parameter, which
+    // prevents the automatic implementation of rebind from working.
+    // http://en.cppreference.com/w/cpp/concept/Allocator#cite_note-1
+    template <typename U>
+    struct rebind {
+        using other = di_aligned_allocator<U, Alignment>;
+    };
+    // Allocation.
+    T *allocate(size_type n) const
+    {
+        // Total size in bytes. This is prevented from being too large
+        // by the default implementation of max_size().
+        const auto size = n * sizeof(T);
+        void *retval;
+        if constexpr (Alignment == 0u) {
+            retval = std::malloc(size);
+        } else {
+            // For use in std::aligned_alloc, the size must be a multiple of the alignment.
+            // http://en.cppreference.com/w/cpp/memory/c/aligned_alloc
+            // A null pointer will be returned if invalid Alignment and/or size are supplied,
+            // or if the allocation fails.
+            retval = std::aligned_alloc(Alignment, size);
+        }
+        if (!retval) {
+            // Throw on failure.
+            throw std::bad_alloc{};
+        }
+        return static_cast<T *>(retval);
+    }
+    // Deallocation.
+    void deallocate(T *ptr, size_type) const
+    {
+        std::free(ptr);
+    }
+    // Trivial comparison operators.
+    friend bool operator==(const di_aligned_allocator &, const di_aligned_allocator &)
+    {
+        return true;
+    }
+    friend bool operator!=(const di_aligned_allocator &, const di_aligned_allocator &)
+    {
+        return false;
+    }
+    // The construction function.
+    template <typename U, typename... Args>
+    void construct(U *p, Args &&... args) const
+    {
+        if constexpr (sizeof...(args) == 0u) {
+            // When no construction arguments are supplied, do default
+            // initialisation rather than value initialisation.
+            ::new (static_cast<void *>(p)) U;
+        } else {
+            // This is the standard std::allocator implementation.
+            // http://en.cppreference.com/w/cpp/memory/allocator/construct
+            ::new (static_cast<void *>(p)) U(std::forward<Args>(args)...);
+        }
+    }
+};
+
 } // namespace detail
 
 template <typename UInt, typename F, std::size_t NDim>
@@ -331,27 +405,27 @@ class tree
     static_assert(NDim);
     // cbits shortcut.
     static constexpr unsigned cbits = cbits_v<UInt, NDim>;
-    // Main vector type. Use the SIMD-aware allocator in order
-    // to enable aligned loads/stores where possible.
+    // Main vector type for storing floating-point values. It uses custom alignment to enabled
+    // aligned loads/stores whenever possible.
     template <typename T>
-    using v_type = std::vector<T, XSIMD_DEFAULT_ALLOCATOR(T)>;
+    using fp_vector = std::vector<T, di_aligned_allocator<T, XSIMD_DEFAULT_ALIGNMENT>>;
     // xsimd batch type.
     using b_type = xsimd::simd_type<F>;
     // Size of b_type.
     static constexpr auto b_size = b_type::size;
 
 public:
-    using size_type = typename v_type<F>::size_type;
+    using size_type = typename fp_vector<F>::size_type;
 
 private:
     // The node type.
     using node_type = std::tuple<UInt, std::array<size_type, 3>, F, std::array<F, NDim>>;
     // The tree type.
-    using tree_type = v_type<node_type>;
+    using tree_type = std::vector<node_type, di_aligned_allocator<node_type>>;
     // The critical node descriptor type (nodal code and particle range).
     using cnode_type = std::tuple<UInt, size_type, size_type>;
     // List of critical nodes.
-    using cnode_list_type = v_type<cnode_type>;
+    using cnode_list_type = std::vector<cnode_type, di_aligned_allocator<cnode_type>>;
     // Serial construction of a subtree. The parent of the subtree is the node with code parent_code,
     // at the level ParentLevel. The particles in the children nodes have codes in the [begin, end)
     // range. The children nodes will be appended in depth-first order to tree. crit_nodes is the local
@@ -631,10 +705,10 @@ private:
             return node_compare<NDim>(get<0>(t1[0]), get<0>(t2[0]));
         });
         // Compute the cumulative sizes in trees.
-        v_type<size_type> cum_sizes;
+        std::vector<size_type, di_aligned_allocator<size_type>> cum_sizes;
         // NOTE: start from 1 in order to account for the root node (which is not accounted
         // for in trees' sizes).
-        cum_sizes.emplace_back(1);
+        cum_sizes.emplace_back(1u);
         for (const auto &t : trees) {
             cum_sizes.push_back(cum_sizes.back());
             checked_uinc(cum_sizes.back(), boost::numeric_cast<size_type>(t.size()));
@@ -681,7 +755,7 @@ private:
         });
         // Compute the cumulative sizes in crit_nodes. Re-use cum_sizes.
         cum_sizes.clear();
-        cum_sizes.emplace_back(0);
+        cum_sizes.emplace_back(0u);
         for (const auto &c : crit_nodes) {
             cum_sizes.push_back(cum_sizes.back());
             checked_uinc(cum_sizes.back(), boost::numeric_cast<size_type>(c.size()));
@@ -1031,7 +1105,7 @@ private:
     // of a node and the COM of another node while traversing the tree.
     static auto &vec_acc_tmp_vecs()
     {
-        static thread_local std::array<v_type<F>, NDim + 1u> tmp_vecs;
+        static thread_local std::array<fp_vector<F>, NDim + 1u> tmp_vecs;
         return tmp_vecs;
     }
     // Temporary storage to accumulate the accelerations induced on the
@@ -1040,7 +1114,7 @@ private:
     // particles/nodes in the domain have been computed.
     static auto &vec_acc_tmp_res()
     {
-        static thread_local std::array<v_type<F>, NDim> tmp_res;
+        static thread_local std::array<fp_vector<F>, NDim> tmp_res;
         return tmp_res;
     }
     // Compute the element-wise attraction on the batch of particles at xvec1, yvec1, zvec1 by the
@@ -1709,7 +1783,7 @@ private:
         });
         // Like on construction, do the indirect sorting of the new codes.
         // Use a new temp vector for the new indirect sorting.
-        v_type<size_type> v_ind;
+        std::vector<size_type, di_aligned_allocator<size_type>> v_ind;
         v_ind.resize(boost::numeric_cast<decltype(v_ind.size())>(nparts));
         // NOTE: this is just a iota.
         tbb::parallel_for(tbb::blocked_range<decltype(m_masses.size())>(0u, nparts), [&v_ind](const auto &range) {
@@ -1801,18 +1875,18 @@ private:
     // particles in that node in a vectorised fashion.
     size_type m_ncrit;
     // The particles' masses.
-    v_type<F> m_masses;
+    fp_vector<F> m_masses;
     // The particles' coordinates.
-    std::array<v_type<F>, NDim> m_coords;
+    std::array<fp_vector<F>, NDim> m_coords;
     // The particles' Morton codes.
-    v_type<UInt> m_codes;
+    std::vector<UInt, di_aligned_allocator<UInt>> m_codes;
     // The indirect sorting vector. It establishes how to re-order the
     // original particle sequence so that the particles' Morton codes are
     // sorted in ascending order. E.g., if m_isort is [0, 3, 1, 2, ...],
     // then the first particle in Morton order is also the first particle in
     // the original order, the second particle in the Morton order is the
     // particle at index 3 in the original order, and so on.
-    v_type<size_type> m_isort;
+    std::vector<size_type, di_aligned_allocator<size_type>> m_isort;
     // Indices vector to iterate over the particles' data in the original order.
     // It establishes how to re-order the Morton order to recover the original
     // particle order. This is the dual of m_isort, and it's always possible to
@@ -1821,7 +1895,7 @@ private:
     // the original order is also the first particle in the Morton order, the second
     // particle in the original order is the particle at index 2 in the Morton order,
     // and so on.
-    v_type<size_type> m_ord_ind;
+    std::vector<size_type, di_aligned_allocator<size_type>> m_ord_ind;
     // The tree structure.
     tree_type m_tree;
     // The list of critical nodes.
