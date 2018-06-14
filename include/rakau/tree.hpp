@@ -162,14 +162,54 @@ struct morton_encoder<3, std::uint64_t> {
 };
 
 template <>
-struct morton_encoder<2, std::uint64_t> {
-    std::uint64_t operator()(std::uint64_t x, std::uint64_t y) const
+struct morton_encoder<3, std::uint32_t> {
+    template <typename It>
+    std::uint32_t operator()(It it) const
     {
-        // TODO fix.
+        const auto x = *it;
+        const auto y = *(it + 1);
+        const auto z = *(it + 2);
+        assert(x < (1ul << 10));
+        assert(y < (1ul << 10));
+        assert(z < (1ul << 10));
+        assert(
+            !(::m3D_e_sLUT<std::uint32_t, std::uint32_t>(std::uint32_t(x), std::uint32_t(y), std::uint32_t(z)) >> 31u));
+        assert((::morton3D_32_encode(x, y, z)
+                == ::m3D_e_sLUT<std::uint32_t, std::uint32_t>(std::uint32_t(x), std::uint32_t(y), std::uint32_t(z))));
+        return ::m3D_e_sLUT<std::uint32_t, std::uint32_t>(std::uint32_t(x), std::uint32_t(y), std::uint32_t(z));
+    }
+};
+
+// NOTE: the 2D versions still need to be tested.
+template <>
+struct morton_encoder<2, std::uint64_t> {
+    template <typename It>
+    std::uint64_t operator()(It it) const
+    {
+        const auto x = *it;
+        const auto y = *(it + 1);
         assert(x < (1ul << 31));
         assert(y < (1ul << 31));
-        assert(!(::morton2D_64_encode(x, y) >> 62u));
-        return ::morton2D_64_encode(x, y);
+        assert(!(::m2D_e_sLUT<std::uint64_t, std::uint32_t>(std::uint32_t(x), std::uint32_t(y)) >> 63u));
+        assert((::morton2D_64_encode(x, y)
+                == ::m2D_e_sLUT<std::uint64_t, std::uint32_t>(std::uint32_t(x), std::uint32_t(y))));
+        return ::m2D_e_sLUT<std::uint64_t, std::uint32_t>(std::uint32_t(x), std::uint32_t(y));
+    }
+};
+
+template <>
+struct morton_encoder<2, std::uint32_t> {
+    template <typename It>
+    std::uint32_t operator()(It it) const
+    {
+        const auto x = *it;
+        const auto y = *(it + 1);
+        assert(x < (1ul << 15));
+        assert(y < (1ul << 15));
+        assert(!(::m2D_e_sLUT<std::uint32_t, std::uint32_t>(std::uint32_t(x), std::uint32_t(y)) >> 31u));
+        assert((::morton2D_32_encode(x, y)
+                == ::m2D_e_sLUT<std::uint32_t, std::uint32_t>(std::uint32_t(x), std::uint32_t(y))));
+        return ::m2D_e_sLUT<std::uint32_t, std::uint32_t>(std::uint32_t(x), std::uint32_t(y));
     }
 };
 
