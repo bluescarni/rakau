@@ -1228,18 +1228,15 @@ private:
             if constexpr (NDim == 3u) {
                 // The SIMD-accelerated part.
                 const auto vec_size = static_cast<size_type>(size - size % b_size);
-                const b_type node_size2_vec = xsimd::set_simd(node_size2);
+                const b_type node_size2_vec(node_size2);
                 auto [x_ptr, y_ptr, z_ptr] = c_ptrs;
                 const auto [x_com, y_com, z_com] = com_pos;
                 auto [tmp_x, tmp_y, tmp_z, tmp_dist3] = tmp_ptrs;
                 for (; i < vec_size; i += b_size, x_ptr += b_size, y_ptr += b_size, z_ptr += b_size, tmp_x += b_size,
                                      tmp_y += b_size, tmp_z += b_size, tmp_dist3 += b_size) {
-                    const b_type xvec = xsimd::load_unaligned(x_ptr);
-                    const b_type yvec = xsimd::load_unaligned(y_ptr);
-                    const b_type zvec = xsimd::load_unaligned(z_ptr);
-                    const b_type diffx = x_com - xvec;
-                    const b_type diffy = y_com - yvec;
-                    const b_type diffz = z_com - zvec;
+                    const b_type diffx = x_com - xsimd::load_unaligned(x_ptr);
+                    const b_type diffy = y_com - xsimd::load_unaligned(y_ptr);
+                    const b_type diffz = z_com - xsimd::load_unaligned(z_ptr);
                     const b_type dist2 = diffx * diffx + diffy * diffy + diffz * diffz;
                     if (xsimd::any(node_size2_vec >= theta2 * dist2)) {
                         // At least one particle in the current batch fails the BH criterion
