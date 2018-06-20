@@ -738,6 +738,7 @@ private:
                                                           split_level, root_is_crit);
         }
 
+        // NOTE: the merge of the subtrees and of the critical nodes lists can be done independently.
         tbb::task_group tg;
         tg.run([&]() {
             // NOTE: this sorting and the computation of the cumulative sizes can be done also in parallel,
@@ -769,18 +770,6 @@ private:
                                   &m_tree[boost::numeric_cast<decltype(m_tree.size())>(cum_sizes[i])]);
                     }
                 });
-            // Check the tree is sorted according to the nodal code comparison.
-            assert(std::is_sorted(m_tree.begin(), m_tree.end(), [](const auto &t1, const auto &t2) {
-                return node_compare<NDim>(get<0>(t1), get<0>(t2));
-            }));
-            // Check that all the nodes contain at least 1 element.
-            assert(std::all_of(m_tree.begin(), m_tree.end(),
-                               [](const auto &tup) { return get<1>(tup)[1] > get<1>(tup)[0]; }));
-            // Check that size_type can represent the size of the tree.
-            if (m_tree.size() > std::numeric_limits<size_type>::max()) {
-                throw std::overflow_error("the size of the tree (" + std::to_string(m_tree.size())
-                                          + ") is too large, and it results in an overflow condition");
-            }
         });
 
         tg.run([&]() {
@@ -820,6 +809,15 @@ private:
                 });
         });
         tg.wait();
+
+        // Various debug checks.
+        // Check the tree is sorted according to the nodal code comparison.
+        assert(std::is_sorted(m_tree.begin(), m_tree.end(), [](const auto &t1, const auto &t2) {
+            return node_compare<NDim>(get<0>(t1), get<0>(t2));
+        }));
+        // Check that all the nodes contain at least 1 element.
+        assert(
+            std::all_of(m_tree.begin(), m_tree.end(), [](const auto &tup) { return get<1>(tup)[1] > get<1>(tup)[0]; }));
         // In a non-empty domain, we must have at least 1 critical node.
         assert(!m_crit_nodes.empty());
         // The list of critical nodes must start with the first particle and end with the last particle.
@@ -840,7 +838,13 @@ private:
         assert(std::is_sorted(m_crit_nodes.begin(), m_crit_nodes.end(), [](const auto &t1, const auto &t2) {
             return node_compare<NDim>(get<0>(t1), get<0>(t2));
         }));
-        // Check that size_type can represent the size of the critical nodes list.
+
+        // NOTE: a couple of final checks to make sure we can use size_type to represent both the tree
+        // size and the size of the list of critical nodes.
+        if (m_tree.size() > std::numeric_limits<size_type>::max()) {
+            throw std::overflow_error("the size of the tree (" + std::to_string(m_tree.size())
+                                      + ") is too large, and it results in an overflow condition");
+        }
         if (m_crit_nodes.size() > std::numeric_limits<size_type>::max()) {
             throw std::overflow_error("the size of the critical nodes list (" + std::to_string(m_crit_nodes.size())
                                       + ") is too large, and it results in an overflow condition");
