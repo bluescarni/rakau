@@ -144,8 +144,12 @@ struct morton_encoder {
 
 template <>
 struct morton_encoder<3, std::uint64_t> {
-    std::uint64_t operator()(std::uint64_t x, std::uint64_t y, std::uint64_t z) const
+    template <typename It>
+    std::uint64_t operator()(It it) const
     {
+        const auto x = *it;
+        const auto y = *(it + 1);
+        const auto z = *(it + 2);
         assert(x < (1ul << 21));
         assert(y < (1ul << 21));
         assert(z < (1ul << 21));
@@ -867,14 +871,15 @@ private:
             }
         });
     }
-    // Function to discretise the input NDim floating-point coordinates coords
+    // Function to discretise the input NDim floating-point coordinates starting at 'it'
     // into a box of a given size box_size.
-    template <typename... Coords>
-    static auto disc_coords(const F &box_size, const Coords &... coords)
+    template <typename It>
+    static auto disc_coords(It it, const F &box_size)
     {
-        static_assert(sizeof...(coords) == NDim);
-        auto disc_coord = [&box_size](const F &x) {
-            constexpr UInt factor = UInt(1) << cbits;
+        constexpr UInt factor = UInt(1) << cbits;
+        std::array<UInt, NDim> retval;
+        for (std::size_t i = 0; i < NDim; ++i, ++it) {
+            const auto &x = *it;
             // Translate and rescale the coordinate so that -box_size/2 becomes zero
             // and box_size/2 becomes 1.
             auto tmp = (x + box_size / F(2)) / box_size;
@@ -888,15 +893,14 @@ private:
             if (tmp < F(0) || tmp >= F(factor)) {
                 throw std::invalid_argument("Out of bounds!");
             }
-            // Cast to UInt.
-            auto ret = static_cast<UInt>(tmp);
+            // Cast to UInt and write to retval.
+            retval[i] = static_cast<UInt>(tmp);
             // Last check, make sure we don't overflow.
-            if (ret >= factor) {
+            if (retval[i] >= factor) {
                 throw std::invalid_argument("Out of bounds! (after cast)");
             }
-            return ret;
-        };
-        return std::make_tuple(disc_coord(coords)...);
+        }
+        return retval;
     }
     // Small helper to determine m_ord_ind based on the indirect sorting vector m_isort.
     // This is used when (re)building the tree.
@@ -968,23 +972,21 @@ public:
                                           + ") is too large, and it results in an overflow condition");
             }
             tbb::parallel_for(tbb::blocked_range<size_type>(0u, N), [this, &c_it, &m_it](const auto &range) {
+                // Temporary structure used in the encoding.
+                std::array<F, NDim> tmp_coord;
                 // The encoder object.
                 morton_encoder<NDim, UInt> me;
                 // Determine the particles' codes, and fill in the particles' data.
                 for (auto i = range.begin(); i != range.end(); ++i) {
-                    // Write the coords into the data members.
+                    // Write the coords in the temp structure and in the data members.
                     for (std::size_t j = 0; j < NDim; ++j) {
+                        tmp_coord[j] = *(c_it[j] + static_cast<it_diff_t>(i));
                         m_coords[j][i] = *(c_it[j] + static_cast<it_diff_t>(i));
                     }
                     // Store the mass.
                     m_masses[i] = *(m_it + static_cast<it_diff_t>(i));
                     // Compute and store the code.
-                    m_codes[i]
-                        = std::apply(me, std::apply(
-                                             [this, i](auto... args) {
-                                                 return disc_coords(m_box_size, *(args + static_cast<it_diff_t>(i))...);
-                                             },
-                                             c_it));
+                    m_codes[i] = me(disc_coords(tmp_coord.begin(), m_box_size).begin());
                     // Store the index for indirect sorting.
                     m_isort[i] = i;
                 }
@@ -1812,15 +1814,13 @@ private:
         // Let's start with generating the new codes.
         const auto nparts = m_masses.size();
         tbb::parallel_for(tbb::blocked_range<decltype(m_masses.size())>(0u, nparts), [this](const auto &range) {
+            std::array<F, NDim> tmp_coord;
             morton_encoder<NDim, UInt> me;
             for (auto i = range.begin(); i != range.end(); ++i) {
-                // for (std::size_t j = 0; j != NDim; ++j) {
-                //     tmp_coord[j] = m_coords[j][i];
-                // }
-                m_codes[i] = std::apply(
-                    me, std::apply([this, i](const auto &... args) { return disc_coords(m_box_size, args[i]...); },
-                                   m_coords));
-                // m_codes[i] = me(disc_coords(tmp_coord.begin(), m_box_size).begin());
+                for (std::size_t j = 0; j != NDim; ++j) {
+                    tmp_coord[j] = m_coords[j][i];
+                }
+                m_codes[i] = me(disc_coords(tmp_coord.begin(), m_box_size).begin());
             }
         });
         // Like on construction, do the indirect sorting of the new codes.
