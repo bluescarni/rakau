@@ -738,82 +738,88 @@ private:
                                                           split_level, root_is_crit);
         }
 
-        // NOTE: this sorting and the computation of the cumulative sizes can be done also in parallel,
-        // but it's probably not worth it since the size of trees should be rather small.
-        //
-        // Sort the subtrees according to the nodal code of the first node.
-        std::sort(trees.begin(), trees.end(), [](const auto &t1, const auto &t2) {
-            assert(t1.size() && t2.size());
-            return node_compare<NDim>(get<0>(t1[0]), get<0>(t2[0]));
-        });
-        // Compute the cumulative sizes in trees.
-        std::vector<size_type, di_aligned_allocator<size_type>> cum_sizes;
-        // NOTE: start from 1 in order to account for the root node (which is not accounted
-        // for in trees' sizes).
-        cum_sizes.emplace_back(1u);
-        for (const auto &t : trees) {
-            cum_sizes.push_back(cum_sizes.back());
-            checked_uinc(cum_sizes.back(), boost::numeric_cast<size_type>(t.size()));
-        }
-        // Resize the tree and copy over the data from trees.
-        m_tree.resize(boost::numeric_cast<decltype(m_tree.size())>(cum_sizes.back()));
-        tbb::parallel_for(
-            tbb::blocked_range<decltype(cum_sizes.size())>(0u,
-                                                           // NOTE: cum_sizes is 1 element larger than trees.
-                                                           cum_sizes.size() - 1u),
-            [this, &cum_sizes, &trees](const auto &range) {
-                for (auto i = range.begin(); i != range.end(); ++i) {
-                    std::copy(trees[i].begin(), trees[i].end(),
-                              &m_tree[boost::numeric_cast<decltype(m_tree.size())>(cum_sizes[i])]);
-                }
+        tbb::task_group tg;
+        tg.run([&]() {
+            // NOTE: this sorting and the computation of the cumulative sizes can be done also in parallel,
+            // but it's probably not worth it since the size of trees should be rather small.
+            //
+            // Sort the subtrees according to the nodal code of the first node.
+            std::sort(trees.begin(), trees.end(), [](const auto &t1, const auto &t2) {
+                assert(t1.size() && t2.size());
+                return node_compare<NDim>(get<0>(t1[0]), get<0>(t2[0]));
             });
-        // Check the tree is sorted according to the nodal code comparison.
-        assert(std::is_sorted(m_tree.begin(), m_tree.end(), [](const auto &t1, const auto &t2) {
-            return node_compare<NDim>(get<0>(t1), get<0>(t2));
-        }));
-        // Check that all the nodes contain at least 1 element.
-        assert(
-            std::all_of(m_tree.begin(), m_tree.end(), [](const auto &tup) { return get<1>(tup)[1] > get<1>(tup)[0]; }));
-        // Check that size_type can represent the size of the tree.
-        if (m_tree.size() > std::numeric_limits<size_type>::max()) {
-            throw std::overflow_error("the size of the tree (" + std::to_string(m_tree.size())
-                                      + ") is too large, and it results in an overflow condition");
-        }
+            // Compute the cumulative sizes in trees.
+            std::vector<size_type, di_aligned_allocator<size_type>> cum_sizes;
+            // NOTE: start from 1 in order to account for the root node (which is not accounted
+            // for in trees' sizes).
+            cum_sizes.emplace_back(1u);
+            for (const auto &t : trees) {
+                cum_sizes.push_back(cum_sizes.back());
+                checked_uinc(cum_sizes.back(), boost::numeric_cast<size_type>(t.size()));
+            }
+            // Resize the tree and copy over the data from trees.
+            m_tree.resize(boost::numeric_cast<decltype(m_tree.size())>(cum_sizes.back()));
+            tbb::parallel_for(
+                tbb::blocked_range<decltype(cum_sizes.size())>(0u,
+                                                               // NOTE: cum_sizes is 1 element larger than trees.
+                                                               cum_sizes.size() - 1u),
+                [this, &cum_sizes, &trees](const auto &range) {
+                    for (auto i = range.begin(); i != range.end(); ++i) {
+                        std::copy(trees[i].begin(), trees[i].end(),
+                                  &m_tree[boost::numeric_cast<decltype(m_tree.size())>(cum_sizes[i])]);
+                    }
+                });
+            // Check the tree is sorted according to the nodal code comparison.
+            assert(std::is_sorted(m_tree.begin(), m_tree.end(), [](const auto &t1, const auto &t2) {
+                return node_compare<NDim>(get<0>(t1), get<0>(t2));
+            }));
+            // Check that all the nodes contain at least 1 element.
+            assert(std::all_of(m_tree.begin(), m_tree.end(),
+                               [](const auto &tup) { return get<1>(tup)[1] > get<1>(tup)[0]; }));
+            // Check that size_type can represent the size of the tree.
+            if (m_tree.size() > std::numeric_limits<size_type>::max()) {
+                throw std::overflow_error("the size of the tree (" + std::to_string(m_tree.size())
+                                          + ") is too large, and it results in an overflow condition");
+            }
+        });
 
-        // NOTE: as above, we could do some of these things in parallel but it does not seem worth it at this time.
-        // Sort the critical nodes lists according to the starting points of the ranges.
-        std::sort(crit_nodes.begin(), crit_nodes.end(), [](const auto &v1, const auto &v2) {
-            // NOTE: we may have empty lists, put them at the beginning.
-            if (v1.empty()) {
-                // v1 empty, if v2 is not empty then v1 < v2, otherwise v1 >= v2.
-                return !v2.empty();
-            }
-            if (v2.empty()) {
-                // NOTE: v1 is not empty at this point, thus v1 >= v2.
-                return false;
-            }
-            // v1 and v2 are not empty, compare the starting points of their first critical nodes.
-            return get<1>(v1[0]) < get<1>(v2[0]);
-        });
-        // Compute the cumulative sizes in crit_nodes. Re-use cum_sizes.
-        cum_sizes.clear();
-        cum_sizes.emplace_back(0u);
-        for (const auto &c : crit_nodes) {
-            cum_sizes.push_back(cum_sizes.back());
-            checked_uinc(cum_sizes.back(), boost::numeric_cast<size_type>(c.size()));
-        }
-        // Resize the critical nodes list and copy over the data from crit_nodes.
-        m_crit_nodes.resize(boost::numeric_cast<decltype(m_crit_nodes.size())>(cum_sizes.back()));
-        tbb::parallel_for(
-            tbb::blocked_range<decltype(cum_sizes.size())>(0u,
-                                                           // NOTE: cum_sizes is 1 element larger than crit_nodes.
-                                                           cum_sizes.size() - 1u),
-            [this, &cum_sizes, &crit_nodes](const auto &range) {
-                for (auto i = range.begin(); i != range.end(); ++i) {
-                    std::copy(crit_nodes[i].begin(), crit_nodes[i].end(),
-                              &m_crit_nodes[boost::numeric_cast<decltype(m_crit_nodes.size())>(cum_sizes[i])]);
+        tg.run([&]() {
+            // NOTE: as above, we could do some of these things in parallel but it does not seem worth it at this time.
+            // Sort the critical nodes lists according to the starting points of the ranges.
+            std::sort(crit_nodes.begin(), crit_nodes.end(), [](const auto &v1, const auto &v2) {
+                // NOTE: we may have empty lists, put them at the beginning.
+                if (v1.empty()) {
+                    // v1 empty, if v2 is not empty then v1 < v2, otherwise v1 >= v2.
+                    return !v2.empty();
                 }
+                if (v2.empty()) {
+                    // NOTE: v1 is not empty at this point, thus v1 >= v2.
+                    return false;
+                }
+                // v1 and v2 are not empty, compare the starting points of their first critical nodes.
+                return get<1>(v1[0]) < get<1>(v2[0]);
             });
+            // Compute the cumulative sizes in crit_nodes.
+            std::vector<size_type, di_aligned_allocator<size_type>> cum_sizes;
+            cum_sizes.emplace_back(0u);
+            for (const auto &c : crit_nodes) {
+                cum_sizes.push_back(cum_sizes.back());
+                checked_uinc(cum_sizes.back(), boost::numeric_cast<size_type>(c.size()));
+            }
+            // Resize the critical nodes list and copy over the data from crit_nodes.
+            m_crit_nodes.resize(boost::numeric_cast<decltype(m_crit_nodes.size())>(cum_sizes.back()));
+            tbb::parallel_for(
+                tbb::blocked_range<decltype(cum_sizes.size())>(0u,
+                                                               // NOTE: cum_sizes is 1 element larger than crit_nodes.
+                                                               cum_sizes.size() - 1u),
+                [this, &cum_sizes, &crit_nodes](const auto &range) {
+                    for (auto i = range.begin(); i != range.end(); ++i) {
+                        std::copy(crit_nodes[i].begin(), crit_nodes[i].end(),
+                                  &m_crit_nodes[boost::numeric_cast<decltype(m_crit_nodes.size())>(cum_sizes[i])]);
+                    }
+                });
+        });
+        tg.wait();
         // In a non-empty domain, we must have at least 1 critical node.
         assert(!m_crit_nodes.empty());
         // The list of critical nodes must start with the first particle and end with the last particle.
