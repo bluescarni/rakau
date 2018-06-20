@@ -323,14 +323,12 @@ inline void apply_isort(VVec &values, const PVec &perm)
     assert(values.size() == perm.size());
     VVec values_new;
     values_new.resize(values.size());
-    tbb::parallel_for(tbb::blocked_range<decltype(perm.size())>(0u, perm.size(),
-                                                                boost::numeric_cast<decltype(perm.size())>(200'000ul)),
+    tbb::parallel_for(tbb::blocked_range<decltype(perm.size())>(0u, perm.size()),
                       [&values_new, &values, &perm](const auto &range) {
                           for (auto i = range.begin(); i != range.end(); ++i) {
                               values_new[i] = values[perm[i]];
                           }
-                      },
-                      tbb::simple_partitioner{});
+                      });
     values = std::move(values_new);
 }
 
@@ -848,33 +846,30 @@ private:
         // NOTE: we check in build_tree() that m_tree.size() can be safely cast
         // to size_type.
         const auto tree_size = static_cast<size_type>(m_tree.size());
-        tbb::parallel_for(tbb::blocked_range<size_type>(0u, tree_size, boost::numeric_cast<size_type>(10'000ul)),
-                          [this](const auto &range) {
-                              for (auto i = range.begin(); i != range.end(); ++i) {
-                                  auto &tup = m_tree[i];
-                                  // Get the indices and the size for the current node.
-                                  const auto begin = get<1>(tup)[0];
-                                  const auto end = get<1>(tup)[1];
-                                  assert(end > begin);
-                                  const auto size = end - begin;
-                                  // Compute the total mass.
-                                  const auto tot_mass
-                                      = std::accumulate(m_masses.data() + begin, m_masses.data() + end, F(0));
-                                  // Compute the COM for the coordinates.
-                                  for (std::size_t j = 0; j < NDim; ++j) {
-                                      F acc(0);
-                                      auto m_ptr = m_masses.data() + begin;
-                                      auto c_ptr = m_coords[j].data() + begin;
-                                      for (std::remove_const_t<decltype(size)> k = 0; k < size; ++k) {
-                                          acc += m_ptr[k] * c_ptr[k];
-                                      }
-                                      get<3>(tup)[j] = acc / tot_mass;
-                                  }
-                                  // Store the total mass.
-                                  get<2>(tup) = tot_mass;
-                              }
-                          },
-                          tbb::simple_partitioner{});
+        tbb::parallel_for(tbb::blocked_range<size_type>(0u, tree_size), [this](const auto &range) {
+            for (auto i = range.begin(); i != range.end(); ++i) {
+                auto &tup = m_tree[i];
+                // Get the indices and the size for the current node.
+                const auto begin = get<1>(tup)[0];
+                const auto end = get<1>(tup)[1];
+                assert(end > begin);
+                const auto size = end - begin;
+                // Compute the total mass.
+                const auto tot_mass = std::accumulate(m_masses.data() + begin, m_masses.data() + end, F(0));
+                // Compute the COM for the coordinates.
+                for (std::size_t j = 0; j < NDim; ++j) {
+                    F acc(0);
+                    auto m_ptr = m_masses.data() + begin;
+                    auto c_ptr = m_coords[j].data() + begin;
+                    for (std::remove_const_t<decltype(size)> k = 0; k < size; ++k) {
+                        acc += m_ptr[k] * c_ptr[k];
+                    }
+                    get<3>(tup)[j] = acc / tot_mass;
+                }
+                // Store the total mass.
+                get<2>(tup) = tot_mass;
+            }
+        });
     }
     // Function to discretise the input NDim floating-point coordinates starting at 'it'
     // into a box of a given size box_size.
@@ -911,13 +906,11 @@ private:
     // This is used when (re)building the tree.
     void isort_to_ord_ind()
     {
-        tbb::parallel_for(tbb::blocked_range<size_type>(0u, m_masses.size(), boost::numeric_cast<size_type>(200'000ul)),
-                          [this](const auto &range) {
-                              for (auto i = range.begin(); i != range.end(); ++i) {
-                                  m_ord_ind[m_isort[i]] = i;
-                              }
-                          },
-                          tbb::simple_partitioner{});
+        tbb::parallel_for(tbb::blocked_range<size_type>(0u, m_masses.size()), [this](const auto &range) {
+            for (auto i = range.begin(); i != range.end(); ++i) {
+                m_ord_ind[m_isort[i]] = i;
+            }
+        });
     }
     // Indirect code sort. The input range, which must point to values of type size_type,
     // will be sorted so that, after sorting, [m_codes[*begin], m_codes[*(begin + 1)], ... ]
@@ -978,28 +971,26 @@ public:
                 throw std::overflow_error("the number of particles (" + std::to_string(m_masses.size())
                                           + ") is too large, and it results in an overflow condition");
             }
-            tbb::parallel_for(tbb::blocked_range<size_type>(0u, N, boost::numeric_cast<size_type>(200'000ul)),
-                              [this, &c_it, &m_it](const auto &range) {
-                                  // Temporary structure used in the encoding.
-                                  std::array<F, NDim> tmp_coord;
-                                  // The encoder object.
-                                  morton_encoder<NDim, UInt> me;
-                                  // Determine the particles' codes, and fill in the particles' data.
-                                  for (auto i = range.begin(); i != range.end(); ++i) {
-                                      // Write the coords in the temp structure and in the data members.
-                                      for (std::size_t j = 0; j < NDim; ++j) {
-                                          tmp_coord[j] = *(c_it[j] + static_cast<it_diff_t>(i));
-                                          m_coords[j][i] = *(c_it[j] + static_cast<it_diff_t>(i));
-                                      }
-                                      // Store the mass.
-                                      m_masses[i] = *(m_it + static_cast<it_diff_t>(i));
-                                      // Compute and store the code.
-                                      m_codes[i] = me(disc_coords(tmp_coord.begin(), m_box_size).begin());
-                                      // Store the index for indirect sorting.
-                                      m_isort[i] = i;
-                                  }
-                              },
-                              tbb::simple_partitioner{});
+            tbb::parallel_for(tbb::blocked_range<size_type>(0u, N), [this, &c_it, &m_it](const auto &range) {
+                // Temporary structure used in the encoding.
+                std::array<F, NDim> tmp_coord;
+                // The encoder object.
+                morton_encoder<NDim, UInt> me;
+                // Determine the particles' codes, and fill in the particles' data.
+                for (auto i = range.begin(); i != range.end(); ++i) {
+                    // Write the coords in the temp structure and in the data members.
+                    for (std::size_t j = 0; j < NDim; ++j) {
+                        tmp_coord[j] = *(c_it[j] + static_cast<it_diff_t>(i));
+                        m_coords[j][i] = *(c_it[j] + static_cast<it_diff_t>(i));
+                    }
+                    // Store the mass.
+                    m_masses[i] = *(m_it + static_cast<it_diff_t>(i));
+                    // Compute and store the code.
+                    m_codes[i] = me(disc_coords(tmp_coord.begin(), m_box_size).begin());
+                    // Store the index for indirect sorting.
+                    m_isort[i] = i;
+                }
+            });
         }
         // Do the sorting of m_isort.
         indirect_code_sort(m_isort.begin(), m_isort.end());
@@ -1822,32 +1813,26 @@ private:
     {
         // Let's start with generating the new codes.
         const auto nparts = m_masses.size();
-        tbb::parallel_for(
-            tbb::blocked_range<decltype(m_masses.size())>(0u, nparts, boost::numeric_cast<size_type>(200'000ul)),
-            [this](const auto &range) {
-                std::array<F, NDim> tmp_coord;
-                morton_encoder<NDim, UInt> me;
-                for (auto i = range.begin(); i != range.end(); ++i) {
-                    for (std::size_t j = 0; j != NDim; ++j) {
-                        tmp_coord[j] = m_coords[j][i];
-                    }
-                    m_codes[i] = me(disc_coords(tmp_coord.begin(), m_box_size).begin());
+        tbb::parallel_for(tbb::blocked_range<decltype(m_masses.size())>(0u, nparts), [this](const auto &range) {
+            std::array<F, NDim> tmp_coord;
+            morton_encoder<NDim, UInt> me;
+            for (auto i = range.begin(); i != range.end(); ++i) {
+                for (std::size_t j = 0; j != NDim; ++j) {
+                    tmp_coord[j] = m_coords[j][i];
                 }
-            },
-            tbb::simple_partitioner{});
+                m_codes[i] = me(disc_coords(tmp_coord.begin(), m_box_size).begin());
+            }
+        });
         // Like on construction, do the indirect sorting of the new codes.
         // Use a new temp vector for the new indirect sorting.
         std::vector<size_type, di_aligned_allocator<size_type>> v_ind;
         v_ind.resize(boost::numeric_cast<decltype(v_ind.size())>(nparts));
         // NOTE: this is just a iota.
-        tbb::parallel_for(
-            tbb::blocked_range<decltype(m_masses.size())>(0u, nparts, boost::numeric_cast<size_type>(200'000ul)),
-            [&v_ind](const auto &range) {
-                for (auto i = range.begin(); i != range.end(); ++i) {
-                    v_ind[i] = i;
-                }
-            },
-            tbb::simple_partitioner{});
+        tbb::parallel_for(tbb::blocked_range<decltype(m_masses.size())>(0u, nparts), [&v_ind](const auto &range) {
+            for (auto i = range.begin(); i != range.end(); ++i) {
+                v_ind[i] = i;
+            }
+        });
         // Do the sorting.
         indirect_code_sort(v_ind.begin(), v_ind.end());
         // Apply the indirect sorting.
