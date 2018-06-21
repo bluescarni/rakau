@@ -1386,7 +1386,7 @@ private:
                         xsimd::store_aligned(res_z, res_z_vec);
                     }
                     for (; i1 < size; ++i1, ++x_ptr1, ++y_ptr1, ++z_ptr1, ++res_x, ++res_y, ++res_z) {
-                        const F x1 = *x_ptr1, y1 = *y_ptr1, z1 = *z_ptr1;
+                        const auto x1 = *x_ptr1, y1 = *y_ptr1, z1 = *z_ptr1;
                         auto x_ptr2 = m_coords[0].data() + leaf_begin, y_ptr2 = m_coords[1].data() + leaf_begin,
                              z_ptr2 = m_coords[2].data() + leaf_begin, m_ptr2 = m_masses.data() + leaf_begin;
                         size_type i2 = 0;
@@ -1446,8 +1446,8 @@ private:
             // We can go deeper in the tree.
             //
             // Determine the size of the node at the next level.
-            const F next_node_size = m_box_size / (UInt(1) << (SLevel + 1u));
-            const F next_node_size2 = next_node_size * next_node_size;
+            const auto next_node_size = m_box_size / (UInt(1) << (SLevel + 1u));
+            const auto next_node_size2 = next_node_size * next_node_size;
             // Bump up begin to move to the first child.
             for (++begin; begin != end; begin += get<1>(m_tree[begin])[2] + 1u) {
                 vec_acc_from_node<SLevel + 1u>(theta2, pidx, size, begin, begin + get<1>(m_tree[begin])[2] + 1u,
@@ -1526,7 +1526,7 @@ private:
             // Do the remaining scalar part.
             for (; i1 < npart; ++i1, ++x_ptr1, ++y_ptr1, ++z_ptr1, ++res_x, ++res_y, ++res_z) {
                 auto x_ptr2 = x_ptr, y_ptr2 = y_ptr, z_ptr2 = z_ptr, m_ptr2 = m_ptr;
-                const F x1 = *x_ptr1, y1 = *y_ptr1, z1 = *z_ptr1;
+                const auto x1 = *x_ptr1, y1 = *y_ptr1, z1 = *z_ptr1;
                 size_type i2 = 0;
                 for (; i2 < vec_size;
                      i2 += b_size, x_ptr2 += b_size, y_ptr2 += b_size, z_ptr2 += b_size, m_ptr2 += b_size) {
@@ -1583,8 +1583,8 @@ private:
                         diffs[j] = c_ptrs[j][i2] - pos1[j];
                         dist2 += diffs[j] * diffs[j];
                     }
-                    const F dist = std::sqrt(dist2), dist3 = dist2 * dist, m2_dist3 = m_ptr[i2] / dist3,
-                            m1_dist3 = m1 / dist3;
+                    const auto dist = std::sqrt(dist2), dist3 = dist2 * dist, m2_dist3 = m_ptr[i2] / dist3,
+                               m1_dist3 = m1 / dist3;
                     // Accumulate the accelerations, both in the local
                     // accumulator for the current particle and in the global
                     // acc vector for the opposite acceleration.
@@ -1621,8 +1621,8 @@ private:
             const auto s_code = nodal_code >> ((node_level - Level) * NDim);
             auto new_sib_begin = sib_end;
             // Determine the size of the target at the current level.
-            const F node_size = m_box_size / (UInt(1) << Level);
-            const F node_size2 = node_size * node_size;
+            const auto node_size = m_box_size / (UInt(1) << Level);
+            const auto node_size2 = node_size * node_size;
             for (auto idx = sib_begin; idx != sib_end; idx += get<1>(m_tree[idx])[2] + 1u) {
                 if (get<0>(m_tree[idx]) == s_code) {
                     // We are in the target's parent, or the target itself.
