@@ -1485,7 +1485,7 @@ private:
                         batch_bs_3d(res_x_vec, res_y_vec, res_z_vec, xvec1, yvec1, zvec1, xvec2, yvec2, zvec2, mvec2);
                     }
                     // Iterate over all the other possible batch-batch permutations
-                    // by rotating the data in xvec2, yvec2, zvec2.
+                    // by rotating the data in xvec2, yvec2, zvec2 and mvec2.
                     for (std::size_t j = 1; j < b_size; ++j) {
                         xvec2 = rotate(xvec2);
                         yvec2 = rotate(yvec2);
