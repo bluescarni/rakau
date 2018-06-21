@@ -1248,10 +1248,10 @@ private:
                 auto [tmp_x, tmp_y, tmp_z, tmp_dist3] = tmp_ptrs;
                 for (; i < vec_size; i += b_size, x_ptr += b_size, y_ptr += b_size, z_ptr += b_size, tmp_x += b_size,
                                      tmp_y += b_size, tmp_z += b_size, tmp_dist3 += b_size) {
-                    const b_type diffx = x_com - xsimd::load_unaligned(x_ptr);
-                    const b_type diffy = y_com - xsimd::load_unaligned(y_ptr);
-                    const b_type diffz = z_com - xsimd::load_unaligned(z_ptr);
-                    const b_type dist2 = diffx * diffx + diffy * diffy + diffz * diffz;
+                    const auto diff_x = x_com - xsimd::load_unaligned(x_ptr),
+                               diff_y = y_com - xsimd::load_unaligned(y_ptr),
+                               diff_z = z_com - xsimd::load_unaligned(z_ptr),
+                               dist2 = diff_x * diff_x + diff_y * diff_y + diff_z * diff_z;
                     if (xsimd::any(node_size2_vec >= theta2 * dist2)) {
                         // At least one particle in the current batch fails the BH criterion
                         // check. Mark the bh_flag as false, and set i to size in order
@@ -1260,9 +1260,9 @@ private:
                         i = size;
                         break;
                     }
-                    xsimd::store_aligned(tmp_x, diffx);
-                    xsimd::store_aligned(tmp_y, diffy);
-                    xsimd::store_aligned(tmp_z, diffz);
+                    xsimd::store_aligned(tmp_x, diff_x);
+                    xsimd::store_aligned(tmp_y, diff_y);
+                    xsimd::store_aligned(tmp_z, diff_z);
                     if constexpr (has_fast_inv_sqrt<b_type>) {
                         xsimd::store_aligned(tmp_dist3, inv_sqrt_3(dist2));
                     } else {
@@ -1301,12 +1301,10 @@ private:
                     auto [res_x, res_y, res_z] = res_ptrs;
                     for (; i < vec_size; i += b_size, tmp_x += b_size, tmp_y += b_size, tmp_z += b_size,
                                          tmp_dist3 += b_size, res_x += b_size, res_y += b_size, res_z += b_size) {
-                        const b_type m_com_dist3_vec = has_fast_inv_sqrt<b_type>
-                                                           ? m_com * xsimd::load_aligned(tmp_dist3)
-                                                           : m_com / xsimd::load_aligned(tmp_dist3);
-                        const b_type xdiff = xsimd::load_aligned(tmp_x);
-                        const b_type ydiff = xsimd::load_aligned(tmp_y);
-                        const b_type zdiff = xsimd::load_aligned(tmp_z);
+                        const auto m_com_dist3_vec = has_fast_inv_sqrt<b_type> ? m_com * xsimd::load_aligned(tmp_dist3)
+                                                                               : m_com / xsimd::load_aligned(tmp_dist3),
+                                   xdiff = xsimd::load_aligned(tmp_x), ydiff = xsimd::load_aligned(tmp_y),
+                                   zdiff = xsimd::load_aligned(tmp_z);
                         xsimd::store_aligned(res_x, xsimd::fma(xdiff, m_com_dist3_vec, xsimd::load_aligned(res_x)));
                         xsimd::store_aligned(res_y, xsimd::fma(ydiff, m_com_dist3_vec, xsimd::load_aligned(res_y)));
                         xsimd::store_aligned(res_z, xsimd::fma(zdiff, m_com_dist3_vec, xsimd::load_aligned(res_z)));
@@ -1334,11 +1332,10 @@ private:
                 // of operations, as we are avoiding all the pairwise interactions.
                 //
                 // Establish the range of the source node.
-                const auto leaf_begin = get<1>(m_tree[begin])[0];
-                const auto leaf_end = get<1>(m_tree[begin])[1];
+                const auto leaf_begin = get<1>(m_tree[begin])[0], leaf_end = get<1>(m_tree[begin])[1];
                 if constexpr (NDim == 3u) {
                     // The number of particles in the source node.
-                    const auto size_leaf = leaf_end - leaf_begin;
+                    const auto size_leaf = static_cast<size_type>(leaf_end - leaf_begin);
                     // Vector size of the target node.
                     const auto vec_size1 = static_cast<size_type>(size - size % b_size);
                     // Vector size of the source node.
@@ -1349,26 +1346,20 @@ private:
                     for (; i1 < vec_size1; i1 += b_size, x_ptr1 += b_size, y_ptr1 += b_size, z_ptr1 += b_size,
                                            res_x += b_size, res_y += b_size, res_z += b_size) {
                         // Load the current batch of target data.
-                        const b_type xvec1 = xsimd::load_unaligned(x_ptr1);
-                        const b_type yvec1 = xsimd::load_unaligned(y_ptr1);
-                        const b_type zvec1 = xsimd::load_unaligned(z_ptr1);
+                        const auto xvec1 = xsimd::load_unaligned(x_ptr1), yvec1 = xsimd::load_unaligned(y_ptr1),
+                                   zvec1 = xsimd::load_unaligned(z_ptr1);
                         // Init the pointers to the source data.
-                        auto x_ptr2 = m_coords[0].data() + leaf_begin;
-                        auto y_ptr2 = m_coords[1].data() + leaf_begin;
-                        auto z_ptr2 = m_coords[2].data() + leaf_begin;
-                        auto m_ptr2 = m_masses.data() + leaf_begin;
+                        auto x_ptr2 = m_coords[0].data() + leaf_begin, y_ptr2 = m_coords[1].data() + leaf_begin,
+                             z_ptr2 = m_coords[2].data() + leaf_begin, m_ptr2 = m_masses.data() + leaf_begin;
                         // Init the batches for computing the accelerations, loading the
                         // accumulated acceleration for the current batch.
-                        b_type res_x_vec = xsimd::load_aligned(res_x);
-                        b_type res_y_vec = xsimd::load_aligned(res_y);
-                        b_type res_z_vec = xsimd::load_aligned(res_z);
+                        auto res_x_vec = xsimd::load_aligned(res_x), res_y_vec = xsimd::load_aligned(res_y),
+                             res_z_vec = xsimd::load_aligned(res_z);
                         size_type i2 = 0;
                         for (; i2 < vec_size2;
                              i2 += b_size, x_ptr2 += b_size, y_ptr2 += b_size, z_ptr2 += b_size, m_ptr2 += b_size) {
-                            b_type xvec2 = xsimd::load_unaligned(x_ptr2);
-                            b_type yvec2 = xsimd::load_unaligned(y_ptr2);
-                            b_type zvec2 = xsimd::load_unaligned(z_ptr2);
-                            b_type mvec2 = xsimd::load_unaligned(m_ptr2);
+                            auto xvec2 = xsimd::load_unaligned(x_ptr2), yvec2 = xsimd::load_unaligned(y_ptr2),
+                                 zvec2 = xsimd::load_unaligned(z_ptr2), mvec2 = xsimd::load_unaligned(m_ptr2);
                             batch_bs_3d(res_x_vec, res_y_vec, res_z_vec, xvec1, yvec1, zvec1, xvec2, yvec2, zvec2,
                                         mvec2);
                             for (std::size_t j = 1; j < b_size; ++j) {
@@ -1401,11 +1392,11 @@ private:
                         size_type i2 = 0;
                         for (; i2 < vec_size2;
                              i2 += b_size, x_ptr2 += b_size, y_ptr2 += b_size, z_ptr2 += b_size, m_ptr2 += b_size) {
-                            const auto diff_x = xsimd::load_unaligned(x_ptr2) - x1;
-                            const auto diff_y = xsimd::load_unaligned(y_ptr2) - y1;
-                            const auto diff_z = xsimd::load_unaligned(z_ptr2) - z1;
-                            const auto mvec2 = xsimd::load_unaligned(m_ptr2);
-                            const auto dist2 = diff_x * diff_x + diff_y * diff_y + diff_z * diff_z;
+                            const auto diff_x = xsimd::load_unaligned(x_ptr2) - x1,
+                                       diff_y = xsimd::load_unaligned(y_ptr2) - y1,
+                                       diff_z = xsimd::load_unaligned(z_ptr2) - z1,
+                                       mvec2 = xsimd::load_unaligned(m_ptr2),
+                                       dist2 = diff_x * diff_x + diff_y * diff_y + diff_z * diff_z;
                             b_type m2_dist3;
                             if constexpr (has_fast_inv_sqrt<b_type>) {
                                 m2_dist3 = mvec2 * inv_sqrt_3(dist2);
@@ -1419,11 +1410,9 @@ private:
                             *res_z += xsimd::hadd(diff_z * m2_dist3);
                         }
                         for (; i2 < size_leaf; ++i2, ++x_ptr2, ++y_ptr2, ++z_ptr2, ++m_ptr2) {
-                            const auto diff_x = *x_ptr2 - x1, diff_y = *y_ptr2 - y1, diff_z = *z_ptr2 - z1;
-                            const auto dist2 = diff_x * diff_x + diff_y * diff_y + diff_z * diff_z;
-                            const auto dist = std::sqrt(dist2);
-                            const auto dist3 = dist * dist2;
-                            const auto m_dist3 = *m_ptr2 / dist3;
+                            const auto diff_x = *x_ptr2 - x1, diff_y = *y_ptr2 - y1, diff_z = *z_ptr2 - z1,
+                                       dist2 = diff_x * diff_x + diff_y * diff_y + diff_z * diff_z,
+                                       dist = std::sqrt(dist2), dist3 = dist * dist2, m_dist3 = *m_ptr2 / dist3;
                             *res_x += diff_x * m_dist3;
                             *res_y += diff_y * m_dist3;
                             *res_z += diff_z * m_dist3;
@@ -1445,9 +1434,7 @@ private:
                                 diffs[j] = m_coords[j][i2] - pos1[j];
                                 dist2 += diffs[j] * diffs[j];
                             }
-                            const auto dist = std::sqrt(dist2);
-                            const auto dist3 = dist * dist2;
-                            const auto m_dist3 = m_masses[i2] / dist3;
+                            const auto dist = std::sqrt(dist2), dist3 = dist * dist2, m_dist3 = m_masses[i2] / dist3;
                             for (std::size_t j = 0; j < NDim; ++j) {
                                 tmp_res[j][i1] += diffs[j] * m_dist3;
                             }
@@ -1484,37 +1471,30 @@ private:
         const auto m_ptr = m_masses.data() + node_begin;
         if constexpr (NDim == 3u) {
             // Shortcuts to the node coordinates/masses.
-            const auto x_ptr = m_coords[0].data() + node_begin;
-            const auto y_ptr = m_coords[1].data() + node_begin;
-            const auto z_ptr = m_coords[2].data() + node_begin;
+            const auto x_ptr = m_coords[0].data() + node_begin, y_ptr = m_coords[1].data() + node_begin,
+                       z_ptr = m_coords[2].data() + node_begin;
             // Shortcuts to the result vectors.
-            auto res_x = tmp_res[0].data();
-            auto res_y = tmp_res[1].data();
-            auto res_z = tmp_res[2].data();
+            auto res_x = tmp_res[0].data(), res_y = tmp_res[1].data(), res_z = tmp_res[2].data();
             const auto vec_size = static_cast<size_type>(npart - npart % b_size);
-            auto [x_ptr1, y_ptr1, z_ptr1] = std::make_tuple(x_ptr, y_ptr, z_ptr);
+            auto x_ptr1 = x_ptr, y_ptr1 = y_ptr, z_ptr1 = z_ptr;
             size_type i1 = 0;
             for (; i1 < vec_size; i1 += b_size, x_ptr1 += b_size, y_ptr1 += b_size, z_ptr1 += b_size, res_x += b_size,
                                   res_y += b_size, res_z += b_size) {
                 // Load the current accelerations from the temporary result vectors.
-                b_type res_x_vec = xsimd::load_aligned(res_x);
-                b_type res_y_vec = xsimd::load_aligned(res_y);
-                b_type res_z_vec = xsimd::load_aligned(res_z);
+                auto res_x_vec = xsimd::load_aligned(res_x), res_y_vec = xsimd::load_aligned(res_y),
+                     res_z_vec = xsimd::load_aligned(res_z);
                 // Load the data for the particles under consideration.
-                const b_type xvec1 = xsimd::load_unaligned(x_ptr1);
-                const b_type yvec1 = xsimd::load_unaligned(y_ptr1);
-                const b_type zvec1 = xsimd::load_unaligned(z_ptr1);
+                const auto xvec1 = xsimd::load_unaligned(x_ptr1), yvec1 = xsimd::load_unaligned(y_ptr1),
+                           zvec1 = xsimd::load_unaligned(z_ptr1);
                 // Iterate over all the particles in the node and compute the accelerations
                 // on the particles under consideration.
-                auto [x_ptr2, y_ptr2, z_ptr2, m_ptr2] = std::make_tuple(x_ptr, y_ptr, z_ptr, m_ptr);
+                auto x_ptr2 = x_ptr, y_ptr2 = y_ptr, z_ptr2 = z_ptr, m_ptr2 = m_ptr;
                 size_type i2 = 0;
                 for (; i2 < vec_size;
                      i2 += b_size, x_ptr2 += b_size, y_ptr2 += b_size, z_ptr2 += b_size, m_ptr2 += b_size) {
                     // Load the current batch of particles exerting gravity.
-                    b_type xvec2 = xsimd::load_unaligned(x_ptr2);
-                    b_type yvec2 = xsimd::load_unaligned(y_ptr2);
-                    b_type zvec2 = xsimd::load_unaligned(z_ptr2);
-                    b_type mvec2 = xsimd::load_unaligned(m_ptr2);
+                    auto xvec2 = xsimd::load_unaligned(x_ptr2), yvec2 = xsimd::load_unaligned(y_ptr2),
+                         zvec2 = xsimd::load_unaligned(z_ptr2), mvec2 = xsimd::load_unaligned(m_ptr2);
                     if (i2 != i1) {
                         // NOTE: if i2 == i1, we want to skip the first batch-batch
                         // permutation, as we don't want to compute self-accelerations.
@@ -1545,16 +1525,14 @@ private:
             }
             // Do the remaining scalar part.
             for (; i1 < npart; ++i1, ++x_ptr1, ++y_ptr1, ++z_ptr1, ++res_x, ++res_y, ++res_z) {
-                auto [x_ptr2, y_ptr2, z_ptr2, m_ptr2] = std::make_tuple(x_ptr, y_ptr, z_ptr, m_ptr);
+                auto x_ptr2 = x_ptr, y_ptr2 = y_ptr, z_ptr2 = z_ptr, m_ptr2 = m_ptr;
                 const F x1 = *x_ptr1, y1 = *y_ptr1, z1 = *z_ptr1;
                 size_type i2 = 0;
                 for (; i2 < vec_size;
                      i2 += b_size, x_ptr2 += b_size, y_ptr2 += b_size, z_ptr2 += b_size, m_ptr2 += b_size) {
-                    const auto diff_x = xsimd::load_unaligned(x_ptr2) - x1;
-                    const auto diff_y = xsimd::load_unaligned(y_ptr2) - y1;
-                    const auto diff_z = xsimd::load_unaligned(z_ptr2) - z1;
-                    const auto mvec2 = xsimd::load_unaligned(m_ptr2);
-                    const auto dist2 = diff_x * diff_x + diff_y * diff_y + diff_z * diff_z;
+                    const auto diff_x = xsimd::load_unaligned(x_ptr2) - x1, diff_y = xsimd::load_unaligned(y_ptr2) - y1,
+                               diff_z = xsimd::load_unaligned(z_ptr2) - z1, mvec2 = xsimd::load_unaligned(m_ptr2),
+                               dist2 = diff_x * diff_x + diff_y * diff_y + diff_z * diff_z;
                     b_type m2_dist3;
                     if constexpr (has_fast_inv_sqrt<b_type>) {
                         m2_dist3 = mvec2 * inv_sqrt_3(dist2);
@@ -1571,13 +1549,9 @@ private:
                 for (; i2 < npart; ++i2, ++x_ptr2, ++y_ptr2, ++z_ptr2, ++m_ptr2) {
                     if (i2 != i1) {
                         // Avoid self interactions.
-                        F diff_x = *x_ptr2 - x1;
-                        F diff_y = *y_ptr2 - y1;
-                        F diff_z = *z_ptr2 - z1;
-                        F dist2 = diff_x * diff_x + diff_y * diff_y + diff_z * diff_z;
-                        F dist = std::sqrt(dist2);
-                        F dist3 = dist * dist2;
-                        F m2_dist3 = *m_ptr2 / dist3;
+                        const auto diff_x = *x_ptr2 - x1, diff_y = *y_ptr2 - y1, diff_z = *z_ptr2 - z1,
+                                   dist2 = diff_x * diff_x + diff_y * diff_y + diff_z * diff_z, dist = std::sqrt(dist2),
+                                   dist3 = dist * dist2, m2_dist3 = *m_ptr2 / dist3;
                         *res_x += diff_x * m2_dist3;
                         *res_y += diff_y * m2_dist3;
                         *res_z += diff_z * m2_dist3;
@@ -1609,11 +1583,8 @@ private:
                         diffs[j] = c_ptrs[j][i2] - pos1[j];
                         dist2 += diffs[j] * diffs[j];
                     }
-                    const F dist = std::sqrt(dist2);
-                    const F dist3 = dist2 * dist;
-                    // Divide both masses by dist3.
-                    const F m2_dist3 = m_ptr[i2] / dist3;
-                    const F m1_dist3 = m1 / dist3;
+                    const F dist = std::sqrt(dist2), dist3 = dist2 * dist, m2_dist3 = m_ptr[i2] / dist3,
+                            m1_dist3 = m1 / dist3;
                     // Accumulate the accelerations, both in the local
                     // accumulator for the current particle and in the global
                     // acc vector for the opposite acceleration.
