@@ -1396,10 +1396,8 @@ private:
                     }
                     for (; i1 < size; ++i1, ++x_ptr1, ++y_ptr1, ++z_ptr1, ++res_x, ++res_y, ++res_z) {
                         const F x1 = *x_ptr1, y1 = *y_ptr1, z1 = *z_ptr1;
-                        auto x_ptr2 = m_coords[0].data() + leaf_begin;
-                        auto y_ptr2 = m_coords[1].data() + leaf_begin;
-                        auto z_ptr2 = m_coords[2].data() + leaf_begin;
-                        auto m_ptr2 = m_masses.data() + leaf_begin;
+                        auto x_ptr2 = m_coords[0].data() + leaf_begin, y_ptr2 = m_coords[1].data() + leaf_begin,
+                             z_ptr2 = m_coords[2].data() + leaf_begin, m_ptr2 = m_masses.data() + leaf_begin;
                         size_type i2 = 0;
                         for (; i2 < vec_size2;
                              i2 += b_size, x_ptr2 += b_size, y_ptr2 += b_size, z_ptr2 += b_size, m_ptr2 += b_size) {
