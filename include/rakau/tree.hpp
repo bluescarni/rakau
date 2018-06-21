@@ -1336,7 +1336,6 @@ private:
                 // Establish the range of the source node.
                 const auto leaf_begin = get<1>(m_tree[begin])[0];
                 const auto leaf_end = get<1>(m_tree[begin])[1];
-                size_type i1 = 0;
                 if constexpr (NDim == 3u) {
                     // The number of particles in the source node.
                     const auto size_leaf = leaf_end - leaf_begin;
@@ -1346,6 +1345,7 @@ private:
                     const auto vec_size2 = static_cast<size_type>(size_leaf - size_leaf % b_size);
                     auto [x_ptr1, y_ptr1, z_ptr1] = c_ptrs;
                     auto [res_x, res_y, res_z] = res_ptrs;
+                    size_type i1 = 0;
                     for (; i1 < vec_size1; i1 += b_size, x_ptr1 += b_size, y_ptr1 += b_size, z_ptr1 += b_size,
                                            res_x += b_size, res_y += b_size, res_z += b_size) {
                         // Load the current batch of target data.
@@ -1394,27 +1394,65 @@ private:
                         xsimd::store_aligned(res_y, res_y_vec);
                         xsimd::store_aligned(res_z, res_z_vec);
                     }
-                }
-                // Local variables for the scalar computation.
-                std::array<F, NDim> pos1, diffs;
-                for (; i1 < size; ++i1) {
-                    // Load the coordinates of the current particle
-                    // in the target node.
-                    for (std::size_t j = 0; j < NDim; ++j) {
-                        pos1[j] = c_ptrs[j][i1];
-                    }
-                    // Iterate over the particles in the sibling node.
-                    for (size_type i2 = leaf_begin; i2 < leaf_end; ++i2) {
-                        F dist2(0);
-                        for (std::size_t j = 0; j < NDim; ++j) {
-                            diffs[j] = m_coords[j][i2] - pos1[j];
-                            dist2 += diffs[j] * diffs[j];
+                    for (; i1 < size; ++i1, ++x_ptr1, ++y_ptr1, ++z_ptr1, ++res_x, ++res_y, ++res_z) {
+                        const F x1 = *x_ptr1, y1 = *y_ptr1, z1 = *z_ptr1;
+                        auto x_ptr2 = m_coords[0].data() + leaf_begin;
+                        auto y_ptr2 = m_coords[1].data() + leaf_begin;
+                        auto z_ptr2 = m_coords[2].data() + leaf_begin;
+                        auto m_ptr2 = m_masses.data() + leaf_begin;
+                        size_type i2 = 0;
+                        for (; i2 < vec_size2;
+                             i2 += b_size, x_ptr2 += b_size, y_ptr2 += b_size, z_ptr2 += b_size, m_ptr2 += b_size) {
+                            const auto diff_x = xsimd::load_unaligned(x_ptr2) - x1;
+                            const auto diff_y = xsimd::load_unaligned(y_ptr2) - y1;
+                            const auto diff_z = xsimd::load_unaligned(z_ptr2) - z1;
+                            const auto mvec2 = xsimd::load_unaligned(m_ptr2);
+                            const auto dist2 = diff_x * diff_x + diff_y * diff_y + diff_z * diff_z;
+                            b_type m2_dist3;
+                            if constexpr (has_fast_inv_sqrt<b_type>) {
+                                m2_dist3 = mvec2 * inv_sqrt_3(dist2);
+                            } else {
+                                const auto dist = xsimd::sqrt(dist2);
+                                const auto dist3 = dist * dist2;
+                                m2_dist3 = mvec2 / dist3;
+                            }
+                            *res_x += xsimd::hadd(diff_x * m2_dist3);
+                            *res_y += xsimd::hadd(diff_y * m2_dist3);
+                            *res_z += xsimd::hadd(diff_z * m2_dist3);
                         }
-                        const auto dist = std::sqrt(dist2);
-                        const auto dist3 = dist * dist2;
-                        const auto m_dist3 = m_masses[i2] / dist3;
+                        for (; i2 < size_leaf; ++i2, ++x_ptr2, ++y_ptr2, ++z_ptr2, ++m_ptr2) {
+                            const auto diff_x = *x_ptr2 - x1, diff_y = *y_ptr2 - y1, diff_z = *z_ptr2 - z1;
+                            const auto dist2 = diff_x * diff_x + diff_y * diff_y + diff_z * diff_z;
+                            const auto dist = std::sqrt(dist2);
+                            const auto dist3 = dist * dist2;
+                            const auto m_dist3 = *m_ptr2 / dist3;
+                            *res_x += diff_x * m_dist3;
+                            *res_y += diff_y * m_dist3;
+                            *res_z += diff_z * m_dist3;
+                        }
+                    }
+                } else {
+                    // Local variables for the scalar computation.
+                    std::array<F, NDim> pos1, diffs;
+                    for (size_type i1 = 0; i1 < size; ++i1) {
+                        // Load the coordinates of the current particle
+                        // in the target node.
                         for (std::size_t j = 0; j < NDim; ++j) {
-                            tmp_res[j][i1] += diffs[j] * m_dist3;
+                            pos1[j] = c_ptrs[j][i1];
+                        }
+                        // Iterate over the particles in the sibling node.
+                        for (size_type i2 = leaf_begin; i2 < leaf_end; ++i2) {
+                            F dist2(0);
+                            for (std::size_t j = 0; j < NDim; ++j) {
+                                diffs[j] = m_coords[j][i2] - pos1[j];
+                                dist2 += diffs[j] * diffs[j];
+                            }
+                            const auto dist = std::sqrt(dist2);
+                            const auto dist3 = dist * dist2;
+                            const auto m_dist3 = m_masses[i2] / dist3;
+                            for (std::size_t j = 0; j < NDim; ++j) {
+                                tmp_res[j][i1] += diffs[j] * m_dist3;
+                            }
                         }
                     }
                 }
@@ -1510,11 +1548,30 @@ private:
             // Do the remaining scalar part.
             for (; i1 < npart; ++i1, ++x_ptr1, ++y_ptr1, ++z_ptr1, ++res_x, ++res_y, ++res_z) {
                 auto [x_ptr2, y_ptr2, z_ptr2, m_ptr2] = std::make_tuple(x_ptr, y_ptr, z_ptr, m_ptr);
-                const F x1 = *x_ptr1;
-                const F y1 = *y_ptr1;
-                const F z1 = *z_ptr1;
-                for (size_type i2 = 0; i2 < npart; ++i2, ++x_ptr2, ++y_ptr2, ++z_ptr2, ++m_ptr2) {
-                    if (i1 != i2) {
+                const F x1 = *x_ptr1, y1 = *y_ptr1, z1 = *z_ptr1;
+                size_type i2 = 0;
+                for (; i2 < vec_size;
+                     i2 += b_size, x_ptr2 += b_size, y_ptr2 += b_size, z_ptr2 += b_size, m_ptr2 += b_size) {
+                    const auto diff_x = xsimd::load_unaligned(x_ptr2) - x1;
+                    const auto diff_y = xsimd::load_unaligned(y_ptr2) - y1;
+                    const auto diff_z = xsimd::load_unaligned(z_ptr2) - z1;
+                    const auto mvec2 = xsimd::load_unaligned(m_ptr2);
+                    const auto dist2 = diff_x * diff_x + diff_y * diff_y + diff_z * diff_z;
+                    b_type m2_dist3;
+                    if constexpr (has_fast_inv_sqrt<b_type>) {
+                        m2_dist3 = mvec2 * inv_sqrt_3(dist2);
+                    } else {
+                        const auto dist = xsimd::sqrt(dist2);
+                        const auto dist3 = dist * dist2;
+                        m2_dist3 = mvec2 / dist3;
+                    }
+                    *res_x += xsimd::hadd(diff_x * m2_dist3);
+                    *res_y += xsimd::hadd(diff_y * m2_dist3);
+                    *res_z += xsimd::hadd(diff_z * m2_dist3);
+                }
+                assert(i2 <= i1);
+                for (; i2 < npart; ++i2, ++x_ptr2, ++y_ptr2, ++z_ptr2, ++m_ptr2) {
+                    if (i2 != i1) {
                         // Avoid self interactions.
                         F diff_x = *x_ptr2 - x1;
                         F diff_y = *y_ptr2 - y1;
