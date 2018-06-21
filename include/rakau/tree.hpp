@@ -1274,8 +1274,9 @@ private:
                 F dist2(0);
                 for (std::size_t j = 0; j < NDim; ++j) {
                     // Store the differences for later use.
-                    tmp_ptrs[j][i] = com_pos[j] - c_ptrs[j][i];
-                    dist2 += tmp_ptrs[j][i] * tmp_ptrs[j][i];
+                    const auto diff = com_pos[j] - c_ptrs[j][i];
+                    tmp_ptrs[j][i] = diff;
+                    dist2 += diff * diff;
                 }
                 if (node_size2 >= theta2 * dist2) {
                     // At least one of the particles in the target
@@ -1358,6 +1359,7 @@ private:
                         size_type i2 = 0;
                         for (; i2 < vec_size2;
                              i2 += b_size, x_ptr2 += b_size, y_ptr2 += b_size, z_ptr2 += b_size, m_ptr2 += b_size) {
+                            // NOTE: here we are doing batch/batch interactions.
                             auto xvec2 = xsimd::load_unaligned(x_ptr2), yvec2 = xsimd::load_unaligned(y_ptr2),
                                  zvec2 = xsimd::load_unaligned(z_ptr2), mvec2 = xsimd::load_unaligned(m_ptr2);
                             batch_bs_3d(res_x_vec, res_y_vec, res_z_vec, xvec1, yvec1, zvec1, xvec2, yvec2, zvec2,
@@ -1377,6 +1379,7 @@ private:
                         }
                         // Iterate over the remaining particles of the source node, one by one.
                         for (; i2 < size_leaf; ++i2, ++x_ptr2, ++y_ptr2, ++z_ptr2, ++m_ptr2) {
+                            // NOTE: here we are doing batch/scalar interactions.
                             batch_bs_3d(res_x_vec, res_y_vec, res_z_vec, xvec1, yvec1, zvec1, *x_ptr2, *y_ptr2, *z_ptr2,
                                         *m_ptr2);
                         }
@@ -1385,13 +1388,17 @@ private:
                         xsimd::store_aligned(res_y, res_y_vec);
                         xsimd::store_aligned(res_z, res_z_vec);
                     }
+                    // Compute the accelerations on the remainder of the target node (modulo batch size).
                     for (; i1 < size; ++i1, ++x_ptr1, ++y_ptr1, ++z_ptr1, ++res_x, ++res_y, ++res_z) {
                         const auto x1 = *x_ptr1, y1 = *y_ptr1, z1 = *z_ptr1;
                         auto x_ptr2 = m_coords[0].data() + leaf_begin, y_ptr2 = m_coords[1].data() + leaf_begin,
                              z_ptr2 = m_coords[2].data() + leaf_begin, m_ptr2 = m_masses.data() + leaf_begin;
+                        // Load the current accelerations from the temporary vectors into local variables.
+                        auto rx = *res_x, ry = *res_y, rz = *res_z;
                         size_type i2 = 0;
                         for (; i2 < vec_size2;
                              i2 += b_size, x_ptr2 += b_size, y_ptr2 += b_size, z_ptr2 += b_size, m_ptr2 += b_size) {
+                            // NOTE: scalar/batch interactions.
                             const auto diff_x = xsimd::load_unaligned(x_ptr2) - x1,
                                        diff_y = xsimd::load_unaligned(y_ptr2) - y1,
                                        diff_z = xsimd::load_unaligned(z_ptr2) - z1,
@@ -1405,18 +1412,26 @@ private:
                                 const auto dist3 = dist * dist2;
                                 m2_dist3 = mvec2 / dist3;
                             }
-                            *res_x += xsimd::hadd(diff_x * m2_dist3);
-                            *res_y += xsimd::hadd(diff_y * m2_dist3);
-                            *res_z += xsimd::hadd(diff_z * m2_dist3);
+                            // NOTE: here we are computing the acceleration on a single target particle
+                            // due to a source batch, and thus we need to do an accumulation of all the
+                            // accelerations from the members of the batch.
+                            rx += xsimd::hadd(diff_x * m2_dist3);
+                            ry += xsimd::hadd(diff_y * m2_dist3);
+                            rz += xsimd::hadd(diff_z * m2_dist3);
                         }
                         for (; i2 < size_leaf; ++i2, ++x_ptr2, ++y_ptr2, ++z_ptr2, ++m_ptr2) {
+                            // NOTE: scalar/scalar interactions.
                             const auto diff_x = *x_ptr2 - x1, diff_y = *y_ptr2 - y1, diff_z = *z_ptr2 - z1,
                                        dist2 = diff_x * diff_x + diff_y * diff_y + diff_z * diff_z,
                                        dist = std::sqrt(dist2), dist3 = dist * dist2, m_dist3 = *m_ptr2 / dist3;
-                            *res_x += diff_x * m_dist3;
-                            *res_y += diff_y * m_dist3;
-                            *res_z += diff_z * m_dist3;
+                            rx += diff_x * m_dist3;
+                            ry += diff_y * m_dist3;
+                            rz += diff_z * m_dist3;
                         }
+                        // Store the update accelerations in the temporary vectors.
+                        *res_x = rx;
+                        *res_y = ry;
+                        *res_z = rz;
                     }
                 } else {
                     // Local variables for the scalar computation.
@@ -1492,6 +1507,7 @@ private:
                 size_type i2 = 0;
                 for (; i2 < vec_size;
                      i2 += b_size, x_ptr2 += b_size, y_ptr2 += b_size, z_ptr2 += b_size, m_ptr2 += b_size) {
+                    // NOTE: batch/batch interactions.
                     // Load the current batch of particles exerting gravity.
                     auto xvec2 = xsimd::load_unaligned(x_ptr2), yvec2 = xsimd::load_unaligned(y_ptr2),
                          zvec2 = xsimd::load_unaligned(z_ptr2), mvec2 = xsimd::load_unaligned(m_ptr2);
@@ -1512,6 +1528,7 @@ private:
                 }
                 // Do the remaining scalar part.
                 for (; i2 < npart; ++i2, ++x_ptr2, ++y_ptr2, ++z_ptr2, ++m_ptr2) {
+                    // NOTE: batch/scalar interactions.
                     // NOTE: i2 cannot be the same as i1, since i1 is the start of a simd-size
                     // block and i2 is now in a sub-simd-size block at the end of the particle list.
                     assert(i2 != i1);
@@ -1523,13 +1540,16 @@ private:
                 xsimd::store_aligned(res_y, res_y_vec);
                 xsimd::store_aligned(res_z, res_z_vec);
             }
-            // Do the remaining scalar part.
+            // Do the remaining scalar part (that is, the remainder of the particle list modulo batch size).
             for (; i1 < npart; ++i1, ++x_ptr1, ++y_ptr1, ++z_ptr1, ++res_x, ++res_y, ++res_z) {
                 auto x_ptr2 = x_ptr, y_ptr2 = y_ptr, z_ptr2 = z_ptr, m_ptr2 = m_ptr;
                 const auto x1 = *x_ptr1, y1 = *y_ptr1, z1 = *z_ptr1;
+                // Load locally the current accelerations.
+                auto rx = *res_x, ry = *res_y, rz = *res_z;
                 size_type i2 = 0;
                 for (; i2 < vec_size;
                      i2 += b_size, x_ptr2 += b_size, y_ptr2 += b_size, z_ptr2 += b_size, m_ptr2 += b_size) {
+                    // NOTE: scalar/batch interactions.
                     const auto diff_x = xsimd::load_unaligned(x_ptr2) - x1, diff_y = xsimd::load_unaligned(y_ptr2) - y1,
                                diff_z = xsimd::load_unaligned(z_ptr2) - z1, mvec2 = xsimd::load_unaligned(m_ptr2),
                                dist2 = diff_x * diff_x + diff_y * diff_y + diff_z * diff_z;
@@ -1541,22 +1561,29 @@ private:
                         const auto dist3 = dist * dist2;
                         m2_dist3 = mvec2 / dist3;
                     }
-                    *res_x += xsimd::hadd(diff_x * m2_dist3);
-                    *res_y += xsimd::hadd(diff_y * m2_dist3);
-                    *res_z += xsimd::hadd(diff_z * m2_dist3);
+                    rx += xsimd::hadd(diff_x * m2_dist3);
+                    ry += xsimd::hadd(diff_y * m2_dist3);
+                    rz += xsimd::hadd(diff_z * m2_dist3);
                 }
+                // NOTE: we are about to do the remainder vs remainder interactions: i2 must be at the beginning
+                // of the remainder, thus it cannot be greater than i1 which is an index in the remainder.
                 assert(i2 <= i1);
                 for (; i2 < npart; ++i2, ++x_ptr2, ++y_ptr2, ++z_ptr2, ++m_ptr2) {
+                    // NOTE: scalar/scalar interactions.
                     if (i2 != i1) {
                         // Avoid self interactions.
                         const auto diff_x = *x_ptr2 - x1, diff_y = *y_ptr2 - y1, diff_z = *z_ptr2 - z1,
                                    dist2 = diff_x * diff_x + diff_y * diff_y + diff_z * diff_z, dist = std::sqrt(dist2),
                                    dist3 = dist * dist2, m2_dist3 = *m_ptr2 / dist3;
-                        *res_x += diff_x * m2_dist3;
-                        *res_y += diff_y * m2_dist3;
-                        *res_z += diff_z * m2_dist3;
+                        rx += diff_x * m2_dist3;
+                        ry += diff_y * m2_dist3;
+                        rz += diff_z * m2_dist3;
                     }
                 }
+                // Store the updated accelerations.
+                *res_x = rx;
+                *res_y = ry;
+                *res_z = rz;
             }
         } else {
             // Shortcuts to the input coordinates.
