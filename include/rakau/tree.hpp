@@ -1496,11 +1496,11 @@ private:
                 }
                 // Do the remaining scalar part.
                 for (; i2 < npart; ++i2, ++x_ptr2, ++y_ptr2, ++z_ptr2, ++m_ptr2) {
-                    if (i2 != i1) {
-                        // Avoid self-interactions.
-                        batch_bs_3d(res_x_vec, res_y_vec, res_z_vec, xvec1, yvec1, zvec1, *x_ptr2, *y_ptr2, *z_ptr2,
-                                    *m_ptr2);
-                    }
+                    // NOTE: i2 cannot be the same as i1, since i1 is the start of a simd-size
+                    // block and i2 is now in a sub-simd-size block at the end of the particle list.
+                    assert(i2 != i1);
+                    batch_bs_3d(res_x_vec, res_y_vec, res_z_vec, xvec1, yvec1, zvec1, *x_ptr2, *y_ptr2, *z_ptr2,
+                                *m_ptr2);
                 }
                 // Write out the updated accelerations.
                 xsimd::store_aligned(res_x, res_x_vec);
