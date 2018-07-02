@@ -493,7 +493,7 @@ private:
             // switched off.
             // NOTE: overflow is prevented by the if constexpr above.
             const auto node_prefix = parent_code - (UInt(1) << (ParentLevel * NDim));
-            // NOTE: overflow is prevented in get_cbits().
+            // NOTE: overflow is prevented in the computation of cbits_v.
             for (UInt i = 0; i < (UInt(1) << NDim); ++i) {
                 // Compute the first and last possible codes for the current child node.
                 // They both start with (from MSB to LSB):
