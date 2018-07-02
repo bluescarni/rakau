@@ -214,15 +214,11 @@ struct morton_encoder<2, std::uint32_t> {
 };
 
 template <typename UInt, std::size_t NDim>
-constexpr unsigned get_cbits()
-{
+inline constexpr unsigned cbits_v = []() {
     constexpr unsigned nbits = std::numeric_limits<UInt>::digits;
     static_assert(nbits > NDim, "The number of bits must be greater than the number of dimensions.");
     return static_cast<unsigned>(nbits / NDim - !(nbits % NDim));
-}
-
-template <typename UInt, std::size_t NDim>
-inline constexpr unsigned cbits_v = get_cbits<UInt, NDim>();
+}();
 
 // clz wrapper. n must be a nonzero unsigned integral.
 template <typename UInt>
