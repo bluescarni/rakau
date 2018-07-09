@@ -167,8 +167,15 @@ inline xsimd::batch<float, 16> inv_sqrt_3(xsimd::batch<float, 16> x)
 template <>
 inline xsimd::batch<float, 8> inv_sqrt_3(xsimd::batch<float, 8> x)
 {
-    const auto tmp = inv_sqrt_newton_iter(xsimd::batch<float, 8>(_mm256_rsqrt_ps(x)), x);
-    return tmp * tmp * tmp;
+    // const auto tmp = inv_sqrt_newton_iter(xsimd::batch<float, 8>(_mm256_rsqrt_ps(x)), x);
+    // return tmp * tmp * tmp;
+    const xsimd::batch<float, 8> x2 = x * x, x3 = x2 * x;
+    const xsimd::batch<float, 8> three(3.f), half(1.f / 2.f);
+    const auto xint = _mm256_castps_si256(x);
+    const auto init_guess = _mm256_castsi256_ps(
+        _mm256_sub_epi32(_mm256_sub_epi32(_mm256_set1_epi32(0x9eb195c9ul), xint), _mm256_srli_epi32(xint, 1)));
+    const xsimd::batch<float, 8> iter1 = init_guess * half * xsimd::fnma(x3 * init_guess, init_guess, three);
+    return iter1 * half * xsimd::fnma(x3 * iter1, iter1, three);
 }
 
 #endif
