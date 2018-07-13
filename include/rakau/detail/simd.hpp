@@ -111,18 +111,24 @@ inline xsimd::batch<double, 4> rotate(xsimd::batch<double, 4> x)
 
 #if XSIMD_X86_INSTR_SET >= XSIMD_X86_SSE2_VERSION
 
-// SSE2, float.
-template <>
-inline xsimd::batch<float, 4> rotate(xsimd::batch<float, 4> x)
-{
-    return _mm_shuffle_ps(x, x, 0b00111001);
-}
-
 // SSE2, double.
+// NOTE: this requires specifically SSE2, while the float counterpart
+// requires only SSE1.
 template <>
 inline xsimd::batch<double, 2> rotate(xsimd::batch<double, 2> x)
 {
     return _mm_shuffle_pd(x, x, 1);
+}
+
+#endif
+
+#if XSIMD_X86_INSTR_SET >= XSIMD_X86_SSE_VERSION
+
+// SSE, float.
+template <>
+inline xsimd::batch<float, 4> rotate(xsimd::batch<float, 4> x)
+{
+    return _mm_shuffle_ps(x, x, 0b00111001);
 }
 
 #endif
