@@ -148,7 +148,6 @@ inline xsimd::batch<F, N> inv_sqrt_newton_iter(xsimd::batch<F, N> y0, xsimd::bat
 // Computation of 1/sqrt(x)**3 via fast rsqrt.
 #if XSIMD_X86_INSTR_SET >= XSIMD_X86_AVX512_VERSION
 
-template <>
 inline xsimd::batch<float, 16> inv_sqrt_3(xsimd::batch<float, 16> x)
 {
     // NOTE: AVX512-ER has an intrinsic for 28-bit precision (rather than 14-bit)
@@ -161,7 +160,6 @@ inline xsimd::batch<float, 16> inv_sqrt_3(xsimd::batch<float, 16> x)
 
 #if XSIMD_X86_INSTR_SET >= XSIMD_X86_AVX_VERSION
 
-template <>
 inline xsimd::batch<float, 8> inv_sqrt_3(xsimd::batch<float, 8> x)
 {
     const auto tmp = inv_sqrt_newton_iter(xsimd::batch<float, 8>(_mm256_rsqrt_ps(x)), x);
