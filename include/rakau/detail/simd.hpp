@@ -10,6 +10,7 @@
 #define RAKAU_DETAIL_SIMD_HPP
 
 #include <algorithm>
+#include <tuple>
 #include <type_traits>
 
 #include <xsimd/xsimd.hpp>
@@ -188,6 +189,36 @@ inline constexpr bool has_fast_inv_sqrt =
     false
 #endif
     ;
+
+template <typename F>
+struct simd_sizes_impl {
+    using type = std::tuple<std::integral_constant<unsigned, xsimd::simd_batch_traits<xsimd::simd_type<F>>::size>>;
+};
+
+#if XSIMD_X86_INSTR_SET >= XSIMD_X86_AVX_VERSION
+
+template <>
+struct simd_sizes_impl<float> {
+    using type = std::tuple<
+#if XSIMD_X86_INSTR_SET >= XSIMD_X86_AVX512_VERSION
+        std::integral_constant<unsigned, 16>,
+#endif
+        std::integral_constant<unsigned, 8>, std::integral_constant<unsigned, 4>>;
+};
+
+template <>
+struct simd_sizes_impl<double> {
+    using type = std::tuple<
+#if XSIMD_X86_INSTR_SET >= XSIMD_X86_AVX512_VERSION
+        std::integral_constant<unsigned, 8>,
+#endif
+        std::integral_constant<unsigned, 4>, std::integral_constant<unsigned, 2>>;
+};
+
+#endif
+
+template <typename F>
+using simd_sizes = typename simd_sizes_impl<F>::type;
 
 } // namespace detail
 

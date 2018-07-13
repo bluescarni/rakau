@@ -138,6 +138,22 @@ private:
 #endif
 };
 
+// Tuple for_each(). Execute the functor f on each element of the input Tuple.
+// https://isocpp.org/blog/2015/01/for-each-arg-eric-niebler
+// https://www.reddit.com/r/cpp/comments/2tffv3/for_each_argumentsean_parent/
+// https://www.reddit.com/r/cpp/comments/33b06v/for_each_in_tuple/
+template <typename T, typename F, std::size_t... Is>
+inline void apply_to_each_item(T &&t, const F &f, std::index_sequence<Is...>)
+{
+    (void)std::initializer_list<int>{0, (void(f(std::get<Is>(std::forward<T>(t)))), 0)...};
+}
+
+template <class Tuple, class F>
+inline void tuple_for_each(Tuple &&t, const F &f)
+{
+    apply_to_each_item(std::forward<Tuple>(t), f, std::make_index_sequence<std::tuple_size_v<std::decay_t<Tuple>>>{});
+}
+
 template <std::size_t NDim, typename Out>
 struct morton_encoder {
 };
@@ -1231,34 +1247,39 @@ private:
             size_type i = 0;
             if constexpr (NDim == 3u) {
                 // The SIMD-accelerated part.
-                const auto vec_size = static_cast<size_type>(size - size % b_size);
-                const b_type node_size2_vec(node_size2);
                 auto [x_ptr, y_ptr, z_ptr] = c_ptrs;
                 const auto [x_com, y_com, z_com] = com_pos;
                 auto [tmp_x, tmp_y, tmp_z, tmp_dist3] = tmp_ptrs;
-                for (; i < vec_size; i += b_size, x_ptr += b_size, y_ptr += b_size, z_ptr += b_size, tmp_x += b_size,
-                                     tmp_y += b_size, tmp_z += b_size, tmp_dist3 += b_size) {
-                    const auto diff_x = x_com - xsimd::load_unaligned(x_ptr),
-                               diff_y = y_com - xsimd::load_unaligned(y_ptr),
-                               diff_z = z_com - xsimd::load_unaligned(z_ptr),
-                               dist2 = diff_x * diff_x + diff_y * diff_y + diff_z * diff_z;
-                    if (xsimd::any(node_size2_vec >= theta2 * dist2)) {
-                        // At least one particle in the current batch fails the BH criterion
-                        // check. Mark the bh_flag as false, and set i to size in order
-                        // to skip the scalar calculation later. Then break out.
-                        bh_flag = false;
-                        i = size;
-                        break;
+                tuple_for_each(simd_sizes<F>{}, [&](const auto &s) {
+                    constexpr auto batch_size = s();
+                    using batch_type = xsimd::batch<F, batch_size>;
+                    const auto vec_size = static_cast<size_type>(size - size % batch_size);
+                    const batch_type node_size2_vec(node_size2);
+                    for (; i < vec_size; i += batch_size, x_ptr += batch_size, y_ptr += batch_size, z_ptr += batch_size,
+                                         tmp_x += batch_size, tmp_y += batch_size, tmp_z += batch_size,
+                                         tmp_dist3 += batch_size) {
+                        const auto diff_x = x_com - batch_type(x_ptr, xsimd::unaligned_mode{}),
+                                   diff_y = y_com - batch_type(y_ptr, xsimd::unaligned_mode{}),
+                                   diff_z = z_com - batch_type(z_ptr, xsimd::unaligned_mode{}),
+                                   dist2 = diff_x * diff_x + diff_y * diff_y + diff_z * diff_z;
+                        if (xsimd::any(node_size2_vec >= theta2 * dist2)) {
+                            // At least one particle in the current batch fails the BH criterion
+                            // check. Mark the bh_flag as false, and set i to size in order
+                            // to skip the scalar calculation later. Then break out.
+                            bh_flag = false;
+                            i = size;
+                            break;
+                        }
+                        diff_x.store_aligned(tmp_x);
+                        diff_y.store_aligned(tmp_y);
+                        diff_z.store_aligned(tmp_z);
+                        if constexpr (has_fast_inv_sqrt<batch_type>) {
+                            inv_sqrt_3(dist2).store_aligned(tmp_dist3);
+                        } else {
+                            (xsimd::sqrt(dist2) * dist2).store_aligned(tmp_dist3);
+                        }
                     }
-                    xsimd::store_aligned(tmp_x, diff_x);
-                    xsimd::store_aligned(tmp_y, diff_y);
-                    xsimd::store_aligned(tmp_z, diff_z);
-                    if constexpr (has_fast_inv_sqrt<b_type>) {
-                        xsimd::store_aligned(tmp_dist3, inv_sqrt_3(dist2));
-                    } else {
-                        xsimd::store_aligned(tmp_dist3, xsimd::sqrt(dist2) * dist2);
-                    }
-                }
+                });
             }
             for (; i < size; ++i) {
                 F dist2(0);
@@ -1288,19 +1309,29 @@ private:
                 i = 0;
                 if constexpr (NDim == 3u) {
                     // The SIMD-accelerated part.
-                    const auto vec_size = static_cast<size_type>(size - size % b_size);
                     auto [tmp_x, tmp_y, tmp_z, tmp_dist3] = tmp_ptrs;
                     auto [res_x, res_y, res_z] = res_ptrs;
-                    for (; i < vec_size; i += b_size, tmp_x += b_size, tmp_y += b_size, tmp_z += b_size,
-                                         tmp_dist3 += b_size, res_x += b_size, res_y += b_size, res_z += b_size) {
-                        const auto m_com_dist3_vec = has_fast_inv_sqrt<b_type> ? m_com * xsimd::load_aligned(tmp_dist3)
-                                                                               : m_com / xsimd::load_aligned(tmp_dist3),
-                                   xdiff = xsimd::load_aligned(tmp_x), ydiff = xsimd::load_aligned(tmp_y),
-                                   zdiff = xsimd::load_aligned(tmp_z);
-                        xsimd::store_aligned(res_x, xsimd::fma(xdiff, m_com_dist3_vec, xsimd::load_aligned(res_x)));
-                        xsimd::store_aligned(res_y, xsimd::fma(ydiff, m_com_dist3_vec, xsimd::load_aligned(res_y)));
-                        xsimd::store_aligned(res_z, xsimd::fma(zdiff, m_com_dist3_vec, xsimd::load_aligned(res_z)));
-                    }
+                    tuple_for_each(simd_sizes<F>{}, [&](const auto &s) {
+                        constexpr auto batch_size = s();
+                        using batch_type = xsimd::batch<F, batch_size>;
+                        const auto vec_size = static_cast<size_type>(size - size % batch_size);
+                        for (; i < vec_size; i += batch_size, tmp_x += batch_size, tmp_y += batch_size,
+                                             tmp_z += batch_size, tmp_dist3 += batch_size, res_x += batch_size,
+                                             res_y += batch_size, res_z += batch_size) {
+                            const auto m_com_dist3_vec = has_fast_inv_sqrt<batch_type>
+                                                             ? m_com * batch_type(tmp_dist3, xsimd::aligned_mode{})
+                                                             : m_com / batch_type(tmp_dist3, xsimd::aligned_mode{}),
+                                       xdiff = batch_type(tmp_x, xsimd::aligned_mode{}),
+                                       ydiff = batch_type(tmp_y, xsimd::aligned_mode{}),
+                                       zdiff = batch_type(tmp_z, xsimd::aligned_mode{});
+                            xsimd::fma(xdiff, m_com_dist3_vec, batch_type(res_x, xsimd::aligned_mode{}))
+                                .store_aligned(res_x);
+                            xsimd::fma(ydiff, m_com_dist3_vec, batch_type(res_y, xsimd::aligned_mode{}))
+                                .store_aligned(res_y);
+                            xsimd::fma(zdiff, m_com_dist3_vec, batch_type(res_z, xsimd::aligned_mode{}))
+                                .store_aligned(res_z);
+                        }
+                    });
                 }
                 for (; i < size; ++i) {
                     const auto m_com_dist3 = m_com / tmp_ptrs[NDim][i];
