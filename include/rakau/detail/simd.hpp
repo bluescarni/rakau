@@ -145,16 +145,7 @@ inline xsimd::batch<F, N> inv_sqrt_newton_iter(xsimd::batch<F, N> y0, xsimd::bat
     return half_y0 * three_minus_muls;
 }
 
-// Compute 1/sqrt(x)**3. This will use fast rsqrt if available.
-template <typename F, std::size_t N>
-inline xsimd::batch<F, N> inv_sqrt_3(xsimd::batch<F, N> x)
-{
-    // The default implementation.
-    const auto tmp = F(1) / xsimd::sqrt(x);
-    return tmp * tmp * tmp;
-}
-
-// On various versions of AVX, we have intrinsics for fast rsqrt.
+// Computation of 1/sqrt(x)**3 via fast rsqrt.
 #if XSIMD_X86_INSTR_SET >= XSIMD_X86_AVX512_VERSION
 
 template <>
