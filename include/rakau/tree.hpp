@@ -1225,12 +1225,6 @@ private:
             }
             // Copy locally the COM coords of the source.
             const auto com_pos = get<3>(m_tree[begin]);
-            // Flag to determine whether, in the scalar part of the code,
-            // we should be using the square root or its inverse.
-            // The inverse square root is used in vectorized mode
-            // if the instruction set has a fast reciprocal square root implementation.
-            // NOTE: currently the vectorized mode is activated only for NDim == 3u.
-            constexpr bool use_inv_sqrt = (NDim == 3u) && has_fast_inv_sqrt<b_type>;
             // Check the distances of all the particles of the target
             // node from the COM of the source.
             bool bh_flag = true;
@@ -1281,8 +1275,9 @@ private:
                     bh_flag = false;
                     break;
                 }
-                // Store dist3 (or 1/dist3) for later use.
-                tmp_ptrs[NDim][i] = use_inv_sqrt ? F(1) / (std::sqrt(dist2) * dist2) : std::sqrt(dist2) * dist2;
+                // Store dist3 for later use.
+                // NOTE: in the scalar part, we always store dist3.
+                tmp_ptrs[NDim][i] = std::sqrt(dist2) * dist2;
             }
             if (bh_flag) {
                 // The source node satisfies the BH criterion for
@@ -1308,7 +1303,7 @@ private:
                     }
                 }
                 for (; i < size; ++i) {
-                    const auto m_com_dist3 = use_inv_sqrt ? m_com * tmp_ptrs[NDim][i] : m_com / tmp_ptrs[NDim][i];
+                    const auto m_com_dist3 = m_com / tmp_ptrs[NDim][i];
                     for (std::size_t j = 0; j < NDim; ++j) {
                         res_ptrs[j][i] += tmp_ptrs[j][i] * m_com_dist3;
                     }
