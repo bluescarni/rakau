@@ -174,7 +174,8 @@ inline xsimd::batch<float, 8> inv_sqrt_3(xsimd::batch<float, 8> x)
 // - AVX 8-floats batches,
 // - AVX512 16-floats batches.
 // NOTE: there are intrinsics in SSE for rsqrt as well, but they don't seem to
-// improve performance for our use case.
+// improve performance for our use case. I could not understand why exactly that's
+// the case, perhaps it has to do with the fact that AVX has FMA while SSE doesn't.
 template <typename B>
 inline constexpr bool has_fast_inv_sqrt =
 #if XSIMD_X86_INSTR_SET >= XSIMD_X86_AVX_VERSION
