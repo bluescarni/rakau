@@ -1473,9 +1473,9 @@ private:
                             const auto diff_x = *x_ptr2 - x1, diff_y = *y_ptr2 - y1, diff_z = *z_ptr2 - z1,
                                        dist2 = diff_x * diff_x + diff_y * diff_y + diff_z * diff_z,
                                        dist = std::sqrt(dist2), dist3 = dist * dist2, m_dist3 = *m_ptr2 / dist3;
-                            rx += diff_x * m_dist3;
-                            ry += diff_y * m_dist3;
-                            rz += diff_z * m_dist3;
+                            rx = fma_wrap(diff_x, m_dist3, rx);
+                            ry = fma_wrap(diff_y, m_dist3, ry);
+                            rz = fma_wrap(diff_z, m_dist3, rz);
                         }
                         // Store the update accelerations in the temporary vectors.
                         *res_x = rx;
@@ -1624,9 +1624,9 @@ private:
                         const auto diff_x = *x_ptr2 - x1, diff_y = *y_ptr2 - y1, diff_z = *z_ptr2 - z1,
                                    dist2 = diff_x * diff_x + diff_y * diff_y + diff_z * diff_z, dist = std::sqrt(dist2),
                                    dist3 = dist * dist2, m2_dist3 = *m_ptr2 / dist3;
-                        rx += diff_x * m2_dist3;
-                        ry += diff_y * m2_dist3;
-                        rz += diff_z * m2_dist3;
+                        rx = fma_wrap(diff_x, m2_dist3, rx);
+                        ry = fma_wrap(diff_y, m2_dist3, ry);
+                        rz = fma_wrap(diff_z, m2_dist3, rz);
                     }
                 }
                 // Store the updated accelerations.
