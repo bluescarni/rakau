@@ -460,6 +460,25 @@ struct di_aligned_allocator {
     }
 };
 
+// Scalar FMA wrappers.
+inline float fma_wrap(float x, float y, float z)
+{
+#if defined(FP_FAST_FMAF)
+    return std::fma(x, y, z);
+#else
+    return x * y + z;
+#endif
+}
+
+inline double fma_wrap(double x, double y, double z)
+{
+#if defined(FP_FAST_FMA)
+    return std::fma(x, y, z);
+#else
+    return x * y + z;
+#endif
+}
+
 } // namespace detail
 
 template <typename UInt, typename F, std::size_t NDim>
@@ -1344,7 +1363,7 @@ private:
                 for (; i < size; ++i) {
                     const auto m_com_dist3 = m_com / tmp_ptrs[NDim][i];
                     for (std::size_t j = 0; j < NDim; ++j) {
-                        res_ptrs[j][i] += tmp_ptrs[j][i] * m_com_dist3;
+                        res_ptrs[j][i] = fma_wrap(tmp_ptrs[j][i], m_com_dist3, res_ptrs[j][i]);
                     }
                 }
                 return;
