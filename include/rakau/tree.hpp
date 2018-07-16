@@ -1270,32 +1270,33 @@ private:
             const auto com_pos = get<3>(m_tree[begin]);
             // Check the distances of all the particles of the target
             // node from the COM of the source.
-            // NOTE: if at least 1 particle of the target node does *not* satisfy
-            // the BH criterion, this flag will be set to false.
             bool bh_flag = true;
+            size_type i = 0;
             if constexpr (NDim == 3u) {
                 // The SIMD-accelerated part.
                 auto [x_ptr, y_ptr, z_ptr] = c_ptrs;
                 const auto [x_com, y_com, z_com] = com_pos;
                 auto [tmp_x, tmp_y, tmp_z, tmp_dist3] = tmp_ptrs;
-                size_type i = 0;
                 tuple_for_each(simd_sizes<F>{}, [&](const auto &s) {
                     constexpr auto batch_size = s();
                     using batch_type = xsimd::batch<F, batch_size>;
                     const auto vec_size = static_cast<size_type>(size - size % batch_size);
-                    const batch_type node_size2_vec(node_size2), theta2_vec(theta2), x_com_vec(x_com), y_com_vec(y_com),
-                        z_com_vec(z_com);
-                    for (; i < vec_size && bh_flag; i += batch_size, x_ptr += batch_size, y_ptr += batch_size,
-                                                    z_ptr += batch_size, tmp_x += batch_size, tmp_y += batch_size,
-                                                    tmp_z += batch_size, tmp_dist3 += batch_size) {
-                        const auto diff_x = x_com_vec - batch_type(x_ptr, xsimd::unaligned_mode{}),
-                                   diff_y = y_com_vec - batch_type(y_ptr, xsimd::unaligned_mode{}),
-                                   diff_z = z_com_vec - batch_type(z_ptr, xsimd::unaligned_mode{}),
+                    const batch_type node_size2_vec(node_size2);
+                    for (; i < vec_size; i += batch_size, x_ptr += batch_size, y_ptr += batch_size, z_ptr += batch_size,
+                                         tmp_x += batch_size, tmp_y += batch_size, tmp_z += batch_size,
+                                         tmp_dist3 += batch_size) {
+                        const auto diff_x = x_com - batch_type(x_ptr, xsimd::unaligned_mode{}),
+                                   diff_y = y_com - batch_type(y_ptr, xsimd::unaligned_mode{}),
+                                   diff_z = z_com - batch_type(z_ptr, xsimd::unaligned_mode{}),
                                    dist2 = diff_x * diff_x + diff_y * diff_y + diff_z * diff_z;
-                        // NOTE: the BH criterion is satisfied if, for all particles in the batch,
-                        // theta > s / d.
-                        bh_flag = xsimd::all(theta2_vec * dist2 > node_size2_vec);
-                        // Store the differences and dist3 (or its inverse) for later use.
+                        if (xsimd::any(node_size2_vec >= theta2 * dist2)) {
+                            // At least one particle in the current batch fails the BH criterion
+                            // check. Mark the bh_flag as false, and set i to size in order
+                            // to skip the scalar calculation later. Then break out.
+                            bh_flag = false;
+                            i = size;
+                            break;
+                        }
                         diff_x.store_aligned(tmp_x);
                         diff_y.store_aligned(tmp_y);
                         diff_z.store_aligned(tmp_z);
@@ -1306,32 +1307,25 @@ private:
                         }
                     }
                 });
-                // The remaining scalar part.
-                for (; i < size && bh_flag; ++i, ++x_ptr, ++y_ptr, ++z_ptr, ++tmp_x, ++tmp_y, ++tmp_z, ++tmp_dist3) {
-                    const auto diff_x = x_com - *x_ptr;
-                    const auto diff_y = y_com - *y_ptr;
-                    const auto diff_z = z_com - *z_ptr;
-                    const auto dist2 = diff_x * diff_x + diff_y * diff_y + diff_z * diff_z;
-                    bh_flag = theta2 * dist2 > node_size2;
-                    *tmp_x = diff_x;
-                    *tmp_y = diff_y;
-                    *tmp_z = diff_z;
-                    // NOTE: in the scalar part, we always store dist3.
-                    *tmp_dist3 = std::sqrt(dist2) * dist2;
+            }
+            for (; i < size; ++i) {
+                F dist2(0);
+                for (std::size_t j = 0; j < NDim; ++j) {
+                    // Store the differences for later use.
+                    const auto diff = com_pos[j] - c_ptrs[j][i];
+                    tmp_ptrs[j][i] = diff;
+                    dist2 += diff * diff;
                 }
-            } else {
-                for (size_type i = 0; i < size && bh_flag; ++i) {
-                    F dist2(0);
-                    for (std::size_t j = 0; j < NDim; ++j) {
-                        // Store the differences for later use.
-                        const auto diff = com_pos[j] - c_ptrs[j][i];
-                        tmp_ptrs[j][i] = diff;
-                        dist2 += diff * diff;
-                    }
-                    bh_flag = theta2 * dist2 > node_size2;
-                    // NOTE: in the generic code, we always store dist3.
-                    tmp_ptrs[NDim][i] = std::sqrt(dist2) * dist2;
+                if (node_size2 >= theta2 * dist2) {
+                    // At least one of the particles in the target
+                    // node is too close to the COM. Set the flag
+                    // to false and exit.
+                    bh_flag = false;
+                    break;
                 }
+                // Store dist3 for later use.
+                // NOTE: in the scalar part, we always store dist3.
+                tmp_ptrs[NDim][i] = std::sqrt(dist2) * dist2;
             }
             if (bh_flag) {
                 // The source node satisfies the BH criterion for
@@ -1339,7 +1333,7 @@ private:
                 //
                 // Load the mass of the COM of the sibling node.
                 const auto m_com = get<2>(m_tree[begin]);
-                size_type i = 0;
+                i = 0;
                 if constexpr (NDim == 3u) {
                     // The SIMD-accelerated part.
                     auto [tmp_x, tmp_y, tmp_z, tmp_dist3] = tmp_ptrs;
