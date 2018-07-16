@@ -1388,15 +1388,135 @@ private:
                 // Establish the range of the source node.
                 const auto leaf_begin = get<1>(m_tree[begin])[0], leaf_end = get<1>(m_tree[begin])[1];
                 if constexpr (NDim == 3u) {
+                    // Pointers to the target node data.
+                    const auto x_ptr1 = c_ptrs[0], y_ptr1 = c_ptrs[1], z_ptr1 = c_ptrs[2];
+                    // Pointers to the source node data.
+                    const auto x_ptr2 = m_coords[0].data() + leaf_begin, y_ptr2 = m_coords[1].data() + leaf_begin,
+                               z_ptr2 = m_coords[2].data() + leaf_begin, m_ptr2 = m_masses.data() + leaf_begin;
+                    // Pointer to the result data.
+                    const auto res_x = res_ptrs[0], res_y = res_ptrs[1], res_z = res_ptrs[2];
                     // The number of particles in the source node.
                     const auto size_leaf = static_cast<size_type>(leaf_end - leaf_begin);
+                    size_type i1 = 0;
+                    tuple_for_each(simd_sizes<F>{}, [&](const auto &s1) {
+                        size_type i2 = 0;
+                        tuple_for_each(simd_sizes<F>{}, [&](const auto &s2) {
+                            // The batch size is the smallest between s1 and s2.
+                            constexpr auto batch_size
+                                = std::min(uncvref_t<decltype(s1)>::value, uncvref_t<decltype(s2)>::value);
+                            using batch_type = xsimd::batch<F, batch_size>;
+                            const auto vec_size1 = static_cast<size_type>(size - size % uncvref_t<decltype(s1)>::value);
+                            const auto vec_size2
+                                = static_cast<size_type>(size_leaf - size_leaf % uncvref_t<decltype(s2)>::value);
+                            for (auto idx1 = i1; idx1 < vec_size1; idx1 += batch_size) {
+                                // Load the current batch of target data.
+                                const auto xvec1 = batch_type(x_ptr1 + idx1, xsimd::unaligned_mode{}),
+                                           yvec1 = batch_type(y_ptr1 + idx1, xsimd::unaligned_mode{}),
+                                           zvec1 = batch_type(z_ptr1 + idx1, xsimd::unaligned_mode{});
+                                // Init the batches for computing the accelerations, loading the
+                                // accumulated acceleration for the current batch.
+                                auto res_x_vec = batch_type(res_x + idx1, xsimd::aligned_mode{}),
+                                     res_y_vec = batch_type(res_y + idx1, xsimd::aligned_mode{}),
+                                     res_z_vec = batch_type(res_z + idx1, xsimd::aligned_mode{});
+                                for (auto idx2 = i2; idx2 < vec_size2; idx2 += batch_size) {
+                                    auto xvec2 = batch_type(x_ptr2 + idx2, xsimd::unaligned_mode{}),
+                                         yvec2 = batch_type(y_ptr2 + idx2, xsimd::unaligned_mode{}),
+                                         zvec2 = batch_type(z_ptr2 + idx2, xsimd::unaligned_mode{}),
+                                         mvec2 = batch_type(m_ptr2 + idx2, xsimd::unaligned_mode{});
+                                    batch_bs_3d(res_x_vec, res_y_vec, res_z_vec, xvec1, yvec1, zvec1, xvec2, yvec2,
+                                                zvec2, mvec2);
+                                    for (std::size_t j = 1; j < batch_size; ++j) {
+                                        // Above we computed the element-wise accelerations of a source batch
+                                        // onto a target batch. We need to rotate the source batch
+                                        // batch_size - 1 times and perform again the computation in order
+                                        // to compute all possible particle-particle interactions.
+                                        xvec2 = rotate(xvec2);
+                                        yvec2 = rotate(yvec2);
+                                        zvec2 = rotate(zvec2);
+                                        mvec2 = rotate(mvec2);
+                                        batch_bs_3d(res_x_vec, res_y_vec, res_z_vec, xvec1, yvec1, zvec1, xvec2, yvec2,
+                                                    zvec2, mvec2);
+                                    }
+                                }
+                                // Store the updated accelerations in the temporary vectors.
+                                res_x_vec.store_aligned(res_x + idx1);
+                                res_y_vec.store_aligned(res_y + idx1);
+                                res_z_vec.store_aligned(res_z + idx1);
+                            }
+                            i2 = size_leaf - size_leaf % uncvref_t<decltype(s2)>::value;
+                        });
+                        constexpr auto batch_size1 = uncvref_t<decltype(s1)>::value;
+                        using batch_type1 = xsimd::batch<F, batch_size1>;
+                        const auto vec_size1 = static_cast<size_type>(size - size % batch_size1);
+                        for (; i1 < vec_size1; i1 += batch_size1) {
+                            const auto xvec1 = batch_type1(x_ptr1 + i1, xsimd::unaligned_mode{}),
+                                       yvec1 = batch_type1(y_ptr1 + i1, xsimd::unaligned_mode{}),
+                                       zvec1 = batch_type1(z_ptr1 + i1, xsimd::unaligned_mode{});
+                            auto res_x_vec = batch_type1(res_x + i1, xsimd::aligned_mode{}),
+                                 res_y_vec = batch_type1(res_y + i1, xsimd::aligned_mode{}),
+                                 res_z_vec = batch_type1(res_z + i1, xsimd::aligned_mode{});
+                            for (; i2 < size_leaf; ++i2) {
+                                // NOTE: here we are doing batch/scalar interactions.
+                                batch_bs_3d(res_x_vec, res_y_vec, res_z_vec, xvec1, yvec1, zvec1, x_ptr2[i2],
+                                            y_ptr2[i2], z_ptr2[i2], m_ptr2[i2]);
+                            }
+                            res_x_vec.store_aligned(res_x + i1);
+                            res_y_vec.store_aligned(res_y + i1);
+                            res_z_vec.store_aligned(res_z + i1);
+                        }
+                    });
+                    for (; i1 < size; ++i1) {
+                        const auto x1 = x_ptr1[i1], y1 = y_ptr1[i1], z1 = z_ptr1[i1];
+                        auto rx = res_x[i1], ry = res_y[i1], rz = res_z[i1];
+                        // tuple_for_each(simd_sizes<F>{}, [&](const auto &s) {
+                        //     constexpr auto batch_size = uncvref_t<decltype(s)>::value;
+                        //     using batch_type = xsimd::batch<F, batch_size>;
+                        //     const auto vec_size2 = static_cast<size_type>(size_leaf - size_leaf % batch_size);
+                        //     for (; i2 < vec_size2 && false; i2 += batch_size) {
+                        //         // NOTE: scalar/batch interactions.
+                        //         const auto diff_x = batch_type(x_ptr2 + i2, xsimd::unaligned_mode{}) - x1,
+                        //                    diff_y = batch_type(y_ptr2 + i2, xsimd::unaligned_mode{}) - y1,
+                        //                    diff_z = batch_type(z_ptr2 + i2, xsimd::unaligned_mode{}) - z1,
+                        //                    mvec2 = batch_type(m_ptr2 + i2, xsimd::unaligned_mode{}),
+                        //                    dist2 = diff_x * diff_x + diff_y * diff_y + diff_z * diff_z;
+                        //         batch_type m2_dist3;
+                        //         if constexpr (has_fast_inv_sqrt<batch_type>) {
+                        //             m2_dist3 = mvec2 * inv_sqrt_3(dist2);
+                        //         } else {
+                        //             const auto dist = xsimd::sqrt(dist2);
+                        //             const auto dist3 = dist * dist2;
+                        //             m2_dist3 = mvec2 / dist3;
+                        //         }
+                        //         // NOTE: here we are computing the acceleration on a single target particle
+                        //         // due to a source batch, and thus we need to do an accumulation of all the
+                        //         // accelerations from the members of the batch.
+                        //         rx += xsimd::hadd(diff_x * m2_dist3);
+                        //         ry += xsimd::hadd(diff_y * m2_dist3);
+                        //         rz += xsimd::hadd(diff_z * m2_dist3);
+                        //     }
+                        // });
+                        for (size_type i2 = 0; i2 < size_leaf; ++i2) {
+                            // NOTE: scalar/scalar interactions.
+                            const auto diff_x = x_ptr2[i2] - x1, diff_y = y_ptr2[i2] - y1, diff_z = z_ptr2[i2] - z1,
+                                       dist2 = diff_x * diff_x + diff_y * diff_y + diff_z * diff_z,
+                                       dist = std::sqrt(dist2), dist3 = dist * dist2, m_dist3 = m_ptr2[i2] / dist3;
+                            rx = fma_wrap(diff_x, m_dist3, rx);
+                            ry = fma_wrap(diff_y, m_dist3, ry);
+                            rz = fma_wrap(diff_z, m_dist3, rz);
+                        }
+                        // Store the update accelerations in the temporary vectors.
+                        res_x[i1] = rx;
+                        res_y[i1] = ry;
+                        res_z[i1] = rz;
+                    }
+#if 0
                     // Vector size of the target node.
                     const auto vec_size1 = static_cast<size_type>(size - size % b_size);
                     // Vector size of the source node.
                     const auto vec_size2 = static_cast<size_type>(size_leaf - size_leaf % b_size);
-                    auto [x_ptr1, y_ptr1, z_ptr1] = c_ptrs;
-                    auto [res_x, res_y, res_z] = res_ptrs;
-                    size_type i1 = 0;
+                    // auto [x_ptr1, y_ptr1, z_ptr1] = c_ptrs;
+                    // auto [res_x, res_y, res_z] = res_ptrs;
+                    // size_type i1 = 0;
                     for (; i1 < vec_size1; i1 += b_size, x_ptr1 += b_size, y_ptr1 += b_size, z_ptr1 += b_size,
                                            res_x += b_size, res_y += b_size, res_z += b_size) {
                         // Load the current batch of target data.
@@ -1486,6 +1606,7 @@ private:
                         *res_y = ry;
                         *res_z = rz;
                     }
+#endif
                 } else {
                     // Local variables for the scalar computation.
                     std::array<F, NDim> pos1, diffs;

@@ -12,6 +12,8 @@
 
 #include <boost/math/constants/constants.hpp>
 
+#include <tbb/task_scheduler_init.h>
+
 static constexpr unsigned nparts = 1'000'000;
 static constexpr float bsize = 10.f;
 
@@ -77,6 +79,7 @@ using namespace rakau;
 
 int main(int argc, char **argv)
 {
+    // tbb::task_scheduler_init init(1);
     if (argc < 2) {
         throw std::runtime_error("Need at least 4 arguments, but only " + std::to_string(argc) + " was/were provided");
     }
