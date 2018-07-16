@@ -479,6 +479,10 @@ inline double fma_wrap(double x, double y, double z)
 #endif
 }
 
+// Handy alias.
+template <typename T>
+using uncvref_t = std::remove_cv_t<std::remove_reference_t<T>>;
+
 } // namespace detail
 
 template <typename UInt, typename F, std::size_t NDim>
@@ -1275,12 +1279,12 @@ private:
             bool bh_flag = true;
             if constexpr (NDim == 3u) {
                 // The SIMD-accelerated part.
-                auto [x_ptr, y_ptr, z_ptr] = c_ptrs;
-                const auto [x_com, y_com, z_com] = com_pos;
-                auto [tmp_x, tmp_y, tmp_z, tmp_dist3] = tmp_ptrs;
+                auto x_ptr = c_ptrs[0], y_ptr = c_ptrs[1], z_ptr = c_ptrs[2];
+                const auto x_com = com_pos[0], y_com = com_pos[1], z_com = com_pos[2];
+                auto tmp_x = tmp_ptrs[0], tmp_y = tmp_ptrs[1], tmp_z = tmp_ptrs[2], tmp_dist3 = tmp_ptrs[3];
                 size_type i = 0;
                 tuple_for_each(simd_sizes<F>{}, [&](const auto &s) {
-                    constexpr auto batch_size = s();
+                    constexpr auto batch_size = uncvref_t<decltype(s)>::value;
                     using batch_type = xsimd::batch<F, batch_size>;
                     const auto vec_size = static_cast<size_type>(size - size % batch_size);
                     const batch_type node_size2_vec(node_size2), theta2_vec(theta2), x_com_vec(x_com), y_com_vec(y_com),
@@ -1342,10 +1346,10 @@ private:
                 size_type i = 0;
                 if constexpr (NDim == 3u) {
                     // The SIMD-accelerated part.
-                    auto [tmp_x, tmp_y, tmp_z, tmp_dist3] = tmp_ptrs;
-                    auto [res_x, res_y, res_z] = res_ptrs;
+                    auto tmp_x = tmp_ptrs[0], tmp_y = tmp_ptrs[1], tmp_z = tmp_ptrs[2], tmp_dist3 = tmp_ptrs[3];
+                    auto res_x = res_ptrs[0], res_y = res_ptrs[1], res_z = res_ptrs[2];
                     tuple_for_each(simd_sizes<F>{}, [&](const auto &s) {
-                        constexpr auto batch_size = s();
+                        constexpr auto batch_size = uncvref_t<decltype(s)>::value;
                         using batch_type = xsimd::batch<F, batch_size>;
                         const auto vec_size = static_cast<size_type>(size - size % batch_size);
                         for (; i < vec_size; i += batch_size, tmp_x += batch_size, tmp_y += batch_size,
