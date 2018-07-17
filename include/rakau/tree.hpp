@@ -1388,6 +1388,7 @@ private:
                 // Establish the range of the source node.
                 const auto leaf_begin = get<1>(m_tree[begin])[0], leaf_end = get<1>(m_tree[begin])[1];
                 if constexpr (NDim == 3u) {
+                    // unsigned long N = 0;
                     // Pointers to the target node data.
                     const auto x_ptr1 = c_ptrs[0], y_ptr1 = c_ptrs[1], z_ptr1 = c_ptrs[2];
                     // Pointers to the source node data.
@@ -1397,17 +1398,30 @@ private:
                     const auto res_x = res_ptrs[0], res_y = res_ptrs[1], res_z = res_ptrs[2];
                     // The number of particles in the source node.
                     const auto size_leaf = static_cast<size_type>(leaf_end - leaf_begin);
+                    // std::cout << "Total inter: " << (size * size_leaf) << '\n';
+                    // std::cout << "Size target: " << size << '\n';
+                    // std::cout << "Size source: " << size_leaf << '\n';
                     size_type i1 = 0;
                     tuple_for_each(simd_sizes<F>{}, [&](const auto &s1) {
+                        constexpr auto batch_size1 = uncvref_t<decltype(s1)>::value;
+                        using batch_type1 = xsimd::batch<F, batch_size1>;
+                        const auto vec_size1 = static_cast<size_type>(size - size % batch_size1);
                         size_type i2 = 0;
                         tuple_for_each(simd_sizes<F>{}, [&](const auto &s2) {
+                            constexpr auto batch_size2 = uncvref_t<decltype(s2)>::value;
                             // The batch size is the smallest between s1 and s2.
-                            constexpr auto batch_size
-                                = std::min(uncvref_t<decltype(s1)>::value, uncvref_t<decltype(s2)>::value);
+                            constexpr auto batch_size = std::min(uncvref_t<decltype(s1)>::value, batch_size2);
+                            // std::cout << "batch size 1: " << uncvref_t<decltype(s1)>::value << '\n';
+                            // std::cout << "batch size 2: " << batch_size2 << '\n';
+                            // std::cout << "i1 = " << i1 << '\n';
+                            // std::cout << "i2 = " << i2 << '\n';
                             using batch_type = xsimd::batch<F, batch_size>;
-                            const auto vec_size1 = static_cast<size_type>(size - size % uncvref_t<decltype(s1)>::value);
-                            const auto vec_size2
-                                = static_cast<size_type>(size_leaf - size_leaf % uncvref_t<decltype(s2)>::value);
+                            const auto vec_size2 = static_cast<size_type>(size_leaf - size_leaf % batch_size2);
+                            // std::cout << "vec size 1 = " << vec_size1 << '\n';
+                            // std::cout << "vec size 2 = " << vec_size2 << '\n';
+                            if (i2 == vec_size2) {
+                                return;
+                            }
                             for (auto idx1 = i1; idx1 < vec_size1; idx1 += batch_size) {
                                 // Load the current batch of target data.
                                 const auto xvec1 = batch_type(x_ptr1 + idx1, xsimd::unaligned_mode{}),
@@ -1425,6 +1439,7 @@ private:
                                          mvec2 = batch_type(m_ptr2 + idx2, xsimd::unaligned_mode{});
                                     batch_bs_3d(res_x_vec, res_y_vec, res_z_vec, xvec1, yvec1, zvec1, xvec2, yvec2,
                                                 zvec2, mvec2);
+                                    // N += batch_size;
                                     for (std::size_t j = 1; j < batch_size; ++j) {
                                         // Above we computed the element-wise accelerations of a source batch
                                         // onto a target batch. We need to rotate the source batch
@@ -1436,6 +1451,7 @@ private:
                                         mvec2 = rotate(mvec2);
                                         batch_bs_3d(res_x_vec, res_y_vec, res_z_vec, xvec1, yvec1, zvec1, xvec2, yvec2,
                                                     zvec2, mvec2);
+                                        // N += batch_size;
                                     }
                                 }
                                 // Store the updated accelerations in the temporary vectors.
@@ -1443,11 +1459,15 @@ private:
                                 res_y_vec.store_aligned(res_y + idx1);
                                 res_z_vec.store_aligned(res_z + idx1);
                             }
-                            i2 = size_leaf - size_leaf % uncvref_t<decltype(s2)>::value;
+                            // Update the index into the source node.
+                            i2 = vec_size2;
                         });
-                        constexpr auto batch_size1 = uncvref_t<decltype(s1)>::value;
-                        using batch_type1 = xsimd::batch<F, batch_size1>;
-                        const auto vec_size1 = static_cast<size_type>(size - size % batch_size1);
+                        if (i2 == size_leaf) {
+                            i1 = vec_size1;
+                            return;
+                        }
+                        // std::cout << "Doing irregulars from " << i1 << " to " << vec_size1 << " in chunks of "
+                        //           << batch_size1 << '\n';
                         for (; i1 < vec_size1; i1 += batch_size1) {
                             const auto xvec1 = batch_type1(x_ptr1 + i1, xsimd::unaligned_mode{}),
                                        yvec1 = batch_type1(y_ptr1 + i1, xsimd::unaligned_mode{}),
@@ -1455,10 +1475,11 @@ private:
                             auto res_x_vec = batch_type1(res_x + i1, xsimd::aligned_mode{}),
                                  res_y_vec = batch_type1(res_y + i1, xsimd::aligned_mode{}),
                                  res_z_vec = batch_type1(res_z + i1, xsimd::aligned_mode{});
-                            for (; i2 < size_leaf; ++i2) {
+                            for (auto idx2 = i2; idx2 < size_leaf; ++idx2) {
                                 // NOTE: here we are doing batch/scalar interactions.
-                                batch_bs_3d(res_x_vec, res_y_vec, res_z_vec, xvec1, yvec1, zvec1, x_ptr2[i2],
-                                            y_ptr2[i2], z_ptr2[i2], m_ptr2[i2]);
+                                batch_bs_3d(res_x_vec, res_y_vec, res_z_vec, xvec1, yvec1, zvec1, x_ptr2[idx2],
+                                            y_ptr2[idx2], z_ptr2[idx2], m_ptr2[idx2]);
+                                // N += batch_size1;
                             }
                             res_x_vec.store_aligned(res_x + i1);
                             res_y_vec.store_aligned(res_y + i1);
@@ -1503,12 +1524,14 @@ private:
                             rx = fma_wrap(diff_x, m_dist3, rx);
                             ry = fma_wrap(diff_y, m_dist3, ry);
                             rz = fma_wrap(diff_z, m_dist3, rz);
+                            //++N;
                         }
-                        // Store the update accelerations in the temporary vectors.
+                        // Store the updated accelerations.
                         res_x[i1] = rx;
                         res_y[i1] = ry;
                         res_z[i1] = rz;
                     }
+//                    std::cout << "Tot_N: " << N << '\n';
 #if 0
                     // Vector size of the target node.
                     const auto vec_size1 = static_cast<size_type>(size - size % b_size);
