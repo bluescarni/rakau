@@ -1289,9 +1289,8 @@ private:
                     for (; i < vec_size; i += batch_size, x_ptr += batch_size, y_ptr += batch_size, z_ptr += batch_size,
                                          tmp_x += batch_size, tmp_y += batch_size, tmp_z += batch_size,
                                          tmp_dist3 += batch_size) {
-                        const auto diff_x = x_com - batch_type(x_ptr, xsimd::unaligned_mode{}),
-                                   diff_y = y_com - batch_type(y_ptr, xsimd::unaligned_mode{}),
-                                   diff_z = z_com - batch_type(z_ptr, xsimd::unaligned_mode{}),
+                        const auto diff_x = x_com - batch_type(x_ptr), diff_y = y_com - batch_type(y_ptr),
+                                   diff_z = z_com - batch_type(z_ptr),
                                    dist2 = diff_x * diff_x + diff_y * diff_y + diff_z * diff_z;
                         if (xsimd::any(node_size2_vec >= theta2 * dist2)) {
                             // At least one particle in the current batch fails the BH criterion
@@ -1424,19 +1423,16 @@ private:
                             }
                             for (auto idx1 = i1; idx1 < vec_size1; idx1 += batch_size) {
                                 // Load the current batch of target data.
-                                const auto xvec1 = batch_type(x_ptr1 + idx1, xsimd::unaligned_mode{}),
-                                           yvec1 = batch_type(y_ptr1 + idx1, xsimd::unaligned_mode{}),
-                                           zvec1 = batch_type(z_ptr1 + idx1, xsimd::unaligned_mode{});
+                                const auto xvec1 = batch_type(x_ptr1 + idx1), yvec1 = batch_type(y_ptr1 + idx1),
+                                           zvec1 = batch_type(z_ptr1 + idx1);
                                 // Init the batches for computing the accelerations, loading the
                                 // accumulated acceleration for the current batch.
                                 auto res_x_vec = batch_type(res_x + idx1, xsimd::aligned_mode{}),
                                      res_y_vec = batch_type(res_y + idx1, xsimd::aligned_mode{}),
                                      res_z_vec = batch_type(res_z + idx1, xsimd::aligned_mode{});
                                 for (auto idx2 = i2; idx2 < vec_size2; idx2 += batch_size) {
-                                    auto xvec2 = batch_type(x_ptr2 + idx2, xsimd::unaligned_mode{}),
-                                         yvec2 = batch_type(y_ptr2 + idx2, xsimd::unaligned_mode{}),
-                                         zvec2 = batch_type(z_ptr2 + idx2, xsimd::unaligned_mode{}),
-                                         mvec2 = batch_type(m_ptr2 + idx2, xsimd::unaligned_mode{});
+                                    auto xvec2 = batch_type(x_ptr2 + idx2), yvec2 = batch_type(y_ptr2 + idx2),
+                                         zvec2 = batch_type(z_ptr2 + idx2), mvec2 = batch_type(m_ptr2 + idx2);
                                     batch_bs_3d(res_x_vec, res_y_vec, res_z_vec, xvec1, yvec1, zvec1, xvec2, yvec2,
                                                 zvec2, mvec2);
                                     // N += batch_size;
@@ -1469,9 +1465,8 @@ private:
                         // std::cout << "Doing irregulars from " << i1 << " to " << vec_size1 << " in chunks of "
                         //           << batch_size1 << '\n';
                         for (; i1 < vec_size1; i1 += batch_size1) {
-                            const auto xvec1 = batch_type1(x_ptr1 + i1, xsimd::unaligned_mode{}),
-                                       yvec1 = batch_type1(y_ptr1 + i1, xsimd::unaligned_mode{}),
-                                       zvec1 = batch_type1(z_ptr1 + i1, xsimd::unaligned_mode{});
+                            const auto xvec1 = batch_type1(x_ptr1 + i1), yvec1 = batch_type1(y_ptr1 + i1),
+                                       zvec1 = batch_type1(z_ptr1 + i1);
                             auto res_x_vec = batch_type1(res_x + i1, xsimd::aligned_mode{}),
                                  res_y_vec = batch_type1(res_y + i1, xsimd::aligned_mode{}),
                                  res_z_vec = batch_type1(res_z + i1, xsimd::aligned_mode{});
