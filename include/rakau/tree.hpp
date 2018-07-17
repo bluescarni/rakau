@@ -162,7 +162,7 @@ inline void tuple_for_each(Tuple &&tup, F &&f)
             // """"
             // NOTE: we are writing this as a right fold, i.e., it will expand as:
             //
-            // f(tup[0]), (f(tup[1])), f(tup[2])...
+            // f(tup[0]), (f(tup[1]), (f(tup[2])...
             //
             // A left fold would also work guaranteeing the same sequencing.
             (void(std::forward<F>(f)(std::forward<decltype(items)>(items))), ...);
