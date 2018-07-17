@@ -6,13 +6,14 @@
 // Public License v. 2.0. If a copy of the MPL was not distributed
 // with this file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
+#include <memory>
 #include <random>
-
-#include <rakau/tree.hpp>
 
 #include <boost/math/constants/constants.hpp>
 
 #include <tbb/task_scheduler_init.h>
+
+#include <rakau/tree.hpp>
 
 static constexpr unsigned nparts = 1'000'000;
 static constexpr float bsize = 10.f;
@@ -79,14 +80,16 @@ using namespace rakau;
 
 int main(int argc, char **argv)
 {
-    // tbb::task_scheduler_init init(1);
-    if (argc < 2) {
-        throw std::runtime_error("Need at least 4 arguments, but only " + std::to_string(argc) + " was/were provided");
+    if (argc < 4) {
+        throw std::runtime_error("Need at least 3 arguments, but only " + std::to_string(argc) + " was/were provided");
     }
     std::cout.precision(20);
     const auto idx = boost::lexical_cast<std::size_t>(argv[1]);
     const auto max_leaf_n = boost::lexical_cast<std::size_t>(argv[2]);
     const auto ncrit = boost::lexical_cast<std::size_t>(argv[3]);
+    auto s_init = argc >= 5 ? std::make_unique<tbb::task_scheduler_init>(boost::lexical_cast<unsigned>(argv[4]))
+                            : std::unique_ptr<tbb::task_scheduler_init>(nullptr);
+
     // auto parts = get_uniform_particles<3>(nparts, bsize);
     auto parts = get_plummer_sphere(nparts, bsize);
     tree<std::uint64_t, float, 3> t(bsize, parts.begin(),
