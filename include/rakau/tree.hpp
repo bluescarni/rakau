@@ -1489,11 +1489,12 @@ private:
                     for (; i1 < size; ++i1) {
                         const auto x1 = x_ptr1[i1], y1 = y_ptr1[i1], z1 = z_ptr1[i1];
                         auto rx = res_x[i1], ry = res_y[i1], rz = res_z[i1];
+                        // size_type i2 = 0;
                         // tuple_for_each(simd_sizes<F>{}, [&](const auto &s) {
                         //     constexpr auto batch_size = uncvref_t<decltype(s)>::value;
                         //     using batch_type = xsimd::batch<F, batch_size>;
                         //     const auto vec_size2 = static_cast<size_type>(size_leaf - size_leaf % batch_size);
-                        //     for (; i2 < vec_size2 && false; i2 += batch_size) {
+                        //     for (; i2 < vec_size2; i2 += batch_size) {
                         //         // NOTE: scalar/batch interactions.
                         //         const auto diff_x = batch_type(x_ptr2 + i2, xsimd::unaligned_mode{}) - x1,
                         //                    diff_y = batch_type(y_ptr2 + i2, xsimd::unaligned_mode{}) - y1,
