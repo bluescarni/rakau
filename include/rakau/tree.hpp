@@ -138,6 +138,14 @@ private:
 #endif
 };
 
+// Silence spurious GCC warning in tuple_for_each().
+#if !defined(__clang__) && defined(__GNUC__)
+
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wnoexcept"
+
+#endif
+
 // Tuple for_each(). It will apply the input functor f to each element of
 // the input tuple tup, sequentially.
 template <typename Tuple, typename F>
@@ -161,6 +169,12 @@ inline void tuple_for_each(Tuple &&tup, F &&f)
         },
         std::forward<Tuple>(tup));
 }
+
+#if !defined(__clang__) && defined(__GNUC__)
+
+#pragma GCC diagnostic pop
+
+#endif
 
 template <std::size_t NDim, typename Out>
 struct morton_encoder {
