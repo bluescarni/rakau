@@ -503,10 +503,6 @@ class tree
     // Main vector type for storing floating-point values. It uses custom alignment to enable
     // aligned loads/stores whenever possible.
     using fp_vector = std::vector<F, di_aligned_allocator<F, XSIMD_DEFAULT_ALIGNMENT>>;
-    // xsimd batch type.
-    using b_type = xsimd::simd_type<F>;
-    // Size of b_type.
-    static constexpr auto b_size = b_type::size;
 
 public:
     using size_type = typename fp_vector::size_type;
@@ -1591,6 +1587,10 @@ private:
         auto &tmp_res = vec_acc_tmp_res();
         const auto m_ptr = m_masses.data() + node_begin;
         if constexpr (NDim == 3u) {
+            // xsimd batch type.
+            using b_type = xsimd::simd_type<F>;
+            // Size of b_type.
+            static constexpr auto b_size = b_type::size;
             // Shortcuts to the node coordinates/masses.
             const auto x_ptr = m_coords[0].data() + node_begin, y_ptr = m_coords[1].data() + node_begin,
                        z_ptr = m_coords[2].data() + node_begin;
