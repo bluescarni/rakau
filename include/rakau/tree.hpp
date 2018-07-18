@@ -1326,7 +1326,7 @@ private:
                     // Store the differences for later use.
                     const auto diff = com_pos[j] - c_ptrs[j][i];
                     tmp_ptrs[j][i] = diff;
-                    dist2 += diff * diff;
+                    dist2 = fma_wrap(diff, diff, dist2);
                 }
                 if (node_size2 >= theta2 * dist2) {
                     // At least one of the particles in the target
@@ -1405,6 +1405,36 @@ private:
                     const auto res_x = res_ptrs[0], res_y = res_ptrs[1], res_z = res_ptrs[2];
                     // The number of particles in the source node.
                     const auto size_leaf = static_cast<size_type>(leaf_end - leaf_begin);
+                    // NOTE: we will now divide the source and target nodes into blocks whose sizes
+                    // are multiples of the available simd vector sizes. For instance, if the
+                    // available vector sizes are 16, 8, 4 (AVX512 float) and the target/source
+                    // nodes have both size 45, then we will have a size-16 block in the [0, 32)
+                    // range, a size-8 block in the [0, 40) range, a size-4 block in the [0, 44)
+                    // range and a remainder block in the [44, 45) range. We then do a double iteration
+                    // on the simd sizes, which yields the following pairs for the simd sizes (in order):
+                    //
+                    // 16-16, 16-8, 16-4,
+                    // 8-16, 8-8, 8-4,
+                    // 4-16, 4-8, 4-4.
+                    //
+                    // For each pair, we pick the minimum simd size (e.g., 16-8 will yield a simd size of 8,
+                    // 4-16 a simd size of 4, etc.) and we compute block-block interactions via vector
+                    // instructions. A worked out example:
+                    //
+                    // 16-16, i1 = 0, i2 = 0, simd_size = 16 -> [0, 32) x [0, 32) (simd-simd)
+                    // 16-8, i1 = 0, i2 = 32, simd_size = 8 -> [0, 32) x [32, 40) (simd-simd)
+                    // 16-4, i1 = 0, i2 = 40, simd_size = 4 -> [0, 32) x [40, 44) (simd-simd)
+                    // remainder, i1 = 0, i2 = 44, simd_size = 16 -> [0, 32) x [40, 45) (simd-scalar)
+                    //
+                    // 8-16, i1 = 32, i2 = 0, simd_size = 8 -> [32, 40) x [0, 32) (simd-simd)
+                    // 8-8, i1 = 32, i2 = 32, simd_size = 8 -> [32, 40) x [32, 40) (simd-simd)
+                    // 8-4, i1 = 32, i2 = 40, simd_size = 4 -> [32, 40) x [40, 44) (simd-simd)
+                    // remainder, i1 = 32, i2 = 44, simd_size = 8 -> [32, 40) x [40, 45) (simd-scalar)
+                    //
+                    // 4-16, i1 = 40, i2 = 0, simd_size = 4 -> [40, 44) x [0, 32) (simd-simd)
+                    // 4-8, i1 = 40, i2 = 32, simd_size = 4 -> [40, 44) x [32, 40) (simd-simd)
+                    // 4-4, i1 = 40, i2 = 40, simd_size = 4 -> [40, 44) x [40, 44) (simd-simd)
+                    // remainder, i1 = 40, i2 = 44, simd_size = 4 -> [40, 44) x [40, 45) (simd-scalar)
                     size_type i1 = 0;
                     tuple_for_each(simd_sizes<F>{}, [&](auto s1) {
                         constexpr auto batch_size1 = s1.value;
@@ -1413,11 +1443,13 @@ private:
                         size_type i2 = 0;
                         tuple_for_each(simd_sizes<F>{}, [&](auto s2) {
                             constexpr auto batch_size2 = s2.value;
-                            // The batch size is the smallest between s1 and s2.
+                            const auto vec_size2 = static_cast<size_type>(size_leaf - size_leaf % batch_size2);
+                            // The simd vector size is the smallest between s1 and s2.
+                            // NOTE: we use s1.value rather than batch_size1 to workaround a GCC ICE.
                             constexpr auto batch_size = std::min(s1.value, batch_size2);
                             using batch_type = xsimd::batch<F, batch_size>;
-                            const auto vec_size2 = static_cast<size_type>(size_leaf - size_leaf % batch_size2);
                             if (i2 == vec_size2) {
+                                // Exit early if the inner loop has no iterations.
                                 return;
                             }
                             for (auto idx1 = i1; idx1 < vec_size1; idx1 += batch_size) {
@@ -1456,6 +1488,9 @@ private:
                             i2 = vec_size2;
                         });
                         if (i2 == size_leaf) {
+                            // NOTE: exit early if possible. Note that we have to update
+                            // i1 manually here (if we run the loop below, it will be updated
+                            // in the loop header).
                             i1 = vec_size1;
                             return;
                         }
@@ -1475,6 +1510,8 @@ private:
                             res_z_vec.store_aligned(res_z + i1);
                         }
                     });
+                    // These are the interactions between the remainder of the target node
+                    // and the source node.
                     for (; i1 < size; ++i1) {
                         const auto x1 = x_ptr1[i1], y1 = y_ptr1[i1], z1 = z_ptr1[i1];
                         auto rx = res_x[i1], ry = res_y[i1], rz = res_z[i1];
