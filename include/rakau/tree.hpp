@@ -492,14 +492,39 @@ inline double fma_wrap(double x, double y, double z)
     return x * y + z;
 #endif
 }
+
+inline long double fma_wrap(long double x, long double y, long double z)
+{
+#if defined(FP_FAST_FMAL)
+    return std::fma(x, y, z);
+#else
+    return x * y + z;
+#endif
+}
+
+// Helper to detect is simd is enabled. It is if the type F
+// supports it, and if simd is not explicitly disabled via RAKAU_DISABLE_SIMD.
+template <typename F>
+inline constexpr bool simd_enabled_v =
+#if defined(RAKAU_DISABLE_SIMD)
+    false
+#else
+    has_simd<F>::value
+#endif
+    ;
+
 } // namespace detail
 
 template <typename UInt, typename F, std::size_t NDim>
 class tree
 {
     static_assert(NDim);
+    static_assert(std::is_floating_point_v<F>);
+    static_assert(std::is_integral_v<UInt> && std::is_unsigned_v<UInt>);
     // cbits shortcut.
     static constexpr unsigned cbits = cbits_v<UInt, NDim>;
+    // simd_enabled shortcut.
+    static constexpr bool simd_enabled = simd_enabled_v<F>;
     // Main vector type for storing floating-point values. It uses custom alignment to enable
     // aligned loads/stores whenever possible.
     using fp_vector = std::vector<F, di_aligned_allocator<F, XSIMD_DEFAULT_ALIGNMENT>>;
@@ -1281,7 +1306,7 @@ private:
             // node from the COM of the source.
             bool bh_flag = true;
             size_type i = 0;
-            if constexpr (NDim == 3u) {
+            if constexpr (simd_enabled && NDim == 3u) {
                 // The SIMD-accelerated part.
                 auto x_ptr = c_ptrs[0], y_ptr = c_ptrs[1], z_ptr = c_ptrs[2];
                 const auto x_com = com_pos[0], y_com = com_pos[1], z_com = com_pos[2];
@@ -1342,7 +1367,7 @@ private:
                 // Load the mass of the COM of the sibling node.
                 const auto m_com = get<2>(m_tree[begin]);
                 i = 0;
-                if constexpr (NDim == 3u) {
+                if constexpr (simd_enabled && NDim == 3u) {
                     // The SIMD-accelerated part.
                     auto tmp_x = tmp_ptrs[0], tmp_y = tmp_ptrs[1], tmp_z = tmp_ptrs[2], tmp_dist3 = tmp_ptrs[3];
                     auto res_x = res_ptrs[0], res_y = res_ptrs[1], res_z = res_ptrs[2];
@@ -1391,7 +1416,7 @@ private:
                 //
                 // Establish the range of the source node.
                 const auto leaf_begin = get<1>(m_tree[begin])[0], leaf_end = get<1>(m_tree[begin])[1];
-                if constexpr (NDim == 3u) {
+                if constexpr (simd_enabled && NDim == 3u) {
                     // Pointers to the target node data.
                     const auto x_ptr1 = c_ptrs[0], y_ptr1 = c_ptrs[1], z_ptr1 = c_ptrs[2];
                     // Pointers to the source node data.
@@ -1586,7 +1611,7 @@ private:
         // Prepare common pointers to the input and output data.
         auto &tmp_res = vec_acc_tmp_res();
         const auto m_ptr = m_masses.data() + node_begin;
-        if constexpr (NDim == 3u) {
+        if constexpr (simd_enabled && NDim == 3u) {
             // xsimd batch type.
             using b_type = xsimd::simd_type<F>;
             // Size of b_type.

@@ -220,6 +220,17 @@ struct simd_sizes_impl<double> {
 template <typename F>
 using simd_sizes = typename simd_sizes_impl<F>::type;
 
+// Small helper to establish if simd is available for the type F.
+// NOTE: I am not sure this is 100% guaranteed to work, as it relies on the
+// behaviour of simd_batch_traits and I am not sure that's part of the public API.
+template <typename F, typename = void>
+struct has_simd : std::false_type {
+};
+
+template <typename F>
+struct has_simd<F, std::enable_if_t<(xsimd::simd_batch_traits<xsimd::simd_type<F>>::size > 1u)>> : std::true_type {
+};
+
 } // namespace detail
 
 } // namespace rakau
