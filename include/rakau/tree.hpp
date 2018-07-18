@@ -492,11 +492,6 @@ inline double fma_wrap(double x, double y, double z)
     return x * y + z;
 #endif
 }
-
-// Handy alias.
-template <typename T>
-using uncvref_t = std::remove_cv_t<std::remove_reference_t<T>>;
-
 } // namespace detail
 
 template <typename UInt, typename F, std::size_t NDim>
@@ -1295,8 +1290,8 @@ private:
                 auto x_ptr = c_ptrs[0], y_ptr = c_ptrs[1], z_ptr = c_ptrs[2];
                 const auto x_com = com_pos[0], y_com = com_pos[1], z_com = com_pos[2];
                 auto tmp_x = tmp_ptrs[0], tmp_y = tmp_ptrs[1], tmp_z = tmp_ptrs[2], tmp_dist3 = tmp_ptrs[3];
-                tuple_for_each(simd_sizes<F>{}, [&](const auto &s) {
-                    constexpr auto batch_size = uncvref_t<decltype(s)>::value;
+                tuple_for_each(simd_sizes<F>{}, [&](auto s) {
+                    constexpr auto batch_size = s.value;
                     using batch_type = xsimd::batch<F, batch_size>;
                     const auto vec_size = static_cast<size_type>(size - size % batch_size);
                     const batch_type node_size2_vec(node_size2);
@@ -1355,8 +1350,8 @@ private:
                     // The SIMD-accelerated part.
                     auto tmp_x = tmp_ptrs[0], tmp_y = tmp_ptrs[1], tmp_z = tmp_ptrs[2], tmp_dist3 = tmp_ptrs[3];
                     auto res_x = res_ptrs[0], res_y = res_ptrs[1], res_z = res_ptrs[2];
-                    tuple_for_each(simd_sizes<F>{}, [&](const auto &s) {
-                        constexpr auto batch_size = uncvref_t<decltype(s)>::value;
+                    tuple_for_each(simd_sizes<F>{}, [&](auto s) {
+                        constexpr auto batch_size = s.value;
                         using batch_type = xsimd::batch<F, batch_size>;
                         const auto vec_size = static_cast<size_type>(size - size % batch_size);
                         for (; i < vec_size; i += batch_size, tmp_x += batch_size, tmp_y += batch_size,
@@ -1411,15 +1406,15 @@ private:
                     // The number of particles in the source node.
                     const auto size_leaf = static_cast<size_type>(leaf_end - leaf_begin);
                     size_type i1 = 0;
-                    tuple_for_each(simd_sizes<F>{}, [&](const auto &s1) {
-                        constexpr auto batch_size1 = uncvref_t<decltype(s1)>::value;
+                    tuple_for_each(simd_sizes<F>{}, [&](auto s1) {
+                        constexpr auto batch_size1 = s1.value;
                         using batch_type1 = xsimd::batch<F, batch_size1>;
                         const auto vec_size1 = static_cast<size_type>(size - size % batch_size1);
                         size_type i2 = 0;
-                        tuple_for_each(simd_sizes<F>{}, [&](const auto &s2) {
-                            constexpr auto batch_size2 = uncvref_t<decltype(s2)>::value;
+                        tuple_for_each(simd_sizes<F>{}, [&](auto s2) {
+                            constexpr auto batch_size2 = s2.value;
                             // The batch size is the smallest between s1 and s2.
-                            constexpr auto batch_size = std::min(uncvref_t<decltype(s1)>::value, batch_size2);
+                            constexpr auto batch_size = std::min(s1.value, batch_size2);
                             using batch_type = xsimd::batch<F, batch_size>;
                             const auto vec_size2 = static_cast<size_type>(size_leaf - size_leaf % batch_size2);
                             if (i2 == vec_size2) {
