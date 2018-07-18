@@ -1647,6 +1647,9 @@ private:
                 xsimd::store_aligned(res_z, res_z_vec);
             }
             // Do the remaining scalar part (that is, the remainder of the particle list modulo batch size).
+            // NOTE: here we are still using horizontal add, which does not look like a performance win
+            // in other situations. We should revisit its usage when we iterate over the self interactions
+            // function.
             for (; i1 < npart; ++i1, ++x_ptr1, ++y_ptr1, ++z_ptr1, ++res_x, ++res_y, ++res_z) {
                 auto x_ptr2 = x_ptr, y_ptr2 = y_ptr, z_ptr2 = z_ptr, m_ptr2 = m_ptr;
                 const auto x1 = *x_ptr1, y1 = *y_ptr1, z1 = *z_ptr1;
