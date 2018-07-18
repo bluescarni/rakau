@@ -1512,37 +1512,19 @@ private:
                     });
                     // These are the interactions between the remainder of the target node
                     // and the source node.
+                    // NOTE: here we are not using any simd operations. In principle, we could either:
+                    // - do scalar-batch interactions followed by an horizontal sum to accumulate
+                    //   the contribution of a source batch onto a single target particle, or
+                    // - do scalar-batch interactions followed by a store to a local buffer and a
+                    //   scalar accumulation.
+                    // The first option has bad performance, the second one does not seem to buy anything
+                    // performance-wise. Let's keep in mind the implementation at
+                    // 6a1618d9f5db8a61b76cd32e3c38fe2034bfe666
+                    // if we ever want to revisit this.
                     for (; i1 < size; ++i1) {
                         const auto x1 = x_ptr1[i1], y1 = y_ptr1[i1], z1 = z_ptr1[i1];
+                        // Load the current accelerations on the target particle into local variables.
                         auto rx = res_x[i1], ry = res_y[i1], rz = res_z[i1];
-                        // size_type i2 = 0;
-                        // tuple_for_each(simd_sizes<F>{}, [&](const auto &s) {
-                        //     constexpr auto batch_size = uncvref_t<decltype(s)>::value;
-                        //     using batch_type = xsimd::batch<F, batch_size>;
-                        //     const auto vec_size2 = static_cast<size_type>(size_leaf - size_leaf % batch_size);
-                        //     for (; i2 < vec_size2; i2 += batch_size) {
-                        //         // NOTE: scalar/batch interactions.
-                        //         const auto diff_x = batch_type(x_ptr2 + i2, xsimd::unaligned_mode{}) - x1,
-                        //                    diff_y = batch_type(y_ptr2 + i2, xsimd::unaligned_mode{}) - y1,
-                        //                    diff_z = batch_type(z_ptr2 + i2, xsimd::unaligned_mode{}) - z1,
-                        //                    mvec2 = batch_type(m_ptr2 + i2, xsimd::unaligned_mode{}),
-                        //                    dist2 = diff_x * diff_x + diff_y * diff_y + diff_z * diff_z;
-                        //         batch_type m2_dist3;
-                        //         if constexpr (has_fast_inv_sqrt<batch_type>) {
-                        //             m2_dist3 = mvec2 * inv_sqrt_3(dist2);
-                        //         } else {
-                        //             const auto dist = xsimd::sqrt(dist2);
-                        //             const auto dist3 = dist * dist2;
-                        //             m2_dist3 = mvec2 / dist3;
-                        //         }
-                        //         // NOTE: here we are computing the acceleration on a single target particle
-                        //         // due to a source batch, and thus we need to do an accumulation of all the
-                        //         // accelerations from the members of the batch.
-                        //         rx += xsimd::hadd(diff_x * m2_dist3);
-                        //         ry += xsimd::hadd(diff_y * m2_dist3);
-                        //         rz += xsimd::hadd(diff_z * m2_dist3);
-                        //     }
-                        // });
                         for (size_type i2 = 0; i2 < size_leaf; ++i2) {
                             // NOTE: scalar/scalar interactions.
                             const auto diff_x = x_ptr2[i2] - x1, diff_y = y_ptr2[i2] - y1, diff_z = z_ptr2[i2] - z1,
@@ -1571,11 +1553,11 @@ private:
                             F dist2(0);
                             for (std::size_t j = 0; j < NDim; ++j) {
                                 diffs[j] = m_coords[j][i2] - pos1[j];
-                                dist2 += diffs[j] * diffs[j];
+                                dist2 = fma_wrap(diffs[j], diffs[j], dist2);
                             }
                             const auto dist = std::sqrt(dist2), dist3 = dist * dist2, m_dist3 = m_masses[i2] / dist3;
                             for (std::size_t j = 0; j < NDim; ++j) {
-                                tmp_res[j][i1] += diffs[j] * m_dist3;
+                                tmp_res[j][i1] = fma_wrap(diffs[j], m_dist3, tmp_res[j][i1]);
                             }
                         }
                     }
@@ -1732,7 +1714,7 @@ private:
                     F dist2(0);
                     for (std::size_t j = 0; j < NDim; ++j) {
                         diffs[j] = c_ptrs[j][i2] - pos1[j];
-                        dist2 += diffs[j] * diffs[j];
+                        dist2 = fma_wrap(diffs[j], diffs[j], dist2);
                     }
                     const auto dist = std::sqrt(dist2), dist3 = dist2 * dist, m2_dist3 = m_ptr[i2] / dist3,
                                m1_dist3 = m1 / dist3;
@@ -1740,8 +1722,8 @@ private:
                     // accumulator for the current particle and in the global
                     // acc vector for the opposite acceleration.
                     for (std::size_t j = 0; j < NDim; ++j) {
-                        a1[j] += m2_dist3 * diffs[j];
-                        tmp_res[j][i2] -= m1_dist3 * diffs[j];
+                        a1[j] = fma_wrap(m2_dist3, diffs[j], a1[j]);
+                        tmp_res[j][i2] = fma_wrap(m1_dist3, -diffs[j], tmp_res[j][i2]);
                     }
                 }
                 // Update the acceleration on the first particle
