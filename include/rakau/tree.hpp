@@ -1410,9 +1410,6 @@ private:
                     const auto res_x = res_ptrs[0], res_y = res_ptrs[1], res_z = res_ptrs[2];
                     // The number of particles in the source node.
                     const auto size_leaf = static_cast<size_type>(leaf_end - leaf_begin);
-                    // std::cout << "Total inter: " << (size * size_leaf) << '\n';
-                    // std::cout << "Size target: " << size << '\n';
-                    // std::cout << "Size source: " << size_leaf << '\n';
                     size_type i1 = 0;
                     tuple_for_each(simd_sizes<F>{}, [&](const auto &s1) {
                         constexpr auto batch_size1 = uncvref_t<decltype(s1)>::value;
@@ -1423,14 +1420,8 @@ private:
                             constexpr auto batch_size2 = uncvref_t<decltype(s2)>::value;
                             // The batch size is the smallest between s1 and s2.
                             constexpr auto batch_size = std::min(uncvref_t<decltype(s1)>::value, batch_size2);
-                            // std::cout << "batch size 1: " << uncvref_t<decltype(s1)>::value << '\n';
-                            // std::cout << "batch size 2: " << batch_size2 << '\n';
-                            // std::cout << "i1 = " << i1 << '\n';
-                            // std::cout << "i2 = " << i2 << '\n';
                             using batch_type = xsimd::batch<F, batch_size>;
                             const auto vec_size2 = static_cast<size_type>(size_leaf - size_leaf % batch_size2);
-                            // std::cout << "vec size 1 = " << vec_size1 << '\n';
-                            // std::cout << "vec size 2 = " << vec_size2 << '\n';
                             if (i2 == vec_size2) {
                                 return;
                             }
@@ -1473,8 +1464,6 @@ private:
                             i1 = vec_size1;
                             return;
                         }
-                        // std::cout << "Doing irregulars from " << i1 << " to " << vec_size1 << " in chunks of "
-                        //           << batch_size1 << '\n';
                         for (; i1 < vec_size1; i1 += batch_size1) {
                             const auto xvec1 = batch_type1(x_ptr1 + i1), yvec1 = batch_type1(y_ptr1 + i1),
                                        zvec1 = batch_type1(z_ptr1 + i1);
