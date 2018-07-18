@@ -1322,20 +1322,20 @@ private:
             if constexpr (simd_enabled && NDim == 3u) {
                 // The SIMD-accelerated part.
                 auto x_ptr = c_ptrs[0], y_ptr = c_ptrs[1], z_ptr = c_ptrs[2];
-                const auto x_com = com_pos[0], y_com = com_pos[1], z_com = com_pos[2];
                 auto tmp_x = tmp_ptrs[0], tmp_y = tmp_ptrs[1], tmp_z = tmp_ptrs[2], tmp_dist3 = tmp_ptrs[3];
                 tuple_for_each(simd_sizes<F>{}, [&](auto s) {
                     constexpr auto batch_size = s.value;
                     using batch_type = xsimd::batch<F, batch_size>;
                     const auto vec_size = static_cast<size_type>(size - size % batch_size);
-                    const batch_type node_size2_vec(node_size2);
+                    const batch_type node_size2_vec(node_size2), theta2_vec(theta2), x_com_vec(com_pos[0]),
+                        y_com_vec(com_pos[1]), z_com_vec(com_pos[2]);
                     for (; i < vec_size; i += batch_size, x_ptr += batch_size, y_ptr += batch_size, z_ptr += batch_size,
                                          tmp_x += batch_size, tmp_y += batch_size, tmp_z += batch_size,
                                          tmp_dist3 += batch_size) {
-                        const auto diff_x = x_com - batch_type(x_ptr), diff_y = y_com - batch_type(y_ptr),
-                                   diff_z = z_com - batch_type(z_ptr),
+                        const auto diff_x = x_com_vec - batch_type(x_ptr), diff_y = y_com_vec - batch_type(y_ptr),
+                                   diff_z = z_com_vec - batch_type(z_ptr),
                                    dist2 = diff_x * diff_x + diff_y * diff_y + diff_z * diff_z;
-                        if (xsimd::any(node_size2_vec >= theta2 * dist2)) {
+                        if (xsimd::any(node_size2_vec >= theta2_vec * dist2)) {
                             // At least one particle in the current batch fails the BH criterion
                             // check. Mark the bh_flag as false, and set i to size in order
                             // to skip the scalar calculation later. Then break out.
@@ -1387,13 +1387,14 @@ private:
                     tuple_for_each(simd_sizes<F>{}, [&](auto s) {
                         constexpr auto batch_size = s.value;
                         using batch_type = xsimd::batch<F, batch_size>;
+                        const batch_type m_com_vec(m_com);
                         const auto vec_size = static_cast<size_type>(size - size % batch_size);
                         for (; i < vec_size; i += batch_size, tmp_x += batch_size, tmp_y += batch_size,
                                              tmp_z += batch_size, tmp_dist3 += batch_size, res_x += batch_size,
                                              res_y += batch_size, res_z += batch_size) {
                             const auto m_com_dist3_vec = use_fast_inv_sqrt<batch_type>
-                                                             ? m_com * batch_type(tmp_dist3, xsimd::aligned_mode{})
-                                                             : m_com / batch_type(tmp_dist3, xsimd::aligned_mode{}),
+                                                             ? m_com_vec * batch_type(tmp_dist3, xsimd::aligned_mode{})
+                                                             : m_com_vec / batch_type(tmp_dist3, xsimd::aligned_mode{}),
                                        xdiff = batch_type(tmp_x, xsimd::aligned_mode{}),
                                        ydiff = batch_type(tmp_y, xsimd::aligned_mode{}),
                                        zdiff = batch_type(tmp_z, xsimd::aligned_mode{});
@@ -1764,6 +1765,7 @@ private:
                     // acc vector for the opposite acceleration.
                     for (std::size_t j = 0; j < NDim; ++j) {
                         a1[j] = fma_wrap(m2_dist3, diffs[j], a1[j]);
+                        // NOTE: this is a fused multiply-sub.
                         tmp_res[j][i2] = fma_wrap(m1_dist3, -diffs[j], tmp_res[j][i2]);
                     }
                 }
