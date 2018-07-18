@@ -224,12 +224,15 @@ using simd_sizes = typename simd_sizes_impl<F>::type;
 // NOTE: I am not sure this is 100% guaranteed to work, as it relies on the
 // behaviour of simd_batch_traits and I am not sure that's part of the public API.
 template <typename F, typename = void>
-struct has_simd : std::false_type {
+struct has_simd_impl : std::false_type {
 };
 
 template <typename F>
-struct has_simd<F, std::enable_if_t<(xsimd::simd_batch_traits<xsimd::simd_type<F>>::size > 1u)>> : std::true_type {
+struct has_simd_impl<F, std::enable_if_t<(xsimd::simd_batch_traits<xsimd::simd_type<F>>::size > 1u)>> : std::true_type {
 };
+
+template <typename F>
+inline constexpr bool has_simd = has_simd_impl<F>::value;
 
 } // namespace detail
 

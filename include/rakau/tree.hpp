@@ -79,6 +79,7 @@
 
 #endif
 
+#include <rakau/config.hpp>
 #include <rakau/detail/libmorton/morton.h>
 
 #if defined(__clang__) || defined(__GNUC__)
@@ -509,7 +510,19 @@ inline constexpr bool simd_enabled_v =
 #if defined(RAKAU_DISABLE_SIMD)
     false
 #else
-    has_simd<F>::value
+    has_simd<F>
+#endif
+    ;
+
+// Helper to detect whether fast rsqrt intrinsics should be used or not
+// for the batch type Batch. They are used if available and if not explicitly
+// disabled by the RAKAU_DISABLE_RSQRT config option.
+template <typename Batch>
+inline constexpr bool use_fast_inv_sqrt =
+#if defined(RAKAU_DISABLE_RSQRT)
+    false
+#else
+    has_fast_inv_sqrt<Batch>
 #endif
     ;
 
@@ -1258,7 +1271,7 @@ private:
         const B diff_z = z2 - zvec1;
         const B dist2 = diff_x * diff_x + diff_y * diff_y + diff_z * diff_z;
         B m2_dist3;
-        if constexpr (has_fast_inv_sqrt<B>) {
+        if constexpr (use_fast_inv_sqrt<B>) {
             m2_dist3 = m2 * inv_sqrt_3(dist2);
         } else {
             const B dist = xsimd::sqrt(dist2);
@@ -1333,7 +1346,7 @@ private:
                         diff_x.store_aligned(tmp_x);
                         diff_y.store_aligned(tmp_y);
                         diff_z.store_aligned(tmp_z);
-                        if constexpr (has_fast_inv_sqrt<batch_type>) {
+                        if constexpr (use_fast_inv_sqrt<batch_type>) {
                             inv_sqrt_3(dist2).store_aligned(tmp_dist3);
                         } else {
                             (xsimd::sqrt(dist2) * dist2).store_aligned(tmp_dist3);
@@ -1378,7 +1391,7 @@ private:
                         for (; i < vec_size; i += batch_size, tmp_x += batch_size, tmp_y += batch_size,
                                              tmp_z += batch_size, tmp_dist3 += batch_size, res_x += batch_size,
                                              res_y += batch_size, res_z += batch_size) {
-                            const auto m_com_dist3_vec = has_fast_inv_sqrt<batch_type>
+                            const auto m_com_dist3_vec = use_fast_inv_sqrt<batch_type>
                                                              ? m_com * batch_type(tmp_dist3, xsimd::aligned_mode{})
                                                              : m_com / batch_type(tmp_dist3, xsimd::aligned_mode{}),
                                        xdiff = batch_type(tmp_x, xsimd::aligned_mode{}),
@@ -1688,7 +1701,7 @@ private:
                                diff_z = xsimd::load_unaligned(z_ptr2) - z1, mvec2 = xsimd::load_unaligned(m_ptr2),
                                dist2 = diff_x * diff_x + diff_y * diff_y + diff_z * diff_z;
                     b_type m2_dist3;
-                    if constexpr (has_fast_inv_sqrt<b_type>) {
+                    if constexpr (use_fast_inv_sqrt<b_type>) {
                         m2_dist3 = mvec2 * inv_sqrt_3(dist2);
                     } else {
                         const auto dist = xsimd::sqrt(dist2);
