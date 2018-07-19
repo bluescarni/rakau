@@ -190,29 +190,41 @@ inline constexpr bool has_fast_inv_sqrt =
 #endif
     ;
 
+// Bits of template metaprogramming to establish the available simd vector
+// widths available on the current platform. Defaults to a single size equivalent
+// to the width of xsimd's default batch type.
 template <typename F>
 struct simd_sizes_impl {
     using type = std::tuple<std::integral_constant<unsigned, xsimd::simd_batch_traits<xsimd::simd_type<F>>::size>>;
 };
 
+// Specialisations for AVX and later.
 #if XSIMD_X86_INSTR_SET >= XSIMD_X86_AVX_VERSION
 
 template <>
 struct simd_sizes_impl<float> {
     using type = std::tuple<
+    // NOTE: if we try to mix AVX512 and AVX, we have a slight performance
+    // degradation. This may be due to the downclocking behaviour explained here:
+    // https://blog.cloudflare.com/on-the-dangers-of-intels-frequency-scaling/
+    // We'll have to revisit this when AVX512 matures.
 #if XSIMD_X86_INSTR_SET >= XSIMD_X86_AVX512_VERSION
-        std::integral_constant<unsigned, 16>,
+        std::integral_constant<unsigned, 16>
+#else
+        std::integral_constant<unsigned, 8>, std::integral_constant<unsigned, 4>
 #endif
-        std::integral_constant<unsigned, 8>, std::integral_constant<unsigned, 4>>;
+        >;
 };
 
 template <>
 struct simd_sizes_impl<double> {
     using type = std::tuple<
 #if XSIMD_X86_INSTR_SET >= XSIMD_X86_AVX512_VERSION
-        std::integral_constant<unsigned, 8>,
+        std::integral_constant<unsigned, 8>
+#else
+        std::integral_constant<unsigned, 4>, std::integral_constant<unsigned, 2>
 #endif
-        std::integral_constant<unsigned, 4>, std::integral_constant<unsigned, 2>>;
+        >;
 };
 
 #endif
