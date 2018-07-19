@@ -782,8 +782,7 @@ private:
         // switching to serial subtree building at the second level where we have up to
         // 64 nodes.
         const unsigned split_level = [] {
-            const auto hc = std::thread::hardware_concurrency();
-            if (hc) {
+            if (const auto hc = std::thread::hardware_concurrency(); hc) {
                 // NOTE: use UInt in the shift, as we now that UInt won't
                 // overflow thanks to the checks in cbits.
                 const auto tmp = std::log(hc) / std::log(UInt(1) << NDim);
