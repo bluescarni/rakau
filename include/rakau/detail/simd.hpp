@@ -230,7 +230,7 @@ struct simd_sizes_impl<double> {
 #endif
 
 template <typename F>
-using simd_sizes = typename simd_sizes_impl<F>::type;
+inline constexpr auto simd_sizes = typename simd_sizes_impl<F>::type{};
 
 // Small helper to establish if simd is available for the type F.
 // NOTE: I am not sure this is 100% guaranteed to work, as it relies on the

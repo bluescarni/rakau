@@ -1322,7 +1322,7 @@ private:
                 // The SIMD-accelerated part.
                 auto x_ptr = c_ptrs[0], y_ptr = c_ptrs[1], z_ptr = c_ptrs[2];
                 auto tmp_x = tmp_ptrs[0], tmp_y = tmp_ptrs[1], tmp_z = tmp_ptrs[2], tmp_dist3 = tmp_ptrs[3];
-                tuple_for_each(simd_sizes<F>{}, [&](auto s) {
+                tuple_for_each(simd_sizes<F>, [&](auto s) {
                     constexpr auto batch_size = s.value;
                     using batch_type = xsimd::batch<F, batch_size>;
                     const auto vec_size = static_cast<size_type>(size - size % batch_size);
@@ -1383,7 +1383,7 @@ private:
                     // The SIMD-accelerated part.
                     auto tmp_x = tmp_ptrs[0], tmp_y = tmp_ptrs[1], tmp_z = tmp_ptrs[2], tmp_dist3 = tmp_ptrs[3];
                     auto res_x = res_ptrs[0], res_y = res_ptrs[1], res_z = res_ptrs[2];
-                    tuple_for_each(simd_sizes<F>{}, [&](auto s) {
+                    tuple_for_each(simd_sizes<F>, [&](auto s) {
                         constexpr auto batch_size = s.value;
                         using batch_type = xsimd::batch<F, batch_size>;
                         const batch_type m_com_vec(m_com);
@@ -1470,12 +1470,12 @@ private:
                     // 4-4, i1 = 40, i2 = 40, simd_size = 4 -> [40, 44) x [40, 44) (simd-simd)
                     // remainder, i1 = 40, i2 = 44, simd_size = 4 -> [40, 44) x [40, 45) (simd-scalar)
                     size_type i1 = 0;
-                    tuple_for_each(simd_sizes<F>{}, [&](auto s1) {
+                    tuple_for_each(simd_sizes<F>, [&](auto s1) {
                         constexpr auto batch_size1 = s1.value;
                         using batch_type1 = xsimd::batch<F, batch_size1>;
                         const auto vec_size1 = static_cast<size_type>(size - size % batch_size1);
                         size_type i2 = 0;
-                        tuple_for_each(simd_sizes<F>{}, [&](auto s2) {
+                        tuple_for_each(simd_sizes<F>, [&](auto s2) {
                             constexpr auto batch_size2 = s2.value;
                             const auto vec_size2 = static_cast<size_type>(size_leaf - size_leaf % batch_size2);
                             // The simd vector size is the smallest between s1 and s2.
