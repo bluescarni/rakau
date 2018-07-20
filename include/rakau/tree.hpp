@@ -1061,6 +1061,10 @@ public:
             // NOTE: in the parallel for, we need to index into the random-access iterator
             // type It up to the value N. Make sure we can do that.
             using it_diff_t = typename std::iterator_traits<It>::difference_type;
+            // NOTE: for use in make_unsigned, it_diff_t must be a C++ integral. This should be ensured
+            // by iterator_traits:
+            // https://en.cppreference.com/w/cpp/iterator/iterator_traits
+            static_assert(std::is_integral_v<it_diff_t>);
             using it_udiff_t = std::make_unsigned_t<it_diff_t>;
             if (m_masses.size() > static_cast<it_udiff_t>(std::numeric_limits<it_diff_t>::max())) {
                 throw std::overflow_error("the number of particles (" + std::to_string(m_masses.size())
