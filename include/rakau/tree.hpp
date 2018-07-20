@@ -957,7 +957,7 @@ private:
                     auto m_ptr = m_masses.data() + begin;
                     auto c_ptr = m_coords[j].data() + begin;
                     for (std::remove_const_t<decltype(size)> k = 0; k < size; ++k) {
-                        acc += m_ptr[k] * c_ptr[k];
+                        acc = fma_wrap(m_ptr[k], c_ptr[k], acc);
                     }
                     get<3>(tup)[j] = acc / tot_mass;
                 }
@@ -1001,11 +1001,14 @@ private:
     // This is used when (re)building the tree.
     void isort_to_ord_ind()
     {
-        tbb::parallel_for(tbb::blocked_range<size_type>(0u, m_masses.size()), [this](const auto &range) {
-            for (auto i = range.begin(); i != range.end(); ++i) {
-                m_ord_ind[m_isort[i]] = i;
-            }
-        });
+        tbb::parallel_for(tbb::blocked_range<size_type>(0u, static_cast<size_type>(m_codes.size())),
+                          [this](const auto &range) {
+                              for (auto i = range.begin(); i != range.end(); ++i) {
+                                  assert(i < m_isort.size());
+                                  assert(m_isort[i] < m_ord_ind.size());
+                                  m_ord_ind[m_isort[i]] = i;
+                              }
+                          });
     }
     // Indirect code sort. The input range, which must point to values of type size_type,
     // will be sorted so that, after sorting, [m_codes[*begin], m_codes[*(begin + 1)], ... ]
@@ -1022,8 +1025,8 @@ private:
 
 public:
     template <typename It>
-    explicit tree(const F &box_size, It m_it, std::array<It, NDim> c_it, size_type N, size_type max_leaf_n,
-                  size_type ncrit)
+    explicit tree(const F &box_size, It m_it, std::array<It, NDim> c_it, const size_type &N,
+                  const size_type &max_leaf_n, const size_type &ncrit)
         : m_box_size(box_size), m_max_leaf_n(max_leaf_n), m_ncrit(ncrit)
     {
         simple_timer st("overall tree construction");
@@ -1062,9 +1065,8 @@ public:
             // type It up to the value N. Make sure we can do that.
             using it_diff_t = typename std::iterator_traits<It>::difference_type;
             // NOTE: for use in make_unsigned, it_diff_t must be a C++ integral. This should be ensured
-            // by iterator_traits:
+            // by iterator_traits, at least for input iterators:
             // https://en.cppreference.com/w/cpp/iterator/iterator_traits
-            static_assert(std::is_integral_v<it_diff_t>);
             using it_udiff_t = std::make_unsigned_t<it_diff_t>;
             if (m_masses.size() > static_cast<it_udiff_t>(std::numeric_limits<it_diff_t>::max())) {
                 throw std::overflow_error("the number of particles (" + std::to_string(m_masses.size())
