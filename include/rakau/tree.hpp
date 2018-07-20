@@ -1628,7 +1628,7 @@ private:
             // xsimd batch type.
             using b_type = xsimd::simd_type<F>;
             // Size of b_type.
-            static constexpr auto b_size = b_type::size;
+            constexpr auto b_size = b_type::size;
             // Shortcuts to the node coordinates/masses.
             const auto x_ptr = m_coords[0].data() + node_begin, y_ptr = m_coords[1].data() + node_begin,
                        z_ptr = m_coords[2].data() + node_begin;
