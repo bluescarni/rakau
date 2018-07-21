@@ -1639,17 +1639,23 @@ private:
     {
         // Prepare common pointers to the input and output data.
         auto &tmp_res = vec_acc_tmp_res();
-        const auto m_ptr = m_masses.data() + node_begin;
+        const auto &tmp_tgt = tgt_tmp_data();
+        std::array<F *, NDim> res_ptrs;
+        std::array<const F *, NDim> c_ptrs;
+        for (std::size_t j = 0; j < NDim; ++j) {
+            res_ptrs[j] = tmp_res[j].data();
+            c_ptrs[j] = tmp_tgt[j].data();
+        }
+        const F *m_ptr = tmp_tgt[NDim].data();
         if constexpr (simd_enabled && NDim == 3u) {
             // xsimd batch type.
             using b_type = xsimd::simd_type<F>;
             // Size of b_type.
             constexpr auto b_size = b_type::size;
             // Shortcuts to the node coordinates/masses.
-            const auto x_ptr = m_coords[0].data() + node_begin, y_ptr = m_coords[1].data() + node_begin,
-                       z_ptr = m_coords[2].data() + node_begin;
+            const auto x_ptr = c_ptrs[0], y_ptr = c_ptrs[1], z_ptr = c_ptrs[2];
             // Shortcuts to the result vectors.
-            auto res_x = tmp_res[0].data(), res_y = tmp_res[1].data(), res_z = tmp_res[2].data();
+            auto res_x = res_ptrs[0], res_y = res_ptrs[1], res_z = res_ptrs[2];
             const auto vec_size = static_cast<size_type>(npart - npart % b_size);
             auto x_ptr1 = x_ptr, y_ptr1 = y_ptr, z_ptr1 = z_ptr;
             size_type i1 = 0;
@@ -1749,11 +1755,6 @@ private:
                 *res_z = rz;
             }
         } else {
-            // Shortcuts to the input coordinates.
-            std::array<const F *, NDim> c_ptrs;
-            for (std::size_t j = 0; j < NDim; ++j) {
-                c_ptrs[j] = m_coords[j].data() + node_begin;
-            }
             // Temporary vectors to be used in the loops below.
             std::array<F, NDim> diffs, pos1;
             for (size_type i1 = 0; i1 < npart; ++i1) {
@@ -1781,13 +1782,13 @@ private:
                     for (std::size_t j = 0; j < NDim; ++j) {
                         a1[j] = fma_wrap(m2_dist3, diffs[j], a1[j]);
                         // NOTE: this is a fused multiply-sub.
-                        tmp_res[j][i2] = fma_wrap(m1_dist3, -diffs[j], tmp_res[j][i2]);
+                        res_ptrs[j][i2] = fma_wrap(m1_dist3, -diffs[j], res_ptrs[j][i2]);
                     }
                 }
                 // Update the acceleration on the first particle
                 // in the temporary storage.
                 for (std::size_t j = 0; j < NDim; ++j) {
-                    tmp_res[j][i1] += a1[j];
+                    res_ptrs[j][i1] += a1[j];
                 }
             }
         }
