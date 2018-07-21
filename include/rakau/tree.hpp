@@ -1264,6 +1264,12 @@ private:
         static thread_local std::array<fp_vector, NDim> tmp_res;
         return tmp_res;
     }
+    // Temporary vectors to store the data of a target node during traversal.
+    static auto &tgt_tmp_data()
+    {
+        static thread_local std::array<fp_vector, NDim + 1u> tmp_tgt;
+        return tmp_tgt;
+    }
     // Compute the element-wise attraction on the batch of particles at xvec1, yvec1, zvec1 by the
     // particle(s) at x2, y2, z2 with mass(es) mvec2, and add the result into res_x_vec, res_y_vec,
     // res_z_vec. B must be an xsimd batch. BS must be either the same as B, or the scalar type of B.
@@ -1303,11 +1309,12 @@ private:
             assert(node_size2 == m_box_size / (UInt(1) << SLevel) * m_box_size / (UInt(1) << SLevel));
             // Prepare pointers to the input and output data.
             auto &tmp_res = vec_acc_tmp_res();
+            auto &tmp_tgt = tgt_tmp_data();
             std::array<F *, NDim> res_ptrs;
             std::array<const F *, NDim> c_ptrs;
             for (std::size_t j = 0; j < NDim; ++j) {
                 res_ptrs[j] = tmp_res[j].data();
-                c_ptrs[j] = m_coords[j].data() + pidx;
+                c_ptrs[j] = tmp_tgt[j].data();
             }
             // Temporary vectors to store the pos differences and dist3 below.
             // We will store the data generated in the BH criterion check because
@@ -1337,8 +1344,9 @@ private:
                     for (; i < vec_size; i += batch_size, x_ptr += batch_size, y_ptr += batch_size, z_ptr += batch_size,
                                          tmp_x += batch_size, tmp_y += batch_size, tmp_z += batch_size,
                                          tmp_dist3 += batch_size) {
-                        const auto diff_x = x_com_vec - batch_type(x_ptr), diff_y = y_com_vec - batch_type(y_ptr),
-                                   diff_z = z_com_vec - batch_type(z_ptr),
+                        const auto diff_x = x_com_vec - batch_type(x_ptr, xsimd::aligned_mode{}),
+                                   diff_y = y_com_vec - batch_type(y_ptr, xsimd::aligned_mode{}),
+                                   diff_z = z_com_vec - batch_type(z_ptr, xsimd::aligned_mode{}),
                                    dist2 = diff_x * diff_x + diff_y * diff_y + diff_z * diff_z;
                         if (xsimd::any(node_size2_vec >= theta2_vec * dist2)) {
                             // At least one particle in the current batch fails the BH criterion
@@ -1494,8 +1502,9 @@ private:
                             }
                             for (auto idx1 = i1; idx1 < vec_size1; idx1 += batch_size) {
                                 // Load the current batch of target data.
-                                const auto xvec1 = batch_type(x_ptr1 + idx1), yvec1 = batch_type(y_ptr1 + idx1),
-                                           zvec1 = batch_type(z_ptr1 + idx1);
+                                const auto xvec1 = batch_type(x_ptr1 + idx1, xsimd::aligned_mode{}),
+                                           yvec1 = batch_type(y_ptr1 + idx1, xsimd::aligned_mode{}),
+                                           zvec1 = batch_type(z_ptr1 + idx1, xsimd::aligned_mode{});
                                 // Init the batches for computing the accelerations, loading the
                                 // accumulated acceleration for the current batch.
                                 auto res_x_vec = batch_type(res_x + idx1, xsimd::aligned_mode{}),
@@ -1535,8 +1544,9 @@ private:
                             return;
                         }
                         for (; i1 < vec_size1; i1 += batch_size1) {
-                            const auto xvec1 = batch_type1(x_ptr1 + i1), yvec1 = batch_type1(y_ptr1 + i1),
-                                       zvec1 = batch_type1(z_ptr1 + i1);
+                            const auto xvec1 = batch_type1(x_ptr1 + i1, xsimd::aligned_mode{}),
+                                       yvec1 = batch_type1(y_ptr1 + i1, xsimd::aligned_mode{}),
+                                       zvec1 = batch_type1(z_ptr1 + i1, xsimd::aligned_mode{});
                             auto res_x_vec = batch_type1(res_x + i1, xsimd::aligned_mode{}),
                                  res_y_vec = batch_type1(res_y + i1, xsimd::aligned_mode{}),
                                  res_z_vec = batch_type1(res_z + i1, xsimd::aligned_mode{});
@@ -1848,6 +1858,7 @@ private:
         tbb::parallel_for(tbb::blocked_range<decltype(m_crit_nodes.size())>(0u, m_crit_nodes.size()),
                           [this, &theta2, &out](const auto &range) {
                               auto &tmp_res = vec_acc_tmp_res();
+                              auto &tmp_tgt = tgt_tmp_data();
                               for (auto i = range.begin(); i != range.end(); ++i) {
                                   const auto nodal_code = get<0>(m_crit_nodes[i]);
                                   const auto node_begin = get<1>(m_crit_nodes[i]);
@@ -1861,6 +1872,15 @@ private:
                                       v.resize(npart);
                                       std::fill(v.begin(), v.end(), F(0));
                                   }
+                                  // Prepare the temporary vectors containing the target node's data.
+                                  for (std::size_t j = 0; j < NDim; ++j) {
+                                      tmp_tgt[j].resize(npart);
+                                      std::copy(m_coords[j].data() + node_begin,
+                                                m_coords[j].data() + node_begin + npart, tmp_tgt[j].data());
+                                  }
+                                  tmp_tgt[NDim].resize(npart);
+                                  std::copy(m_masses.data() + node_begin, m_masses.data() + node_begin + npart,
+                                            tmp_tgt[NDim].data());
                                   // Do the computation.
                                   vec_acc_on_node<0>(theta2, node_begin, npart, nodal_code, size_type(0),
                                                      size_type(m_tree.size()), node_level);
