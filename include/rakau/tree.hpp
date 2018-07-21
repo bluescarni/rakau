@@ -1858,7 +1858,7 @@ private:
                                   // Prepare the temporary vectors containing the result.
                                   for (auto &v : tmp_res) {
                                       // Resize and fill with zeroes.
-                                      v.resize(boost::numeric_cast<decltype(v.size())>(npart));
+                                      v.resize(npart);
                                       std::fill(v.begin(), v.end(), F(0));
                                   }
                                   // Do the computation.
@@ -1867,7 +1867,7 @@ private:
                                   // Write out the result.
                                   using it_diff_t = typename std::iterator_traits<It>::difference_type;
                                   for (std::size_t j = 0; j != NDim; ++j) {
-                                      std::copy(tmp_res[j].begin(), tmp_res[j].end(),
+                                      std::copy(tmp_res[j].data(), tmp_res[j].data() + tmp_res[j].size(),
                                                 out[j] + boost::numeric_cast<it_diff_t>(node_begin));
                                   }
                               }
