@@ -1309,7 +1309,7 @@ private:
             assert(node_size2 == m_box_size / (UInt(1) << SLevel) * m_box_size / (UInt(1) << SLevel));
             // Prepare pointers to the input and output data.
             auto &tmp_res = vec_acc_tmp_res();
-            auto &tmp_tgt = tgt_tmp_data();
+            const auto &tmp_tgt = tgt_tmp_data();
             std::array<F *, NDim> res_ptrs;
             std::array<const F *, NDim> c_ptrs;
             for (std::size_t j = 0; j < NDim; ++j) {
@@ -1867,10 +1867,10 @@ private:
                                   // (perhaps for free?). Not sure if it's worth it.
                                   const auto node_level = tree_level<NDim>(nodal_code);
                                   // Prepare the temporary vectors containing the result.
-                                  for (auto &v : tmp_res) {
+                                  for (std::size_t j = 0; j < NDim; ++j) {
                                       // Resize and fill with zeroes.
-                                      v.resize(npart);
-                                      std::fill(v.begin(), v.end(), F(0));
+                                      tmp_res[j].resize(npart);
+                                      std::fill(tmp_res[j].data(), tmp_res[j].data() + npart, F(0));
                                   }
                                   // Prepare the temporary vectors containing the target node's data.
                                   for (std::size_t j = 0; j < NDim; ++j) {
