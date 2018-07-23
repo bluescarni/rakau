@@ -24,6 +24,8 @@
 #include <tuple>
 #include <vector>
 
+#include <tbb/task_scheduler_init.h>
+
 #include "test_utils.hpp"
 
 using namespace rakau;
@@ -35,9 +37,10 @@ static std::mt19937 rng;
 
 TEST_CASE("accuracy")
 {
+    tbb::task_scheduler_init init(1);
     tuple_for_each(fp_types{}, [](auto x) {
         using fp_type = decltype(x);
-        constexpr auto theta = static_cast<fp_type>(.75);
+        constexpr auto theta = static_cast<fp_type>(.1);
         auto sizes = {10u, 100u, 1000u, 5000u};
         auto max_leaf_ns = {1u, 2u, 8u, 16u};
         auto ncrits = {1u, 16u, 128u, 256u};
@@ -68,6 +71,9 @@ TEST_CASE("accuracy")
                         x_diff.emplace_back(std::abs((eacc[0] - accs[0][i]) / eacc[0]));
                         y_diff.emplace_back(std::abs((eacc[1] - accs[1][i]) / eacc[1]));
                         z_diff.emplace_back(std::abs((eacc[2] - accs[2][i]) / eacc[2]));
+                        std::cout << x_diff.back() << ", " << accs[0][i] << '\n';
+                        std::cout << y_diff.back() << ", " << accs[1][i] << '\n';
+                        std::cout << z_diff.back() << ", " << accs[2][i] << '\n';
                     }
                     std::cout << "Results for size=" << s << ", max_leaf_n=" << max_leaf_n << ", ncrit=" << ncrit
                               << ".\n=========\n";

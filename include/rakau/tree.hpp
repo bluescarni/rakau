@@ -1679,20 +1679,27 @@ private:
                                zvec2 = xsimd::load_unaligned(z_ptr + i2), mvec2 = xsimd::load_unaligned(m_ptr + i2);
                     const auto diff_x = xvec2 - xvec1, diff_y = yvec2 - yvec1, diff_z = zvec2 - zvec1,
                                dist2 = diff_x * diff_x + diff_y * diff_y + diff_z * diff_z;
+                    std::cout << "dist2 is now: " << dist2 << '\n';
                     batch_type m1_dist3, m2_dist3;
                     if constexpr (use_fast_inv_sqrt<batch_type>) {
                         const auto tmp = inv_sqrt_3(dist2);
+                        std::cout << "rsqrt is now: " << tmp << '\n';
                         m1_dist3 = mvec1 * tmp;
                         m2_dist3 = mvec2 * tmp;
                     } else {
                         const auto dist = xsimd::sqrt(dist2);
+                        std::cout << "sqrt is now: " << dist << '\n';
                         const auto dist3 = dist * dist2;
+                        std::cout << "dist3 is now: " << dist3 << '\n';
                         m1_dist3 = mvec1 / dist3;
                         m2_dist3 = mvec2 / dist3;
+                        std::cout << "m1 is now: " << m1_dist3 << '\n';
+                        std::cout << "m2 is now: " << m2_dist3 << '\n';
                     }
                     res_x_vec1 = xsimd::fma(diff_x, m2_dist3, res_x_vec1);
                     res_y_vec1 = xsimd::fma(diff_y, m2_dist3, res_y_vec1);
                     res_z_vec1 = xsimd::fma(diff_z, m2_dist3, res_z_vec1);
+                    std::cout << "resx is now: " << res_x_vec1 << '\n';
                     xsimd::fnma(diff_x, m1_dist3, xsimd::load_unaligned(res_x + i2)).store_unaligned(res_x + i2);
                     xsimd::fnma(diff_y, m1_dist3, xsimd::load_unaligned(res_y + i2)).store_unaligned(res_y + i2);
                     xsimd::fnma(diff_z, m1_dist3, xsimd::load_unaligned(res_z + i2)).store_unaligned(res_z + i2);
@@ -1700,6 +1707,16 @@ private:
                 (xsimd::load_aligned(res_x + i1) + res_x_vec1).store_aligned(res_x + i1);
                 (xsimd::load_aligned(res_y + i1) + res_y_vec1).store_aligned(res_y + i1);
                 (xsimd::load_aligned(res_z + i1) + res_z_vec1).store_aligned(res_z + i1);
+                for (std::size_t j = 0; j < batch_size; ++j) {
+                    if (i1 + j == npart) {
+                        break;
+                    }
+                    std::cout << "x accel at index " << i1 + j << ": " << res_x[i1 + j] << '\n';
+                }
+            }
+            std::cout << "List of x accels:\n";
+            for (size_type i1 = 0; i1 < npart; ++i1) {
+                std::cout << res_x[i1] << '\n';
             }
             // for (size_type i1 = 0; i1 < npart; ++i1) {
             //     for (size_type i2 = 0; i2 < npart; ++i2) {
@@ -1948,10 +1965,13 @@ private:
                                       tmp_tgt[j].resize(npart + 10);
                                       std::copy(m_coords[j].data() + node_begin,
                                                 m_coords[j].data() + node_begin + npart, tmp_tgt[j].data());
+                                      std::fill(tmp_tgt[j].data() + npart, tmp_tgt[j].data() + npart + 10,
+                                                std::numeric_limits<F>::infinity());
                                   }
                                   tmp_tgt[NDim].resize(npart + 10);
                                   std::copy(m_masses.data() + node_begin, m_masses.data() + node_begin + npart,
                                             tmp_tgt[NDim].data());
+                                  std::fill(tmp_tgt[NDim].data() + npart, tmp_tgt[NDim].data() + npart + 10, F(0));
                                   // Do the computation.
                                   vec_acc_on_node<0>(theta2, node_begin, npart, nodal_code, size_type(0),
                                                      size_type(m_tree.size()), node_level);
