@@ -88,6 +88,8 @@
 
 #endif
 
+#include <unordered_set>
+
 #include <rakau/detail/simd.hpp>
 
 namespace rakau
@@ -1647,16 +1649,83 @@ private:
             c_ptrs[j] = tmp_tgt[j].data();
         }
         const F *m_ptr = tmp_tgt[NDim].data();
+        // auto p_hash = [](const auto &p) { return std::hash<size_type>{}(p.first) + std::hash<size_type>{}(p.second);
+        // }; std::unordered_set<std::pair<size_type, size_type>, decltype(p_hash)> checker(0, p_hash);
         if constexpr (simd_enabled && NDim == 3u) {
             // xsimd batch type.
-            using b_type = xsimd::simd_type<F>;
-            // Size of b_type.
-            constexpr auto b_size = b_type::size;
-            // Shortcuts to the node coordinates/masses.
+            using batch_type = xsimd::simd_type<F>;
+            // Size of batch_type.
+            constexpr auto batch_size = batch_type::size;
+            // Shortcuts to the node coordinates.
             const auto x_ptr = c_ptrs[0], y_ptr = c_ptrs[1], z_ptr = c_ptrs[2];
             // Shortcuts to the result vectors.
             auto res_x = res_ptrs[0], res_y = res_ptrs[1], res_z = res_ptrs[2];
-            const auto vec_size = static_cast<size_type>(npart - npart % b_size);
+            for (size_type i1 = 0; i1 < npart; i1 += batch_size) {
+                const auto xvec1 = xsimd::load_aligned(x_ptr + i1), yvec1 = xsimd::load_aligned(y_ptr + i1),
+                           zvec1 = xsimd::load_aligned(z_ptr + i1), mvec1 = xsimd::load_aligned(m_ptr + i1);
+                batch_type res_x_vec1(F(0)), res_y_vec1(F(0)), res_z_vec1(F(0));
+                for (size_type i2 = i1 + 1u; i2 < npart; ++i2) {
+                    // for (std::size_t j = 0; j < batch_size; ++j) {
+                    //     auto p = checker.insert({i1 + j, i2 + j});
+                    //     if (!p.second) {
+                    //         throw;
+                    //     }
+                    //     p = checker.insert({i2 + j, i1 + j});
+                    //     if (!p.second) {
+                    //         throw;
+                    //     }
+                    // }
+                    const auto xvec2 = xsimd::load_unaligned(x_ptr + i2), yvec2 = xsimd::load_unaligned(y_ptr + i2),
+                               zvec2 = xsimd::load_unaligned(z_ptr + i2), mvec2 = xsimd::load_unaligned(m_ptr + i2);
+                    const auto diff_x = xvec2 - xvec1, diff_y = yvec2 - yvec1, diff_z = zvec2 - zvec1,
+                               dist2 = diff_x * diff_x + diff_y * diff_y + diff_z * diff_z;
+                    batch_type m1_dist3, m2_dist3;
+                    if constexpr (use_fast_inv_sqrt<batch_type>) {
+                        const auto tmp = inv_sqrt_3(dist2);
+                        m1_dist3 = mvec1 * tmp;
+                        m2_dist3 = mvec2 * tmp;
+                    } else {
+                        const auto dist = xsimd::sqrt(dist2);
+                        const auto dist3 = dist * dist2;
+                        m1_dist3 = mvec1 / dist3;
+                        m2_dist3 = mvec2 / dist3;
+                    }
+                    res_x_vec1 = xsimd::fma(diff_x, m2_dist3, res_x_vec1);
+                    res_y_vec1 = xsimd::fma(diff_y, m2_dist3, res_y_vec1);
+                    res_z_vec1 = xsimd::fma(diff_z, m2_dist3, res_z_vec1);
+                    xsimd::fnma(diff_x, m1_dist3, xsimd::load_unaligned(res_x + i2)).store_unaligned(res_x + i2);
+                    xsimd::fnma(diff_y, m1_dist3, xsimd::load_unaligned(res_y + i2)).store_unaligned(res_y + i2);
+                    xsimd::fnma(diff_z, m1_dist3, xsimd::load_unaligned(res_z + i2)).store_unaligned(res_z + i2);
+                }
+                (xsimd::load_aligned(res_x + i1) + res_x_vec1).store_aligned(res_x + i1);
+                (xsimd::load_aligned(res_y + i1) + res_y_vec1).store_aligned(res_y + i1);
+                (xsimd::load_aligned(res_z + i1) + res_z_vec1).store_aligned(res_z + i1);
+            }
+            // for (size_type i1 = 0; i1 < npart; ++i1) {
+            //     for (size_type i2 = 0; i2 < npart; ++i2) {
+            //         if (i1 != i2 && checker.find({i1, i2}) == checker.end()) {
+            //             throw;
+            //         }
+            //     }
+            // }
+#if 0
+        const B diff_x = x2 - xvec1;
+        const B diff_y = y2 - yvec1;
+        const B diff_z = z2 - zvec1;
+        const B dist2 = diff_x * diff_x + diff_y * diff_y + diff_z * diff_z;
+        B m2_dist3;
+        if constexpr (use_fast_inv_sqrt<B>) {
+            m2_dist3 = m2 * inv_sqrt_3(dist2);
+        } else {
+            const B dist = xsimd::sqrt(dist2);
+            const B dist3 = dist * dist2;
+            m2_dist3 = m2 / dist3;
+        }
+        res_x_vec = xsimd::fma(diff_x, m2_dist3, res_x_vec);
+        res_y_vec = xsimd::fma(diff_y, m2_dist3, res_y_vec);
+        res_z_vec = xsimd::fma(diff_z, m2_dist3, res_z_vec);
+#endif
+#if 0
             auto x_ptr1 = x_ptr, y_ptr1 = y_ptr, z_ptr1 = z_ptr;
             size_type i1 = 0;
             for (; i1 < vec_size; i1 += b_size, x_ptr1 += b_size, y_ptr1 += b_size, z_ptr1 += b_size, res_x += b_size,
@@ -1754,6 +1823,7 @@ private:
                 *res_y = ry;
                 *res_z = rz;
             }
+#endif
         } else {
             // Temporary vectors to be used in the loops below.
             std::array<F, NDim> diffs, pos1;
@@ -1870,16 +1940,16 @@ private:
                                   // Prepare the temporary vectors containing the result.
                                   for (std::size_t j = 0; j < NDim; ++j) {
                                       // Resize and fill with zeroes.
-                                      tmp_res[j].resize(npart);
-                                      std::fill(tmp_res[j].data(), tmp_res[j].data() + npart, F(0));
+                                      tmp_res[j].resize(npart + 10);
+                                      std::fill(tmp_res[j].data(), tmp_res[j].data() + tmp_res[j].size(), F(0));
                                   }
                                   // Prepare the temporary vectors containing the target node's data.
                                   for (std::size_t j = 0; j < NDim; ++j) {
-                                      tmp_tgt[j].resize(npart);
+                                      tmp_tgt[j].resize(npart + 10);
                                       std::copy(m_coords[j].data() + node_begin,
                                                 m_coords[j].data() + node_begin + npart, tmp_tgt[j].data());
                                   }
-                                  tmp_tgt[NDim].resize(npart);
+                                  tmp_tgt[NDim].resize(npart + 10);
                                   std::copy(m_masses.data() + node_begin, m_masses.data() + node_begin + npart,
                                             tmp_tgt[NDim].data());
                                   // Do the computation.
@@ -1888,7 +1958,7 @@ private:
                                   // Write out the result.
                                   using it_diff_t = typename std::iterator_traits<It>::difference_type;
                                   for (std::size_t j = 0; j != NDim; ++j) {
-                                      std::copy(tmp_res[j].data(), tmp_res[j].data() + tmp_res[j].size(),
+                                      std::copy(tmp_res[j].data(), tmp_res[j].data() + npart,
                                                 out[j] + boost::numeric_cast<it_diff_t>(node_begin));
                                   }
                               }
