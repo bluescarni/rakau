@@ -361,6 +361,7 @@ inline void apply_isort(VVec &values, const PVec &perm)
     tbb::parallel_for(tbb::blocked_range<decltype(perm.size())>(0u, perm.size()),
                       [&values_new, &values, &perm](const auto &range) {
                           for (auto i = range.begin(); i != range.end(); ++i) {
+                              assert(perm[i] < values.size());
                               values_new[i] = values[perm[i]];
                           }
                       });
