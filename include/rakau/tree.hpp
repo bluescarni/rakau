@@ -534,6 +534,10 @@ inline constexpr bool use_fast_inv_sqrt =
 // - add checks on the finiteness of the internal computations. For instance, we need all particles
 //   distances to be finite (including padding particles in the self-interaction routine), and
 //   we also need all possible accelerations to be finite. Can we do this check fast?
+// - try to hack up some fix for the slowness of the morton encoding in highly parallel setups. This
+//   had something to do with the tbb grain size, as far as I remember.
+// - we should investigate a parallel indirect radix sort implementation based on TBB, as the sorting
+//   of the codes can become the bottleneck in highly parallel situations.
 template <typename UInt, typename F, std::size_t NDim>
 class tree
 {
@@ -1300,13 +1304,12 @@ private:
         res_z_vec = xsimd::fma(diff_z, m2_dist3, res_z_vec);
     }
     // Compute the accelerations on the particles of a target node induced by the particles of another
-    // node (the source). pidx and size are the starting index (in the particles arrays) and the size of the target
-    // node. begin/end is the range, in the tree structure, encompassing the source node and its children.
+    // node (the source). 'size' is the size of the target node (we need it because the temporary vectors might have
+    // padding data). begin/end is the range, in the tree structure, encompassing the source node and its children.
     // node_size2 is the square of the size of the source node. The accelerations will be written into the
     // temporary storage provided by vec_acc_tmp_res(). SLevel is the tree level of the source node.
     template <unsigned SLevel>
-    void vec_acc_from_node(const F &theta2, size_type pidx, size_type size, size_type begin, size_type end,
-                           const F &node_size2) const
+    void vec_acc_from_node(const F &theta2, size_type size, size_type begin, size_type end, const F &node_size2) const
     {
         if constexpr (SLevel <= cbits) {
             // Check that SLevel is consistent with the tree data.
@@ -1627,21 +1630,20 @@ private:
             const auto next_node_size2 = next_node_size * next_node_size;
             // Bump up begin to move to the first child.
             for (++begin; begin != end; begin += get<1>(m_tree[begin])[2] + 1u) {
-                vec_acc_from_node<SLevel + 1u>(theta2, pidx, size, begin, begin + get<1>(m_tree[begin])[2] + 1u,
+                vec_acc_from_node<SLevel + 1u>(theta2, size, begin, begin + get<1>(m_tree[begin])[2] + 1u,
                                                next_node_size2);
             }
         } else {
-            ignore_args(pidx, size, begin, end);
+            ignore_args(size, begin, end);
             // NOTE: we cannot go deeper than the maximum level of the tree.
             // The n_children check above will prevent reaching this point at runtime.
             assert(false);
         }
     }
     // Compute the accelerations on the particles in a node due to node's particles themselves.
-    // node_begin is the starting index of the node in the particles arrays. npart is the
-    // number of particles in the node. The self accelerations will be added to the accelerations
+    // npart is the number of particles in the node. The self accelerations will be added to the accelerations
     // in the temporary storage.
-    void vec_node_self_interactions(size_type node_begin, size_type npart) const
+    void vec_node_self_interactions(size_type npart) const
     {
         // Prepare common pointers to the input and output data.
         auto &tmp_res = vec_acc_tmp_res();
@@ -1742,13 +1744,12 @@ private:
             }
         }
     }
-    // Compute the total acceleration on the particles in a target node. node_begin is the starting index
-    // of the target in the particles' arrays, npart the number of particles in the node. [sib_begin, sib_end)
-    // is the index range, in the tree structure, encompassing the target, its parent and its parent's siblings at the
-    // tree level Level. nodal_code is the nodal code of the target, node_level its level.
+    // Compute the total acceleration on the particles in a target node. npart the number of particles in the node.
+    // [sib_begin, sib_end) is the index range, in the tree structure, encompassing the target, its parent and its
+    // parent's siblings at the tree level Level. nodal_code is the nodal code of the target, node_level its level.
     template <unsigned Level>
-    void vec_acc_on_node(const F &theta2, size_type node_begin, size_type npart, UInt nodal_code, size_type sib_begin,
-                         size_type sib_end, unsigned node_level) const
+    void vec_acc_on_node(const F &theta2, size_type npart, UInt nodal_code, size_type sib_begin, size_type sib_end,
+                         unsigned node_level) const
     {
         if constexpr (Level <= cbits) {
             // Make sure the node level is consistent with the nodal code.
@@ -1770,7 +1771,7 @@ private:
                     if (Level == node_level) {
                         // Last iteration, we are in the target itself. Compute the
                         // self-interactions within the target.
-                        vec_node_self_interactions(node_begin, npart);
+                        vec_node_self_interactions(npart);
                     } else {
                         // We identified the parent of the target at the current
                         // level. Store its starting index for later.
@@ -1778,8 +1779,7 @@ private:
                     }
                 } else {
                     // Compute the accelerations from the current sibling.
-                    vec_acc_from_node<Level>(theta2, node_begin, npart, idx, idx + 1u + get<1>(m_tree[idx])[2],
-                                             node_size2);
+                    vec_acc_from_node<Level>(theta2, npart, idx, idx + 1u + get<1>(m_tree[idx])[2], node_size2);
                 }
             }
             if (Level != node_level) {
@@ -1791,11 +1791,11 @@ private:
             }
             if (Level < node_level) {
                 // We are not at the level of the target yet. Recurse down.
-                vec_acc_on_node<Level + 1u>(theta2, node_begin, npart, nodal_code, new_sib_begin + 1u,
+                vec_acc_on_node<Level + 1u>(theta2, npart, nodal_code, new_sib_begin + 1u,
                                             new_sib_begin + 1u + get<1>(m_tree[new_sib_begin])[2], node_level);
             }
         } else {
-            ignore_args(node_begin, npart, nodal_code, sib_begin, sib_end);
+            ignore_args(npart, nodal_code, sib_begin, sib_end);
             // NOTE: we can never get to a level higher than cbits, which is the maximum node level.
             // This is prevented at runtime by the Level < node_level check.
             assert(false);
@@ -1866,8 +1866,7 @@ private:
                     // null due to the zero masses).
                     std::fill(tmp_tgt[NDim].data() + npart, tmp_tgt[NDim].data() + pdata_size, F(0));
                     // Do the computation.
-                    vec_acc_on_node<0>(theta2, node_begin, npart, nodal_code, size_type(0), size_type(m_tree.size()),
-                                       node_level);
+                    vec_acc_on_node<0>(theta2, npart, nodal_code, size_type(0), size_type(m_tree.size()), node_level);
                     // Write out the result.
                     using it_diff_t = typename std::iterator_traits<It>::difference_type;
                     for (std::size_t j = 0; j != NDim; ++j) {
