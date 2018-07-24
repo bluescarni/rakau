@@ -73,8 +73,8 @@ add_library(rakau INTERFACE)
 include(RakauFindBoost)
 
 # Find xsimd.
-# NOTE: we have some AVX512 code in here, so require xsimd at least version 6.
-find_package(xsimd 6 REQUIRED)
+# NOTE: we have some AVX512 code in here, so require xsimd at least version 5.
+find_package(xsimd 5 REQUIRED)
 
 # Find TBB.
 find_package(TBB REQUIRED)

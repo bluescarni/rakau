@@ -1739,7 +1739,7 @@ private:
                     // acc vector for the opposite acceleration.
                     for (std::size_t j = 0; j < NDim; ++j) {
                         a1[j] = fma_wrap(m2_dist3, diffs[j], a1[j]);
-                        // NOTE: this is a fused multiply-sub.
+                        // NOTE: this is a fused negated multiply-add.
                         res_ptrs[j][i2] = fma_wrap(m1_dist3, -diffs[j], res_ptrs[j][i2]);
                     }
                 }
