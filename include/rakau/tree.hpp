@@ -537,6 +537,15 @@ inline constexpr bool use_fast_inv_sqrt =
 //   had something to do with the tbb grain size, as far as I remember.
 // - we should investigate a parallel indirect radix sort implementation based on TBB, as the sorting
 //   of the codes can become the bottleneck in highly parallel situations.
+// - it is still not yet clear to me what the NUMA picture is here. During tree traversal, the results
+//   and the target node data are stored in thread local caches, so maybe we can try to ensure that
+//   at the beginning of traversal we re-init these caches in order to make sure they are allocated
+//   by the thread that's actually using them. Not entirely sure on how to do that however. The other
+//   bit is the source node data that gets read during tree traversal. Perhaps we can assume that the data transfer in
+//   the traversal routine for a node will mostly involve data adjacent to that node in the morton order. So perhaps we
+//   can try to ensure that the TBB threads are scheduled with the same affinity as the affinity used to write initially
+//   into the particle data vectors. TBB has an affinity partitioner, but it's not clear to me if we can rely on that
+//   for efficient NUMA access. It's probably better to run some tests before embarking in this.
 template <typename UInt, typename F, std::size_t NDim>
 class tree
 {
