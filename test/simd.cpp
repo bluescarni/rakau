@@ -16,6 +16,8 @@
 
 #include <xsimd/xsimd.hpp>
 
+#include <rakau/tree.hpp>
+
 #include "test_utils.hpp"
 
 using namespace rakau;

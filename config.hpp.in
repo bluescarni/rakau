@@ -1,0 +1,21 @@
+// Copyright 2018 Francesco Biscani (bluescarni@gmail.com)
+//
+// This file is part of the rakau library.
+//
+// This Source Code Form is subject to the terms of the Mozilla
+// Public License v. 2.0. If a copy of the MPL was not distributed
+// with this file, You can obtain one at http://mozilla.org/MPL/2.0/.
+
+#ifndef RAKAU_CONFIG_HPP
+#define RAKAU_CONFIG_HPP
+
+// Start of defines instantiated by CMake.
+// clang-format off
+#define RAKAU_VERSION_STRING "@rakau_VERSION@"
+#define RAKAU_VERSION_MAJOR @rakau_VERSION_MAJOR@
+#define RAKAU_VERSION_MINOR @rakau_VERSION_MINOR@
+@RAKAU_DISABLE_RSQRT@
+// clang-format on
+// End of defines instantiated by CMake.
+
+#endif

@@ -17,6 +17,11 @@ endif()
 # The build options.
 option(RAKAU_BUILD_TESTS "Build unit tests." OFF)
 option(RAKAU_BUILD_BENCHMARKS "Build benchmarks." OFF)
+option(RAKAU_ENABLE_RSQRT "Enable the use of rsqrt intrinsics." ON)
+
+if(NOT RAKAU_ENABLE_RSQRT)
+  set(RAKAU_DISABLE_RSQRT "#define RAKAU_DISABLE_RSQRT")
+endif()
 
 include(YACMACompilerLinkerSettings)
 include(CheckCXXCompilerFlag)
@@ -68,7 +73,8 @@ add_library(rakau INTERFACE)
 include(RakauFindBoost)
 
 # Find xsimd.
-find_package(xsimd REQUIRED)
+# NOTE: we have some AVX512 code in here, so require xsimd at least version 5.
+find_package(xsimd 5 REQUIRED)
 
 # Find TBB.
 find_package(TBB REQUIRED)
@@ -81,6 +87,9 @@ target_include_directories(rakau INTERFACE
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
     $<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}/include>
 	$<INSTALL_INTERFACE:include>)
+
+# Configure config.hpp.
+configure_file("${CMAKE_CURRENT_SOURCE_DIR}/config.hpp.in" "${CMAKE_CURRENT_BINARY_DIR}/include/rakau/config.hpp" @ONLY)
 
 # Installation.
 # Setup of the export.
@@ -97,6 +106,7 @@ install(FILES "${CMAKE_CURRENT_BINARY_DIR}/rakau-config-version.cmake" DESTINATI
 
 # Installation of the header files.
 install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/include/rakau" DESTINATION include)
+install(FILES "${CMAKE_CURRENT_BINARY_DIR}/include/rakau/config.hpp" DESTINATION include/rakau)
 
 if(RAKAU_BUILD_TESTS)
     enable_testing()
