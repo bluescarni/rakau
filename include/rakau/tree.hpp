@@ -1341,36 +1341,34 @@ private:
             size_type i = 0;
             if constexpr (simd_enabled && NDim == 3u) {
                 // The SIMD-accelerated part.
-                auto x_ptr = c_ptrs[0], y_ptr = c_ptrs[1], z_ptr = c_ptrs[2];
-                auto tmp_x = tmp_ptrs[0], tmp_y = tmp_ptrs[1], tmp_z = tmp_ptrs[2], tmp_dist3 = tmp_ptrs[3];
+                const auto x_ptr = c_ptrs[0], y_ptr = c_ptrs[1], z_ptr = c_ptrs[2], tmp_x = tmp_ptrs[0],
+                           tmp_y = tmp_ptrs[1], tmp_z = tmp_ptrs[2], tmp_dist3 = tmp_ptrs[3];
                 tuple_for_each(simd_sizes<F>, [&](auto s) {
                     constexpr auto batch_size = s.value;
                     using batch_type = xsimd::batch<F, batch_size>;
                     const auto vec_size = static_cast<size_type>(size - size % batch_size);
                     const batch_type node_size2_vec(node_size2), theta2_vec(theta2), x_com_vec(com_pos[0]),
                         y_com_vec(com_pos[1]), z_com_vec(com_pos[2]);
-                    for (; i < vec_size; i += batch_size, x_ptr += batch_size, y_ptr += batch_size, z_ptr += batch_size,
-                                         tmp_x += batch_size, tmp_y += batch_size, tmp_z += batch_size,
-                                         tmp_dist3 += batch_size) {
-                        const auto diff_x = x_com_vec - batch_type(x_ptr, xsimd::aligned_mode{}),
-                                   diff_y = y_com_vec - batch_type(y_ptr, xsimd::aligned_mode{}),
-                                   diff_z = z_com_vec - batch_type(z_ptr, xsimd::aligned_mode{}),
+                    for (; i < vec_size; i += batch_size) {
+                        const auto diff_x = x_com_vec - batch_type(x_ptr + i, xsimd::aligned_mode{}),
+                                   diff_y = y_com_vec - batch_type(y_ptr + i, xsimd::aligned_mode{}),
+                                   diff_z = z_com_vec - batch_type(z_ptr + i, xsimd::aligned_mode{}),
                                    dist2 = diff_x * diff_x + diff_y * diff_y + diff_z * diff_z;
                         if (xsimd::any(node_size2_vec >= theta2_vec * dist2)) {
                             // At least one particle in the current batch fails the BH criterion
                             // check. Mark the bh_flag as false, and set i to size in order
-                            // to skip the scalar calculation later. Then break out.
+                            // to skip the next calculations. Then break out.
                             bh_flag = false;
                             i = size;
                             break;
                         }
-                        diff_x.store_aligned(tmp_x);
-                        diff_y.store_aligned(tmp_y);
-                        diff_z.store_aligned(tmp_z);
+                        diff_x.store_aligned(tmp_x + i);
+                        diff_y.store_aligned(tmp_y + i);
+                        diff_z.store_aligned(tmp_z + i);
                         if constexpr (use_fast_inv_sqrt<batch_type>) {
-                            inv_sqrt_3(dist2).store_aligned(tmp_dist3);
+                            inv_sqrt_3(dist2).store_aligned(tmp_dist3 + i);
                         } else {
-                            (xsimd::sqrt(dist2) * dist2).store_aligned(tmp_dist3);
+                            (xsimd::sqrt(dist2) * dist2).store_aligned(tmp_dist3 + i);
                         }
                     }
                 });
@@ -1403,28 +1401,27 @@ private:
                 i = 0;
                 if constexpr (simd_enabled && NDim == 3u) {
                     // The SIMD-accelerated part.
-                    auto tmp_x = tmp_ptrs[0], tmp_y = tmp_ptrs[1], tmp_z = tmp_ptrs[2], tmp_dist3 = tmp_ptrs[3];
-                    auto res_x = res_ptrs[0], res_y = res_ptrs[1], res_z = res_ptrs[2];
+                    const auto tmp_x = tmp_ptrs[0], tmp_y = tmp_ptrs[1], tmp_z = tmp_ptrs[2], tmp_dist3 = tmp_ptrs[3],
+                               res_x = res_ptrs[0], res_y = res_ptrs[1], res_z = res_ptrs[2];
                     tuple_for_each(simd_sizes<F>, [&](auto s) {
                         constexpr auto batch_size = s.value;
                         using batch_type = xsimd::batch<F, batch_size>;
                         const batch_type m_com_vec(m_com);
                         const auto vec_size = static_cast<size_type>(size - size % batch_size);
-                        for (; i < vec_size; i += batch_size, tmp_x += batch_size, tmp_y += batch_size,
-                                             tmp_z += batch_size, tmp_dist3 += batch_size, res_x += batch_size,
-                                             res_y += batch_size, res_z += batch_size) {
-                            const auto m_com_dist3_vec = use_fast_inv_sqrt<batch_type>
-                                                             ? m_com_vec * batch_type(tmp_dist3, xsimd::aligned_mode{})
-                                                             : m_com_vec / batch_type(tmp_dist3, xsimd::aligned_mode{}),
-                                       xdiff = batch_type(tmp_x, xsimd::aligned_mode{}),
-                                       ydiff = batch_type(tmp_y, xsimd::aligned_mode{}),
-                                       zdiff = batch_type(tmp_z, xsimd::aligned_mode{});
-                            xsimd::fma(xdiff, m_com_dist3_vec, batch_type(res_x, xsimd::aligned_mode{}))
-                                .store_aligned(res_x);
-                            xsimd::fma(ydiff, m_com_dist3_vec, batch_type(res_y, xsimd::aligned_mode{}))
-                                .store_aligned(res_y);
-                            xsimd::fma(zdiff, m_com_dist3_vec, batch_type(res_z, xsimd::aligned_mode{}))
-                                .store_aligned(res_z);
+                        for (; i < vec_size; i += batch_size) {
+                            const auto m_com_dist3_vec
+                                = use_fast_inv_sqrt<batch_type>
+                                      ? m_com_vec * batch_type(tmp_dist3 + i, xsimd::aligned_mode{})
+                                      : m_com_vec / batch_type(tmp_dist3 + i, xsimd::aligned_mode{}),
+                                xdiff = batch_type(tmp_x + i, xsimd::aligned_mode{}),
+                                ydiff = batch_type(tmp_y + i, xsimd::aligned_mode{}),
+                                zdiff = batch_type(tmp_z + i, xsimd::aligned_mode{});
+                            xsimd::fma(xdiff, m_com_dist3_vec, batch_type(res_x + i, xsimd::aligned_mode{}))
+                                .store_aligned(res_x + i);
+                            xsimd::fma(ydiff, m_com_dist3_vec, batch_type(res_y + i, xsimd::aligned_mode{}))
+                                .store_aligned(res_y + i);
+                            xsimd::fma(zdiff, m_com_dist3_vec, batch_type(res_z + i, xsimd::aligned_mode{}))
+                                .store_aligned(res_z + i);
                         }
                     });
                 }
@@ -1662,7 +1659,7 @@ private:
             // Shortcuts to the node coordinates.
             const auto x_ptr = c_ptrs[0], y_ptr = c_ptrs[1], z_ptr = c_ptrs[2];
             // Shortcuts to the result vectors.
-            auto res_x = res_ptrs[0], res_y = res_ptrs[1], res_z = res_ptrs[2];
+            const auto res_x = res_ptrs[0], res_y = res_ptrs[1], res_z = res_ptrs[2];
             for (size_type i1 = 0; i1 < npart; i1 += batch_size) {
                 // Load the first batch of particles.
                 const auto xvec1 = xsimd::load_aligned(x_ptr + i1), yvec1 = xsimd::load_aligned(y_ptr + i1),
@@ -1675,6 +1672,8 @@ private:
                     // Load the second batch of particles.
                     const auto xvec2 = xsimd::load_unaligned(x_ptr + i2), yvec2 = xsimd::load_unaligned(y_ptr + i2),
                                zvec2 = xsimd::load_unaligned(z_ptr + i2), mvec2 = xsimd::load_unaligned(m_ptr + i2);
+                    // NOTE: now we are going to do a slight repetition of batch_bs_3d(), with the goal
+                    // of avoiding doing extra needless computations.
                     // Compute the relative positions of 2 wrt 1, and the distance square.
                     const auto diff_x = xvec2 - xvec1, diff_y = yvec2 - yvec1, diff_z = zvec2 - zvec1,
                                dist2 = diff_x * diff_x + diff_y * diff_y + diff_z * diff_z;
