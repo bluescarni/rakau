@@ -88,8 +88,6 @@
 
 #endif
 
-#include <unordered_set>
-
 #include <rakau/detail/simd.hpp>
 
 namespace rakau
