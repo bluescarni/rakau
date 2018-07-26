@@ -154,7 +154,7 @@ inline void tuple_for_each(Tuple &&tup, F &&f)
 {
     std::apply(
         [&f](auto &&... items) {
-            // NOTE: here we converting to void the results of the invocations
+            // NOTE: here we are converting to void the results of the invocations
             // of f. This ensures that we are folding using the builtin comma
             // operator, which implies sequencing:
             // """
@@ -546,6 +546,9 @@ inline constexpr bool use_fast_inv_sqrt =
 //   can try to ensure that the TBB threads are scheduled with the same affinity as the affinity used to write initially
 //   into the particle data vectors. TBB has an affinity partitioner, but it's not clear to me if we can rely on that
 //   for efficient NUMA access. It's probably better to run some tests before embarking in this.
+// - we should probably also think about replacing the morton encoder with some generic solution. It does not
+//   need to be super high performance, as morton encoding is hardly a bottleneck here. It's more important for it
+//   to be generic (i.e., work on a general number of dimensions), correct and compact.
 template <typename UInt, typename F, std::size_t NDim>
 class tree
 {
