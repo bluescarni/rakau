@@ -1118,6 +1118,7 @@ public:
         indirect_code_sort(m_isort.begin(), m_isort.end());
         {
             // Apply the permutation to the data members.
+            // These steps can be done in parallel.
             simple_timer st_p("permute");
             tbb::task_group tg;
             tg.run([this]() {
@@ -2034,9 +2035,16 @@ private:
     // to reconstruct the other data members according to the new positions.
     void refresh()
     {
-        // Let's start with generating the new codes.
+        // Let's start with generating the new codes, and a create a vector
+        // for the new indirect sorting of the new codes.
+        // NOTE: this is a slight repetition of some code in the constructor.
+        // However, there it makes sense to mix the morton encoding with data movement,
+        // while here the data is already in the member vectors. So we cannot really
+        // refactor these bits in a common function.
         const auto nparts = m_masses.size();
-        tbb::parallel_for(tbb::blocked_range<decltype(m_masses.size())>(0u, nparts), [this](const auto &range) {
+        std::vector<size_type, di_aligned_allocator<size_type>> v_ind;
+        v_ind.resize(boost::numeric_cast<decltype(v_ind.size())>(nparts));
+        tbb::parallel_for(tbb::blocked_range<decltype(m_masses.size())>(0u, nparts), [this, &v_ind](const auto &range) {
             std::array<F, NDim> tmp_coord;
             morton_encoder<NDim, UInt> me;
             for (auto i = range.begin(); i != range.end(); ++i) {
@@ -2044,34 +2052,36 @@ private:
                     tmp_coord[j] = m_coords[j][i];
                 }
                 m_codes[i] = me(disc_coords(tmp_coord.begin(), m_box_size).begin());
-            }
-        });
-        // Like on construction, do the indirect sorting of the new codes.
-        // Use a new temp vector for the new indirect sorting.
-        std::vector<size_type, di_aligned_allocator<size_type>> v_ind;
-        v_ind.resize(boost::numeric_cast<decltype(v_ind.size())>(nparts));
-        // NOTE: this is just a iota.
-        tbb::parallel_for(tbb::blocked_range<decltype(m_masses.size())>(0u, nparts), [&v_ind](const auto &range) {
-            for (auto i = range.begin(); i != range.end(); ++i) {
+                // NOTE: this is just a iota.
                 v_ind[i] = i;
             }
         });
         // Do the sorting.
         indirect_code_sort(v_ind.begin(), v_ind.end());
-        // Apply the indirect sorting.
-        // NOTE: upon tree construction, we already checked that the number of particles does not
-        // overflow the limit imposed by apply_isort().
-        apply_isort(m_codes, v_ind);
-        // Make sure the sort worked as intended.
-        assert(std::is_sorted(m_codes.begin(), m_codes.end()));
-        for (std::size_t j = 0; j < NDim; ++j) {
-            apply_isort(m_coords[j], v_ind);
+        {
+            // Apply the indirect sorting.
+            tbb::task_group tg;
+            // NOTE: upon tree construction, we already checked that the number of particles does not
+            // overflow the limit imposed by apply_isort().
+            tg.run([this, &v_ind]() {
+                apply_isort(m_codes, v_ind);
+                // Make sure the sort worked as intended.
+                assert(std::is_sorted(m_codes.begin(), m_codes.end()));
+            });
+            for (std::size_t j = 0; j < NDim; ++j) {
+                tg.run([this, j, &v_ind]() { apply_isort(m_coords[j], v_ind); });
+            }
+            tg.run([this, &v_ind]() { apply_isort(m_masses, v_ind); });
+            tg.run([this, &v_ind]() {
+                // Apply the new indirect sorting to the original one.
+                apply_isort(m_isort, v_ind);
+                // Establish the indices for ordered iteration (in the original order).
+                // NOTE: this goes in the same task as we need m_isort to be sorted
+                // before calling this function.
+                isort_to_ord_ind();
+            });
+            tg.wait();
         }
-        apply_isort(m_masses, v_ind);
-        // Apply the new indirect sorting to the original one.
-        apply_isort(m_isort, v_ind);
-        // Establish the indices for ordered iteration (in the original order).
-        isort_to_ord_ind();
         // Re-construct the tree.
         m_tree.clear();
         build_tree();
