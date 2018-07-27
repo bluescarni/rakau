@@ -92,9 +92,9 @@ int main(int argc, char **argv)
 
     // auto parts = get_uniform_particles<3>(nparts, bsize);
     auto parts = get_plummer_sphere(nparts, bsize);
-    tree<std::uint64_t, float, 3> t(bsize, parts.begin(),
-                                    {parts.begin() + nparts, parts.begin() + 2 * nparts, parts.begin() + 3 * nparts},
-                                    nparts, max_leaf_n, ncrit);
+    tree<3, float> t(bsize, parts.begin(),
+                     {parts.begin() + nparts, parts.begin() + 2 * nparts, parts.begin() + 3 * nparts}, nparts,
+                     max_leaf_n, ncrit);
     std::cout << t << '\n';
     std::array<std::vector<float>, 3> accs;
     // std::cout << accs[idx * 3] << ", " << accs[idx * 3 + 1] << ", " << accs[idx * 3 + 2] << '\n';

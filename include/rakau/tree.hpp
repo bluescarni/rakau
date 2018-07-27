@@ -549,7 +549,7 @@ inline constexpr bool use_fast_inv_sqrt =
 // - we should probably also think about replacing the morton encoder with some generic solution. It does not
 //   need to be super high performance, as morton encoding is hardly a bottleneck here. It's more important for it
 //   to be generic (i.e., work on a general number of dimensions), correct and compact.
-template <typename UInt, typename F, std::size_t NDim>
+template <std::size_t NDim, typename F, typename UInt = std::size_t>
 class tree
 {
     static_assert(NDim);
@@ -1839,6 +1839,7 @@ private:
                             // available on the platform).
                             using batch_type = xsimd::simd_type<F>;
                             constexpr auto batch_size = batch_type::size;
+                            static_assert(batch_size);
                             // NOTE: we will need batch_size - 1 extra elements at the end of the
                             // temp vectors, to ensure we can load/store a simd vector starting from
                             // the last element.
@@ -2177,8 +2178,8 @@ private:
     cnode_list_type m_crit_nodes;
 };
 
-template <typename UInt, typename F>
-using octree = tree<UInt, F, 3>;
+template <typename F>
+using octree = tree<3, F>;
 
 } // namespace rakau
 

@@ -59,9 +59,9 @@ TEST_CASE("accuracy")
             for (auto max_leaf_n : max_leaf_ns) {
                 for (auto ncrit : ncrits) {
                     std::vector<fp_type> x_diff, y_diff, z_diff;
-                    octree<std::uint64_t, fp_type> t(
-                        bsize, parts.begin(), {parts.begin() + s, parts.begin() + 2u * s, parts.begin() + 3u * s}, s,
-                        max_leaf_n, ncrit);
+                    octree<fp_type> t(bsize, parts.begin(),
+                                      {parts.begin() + s, parts.begin() + 2u * s, parts.begin() + 3u * s}, s,
+                                      max_leaf_n, ncrit);
                     t.accs_o(accs, theta);
                     for (auto i = 0u; i < s; ++i) {
                         auto eacc = t.exact_acc_o(i);
