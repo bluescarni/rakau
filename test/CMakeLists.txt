@@ -8,5 +8,5 @@ function(ADD_RAKAU_TESTCASE arg1)
   add_test(${arg1} ${arg1})
 endfunction()
 
-ADD_RAKAU_TESTCASE(basic)
+ADD_RAKAU_TESTCASE(accuracy)
 ADD_RAKAU_TESTCASE(simd)
