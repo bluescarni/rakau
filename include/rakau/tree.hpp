@@ -1046,8 +1046,8 @@ private:
 
 public:
     template <typename It>
-    explicit tree(const F &box_size, It m_it, std::array<It, NDim> c_it, const size_type &N,
-                  const size_type &max_leaf_n, const size_type &ncrit)
+    explicit tree(const F &box_size, std::array<It, NDim + 1u> cm_it, const size_type &N, const size_type &max_leaf_n,
+                  const size_type &ncrit)
         : m_box_size(box_size), m_max_leaf_n(max_leaf_n), m_ncrit(ncrit)
     {
         simple_timer st("overall tree construction");
@@ -1093,7 +1093,9 @@ public:
                 throw std::overflow_error("the number of particles (" + std::to_string(m_masses.size())
                                           + ") is too large, and it results in an overflow condition");
             }
-            tbb::parallel_for(tbb::blocked_range<size_type>(0u, N), [this, &c_it, &m_it](const auto &range) {
+            tbb::parallel_for(tbb::blocked_range<size_type>(0u, N), [this, &cm_it](const auto &range) {
+                // Extract the iterator to the masses.
+                auto m_it = cm_it[NDim];
                 // Temporary structure used in the encoding.
                 std::array<F, NDim> tmp_coord;
                 // The encoder object.
@@ -1102,8 +1104,8 @@ public:
                 for (auto i = range.begin(); i != range.end(); ++i) {
                     // Write the coords in the temp structure and in the data members.
                     for (std::size_t j = 0; j < NDim; ++j) {
-                        tmp_coord[j] = *(c_it[j] + static_cast<it_diff_t>(i));
-                        m_coords[j][i] = *(c_it[j] + static_cast<it_diff_t>(i));
+                        tmp_coord[j] = *(cm_it[j] + static_cast<it_diff_t>(i));
+                        m_coords[j][i] = *(cm_it[j] + static_cast<it_diff_t>(i));
                     }
                     // Store the mass.
                     m_masses[i] = *(m_it + static_cast<it_diff_t>(i));
@@ -1993,29 +1995,32 @@ public:
 
 private:
     template <typename Tr>
-    static auto ord_c_ranges_impl(Tr &tr)
+    static auto ord_p_ranges_impl(Tr &tr)
     {
         using it_t = decltype(boost::make_permutation_iterator(tr.m_coords[0].begin(), tr.m_ord_ind.begin()));
-        std::array<std::pair<it_t, it_t>, NDim> retval;
+        std::array<std::pair<it_t, it_t>, NDim + 1u> retval;
         for (std::size_t j = 0; j != NDim; ++j) {
             retval[j] = std::make_pair(boost::make_permutation_iterator(tr.m_coords[j].begin(), tr.m_ord_ind.begin()),
                                        boost::make_permutation_iterator(tr.m_coords[j].end(), tr.m_ord_ind.end()));
         }
+        retval[NDim] = std::make_pair(boost::make_permutation_iterator(tr.m_masses.begin(), tr.m_ord_ind.begin()),
+                                      boost::make_permutation_iterator(tr.m_masses.end(), tr.m_ord_ind.end()));
         return retval;
     }
 
 public:
-    auto c_ranges_u() const
+    auto p_ranges_u() const
     {
-        std::array<std::pair<const F *, const F *>, NDim> retval;
+        std::array<std::pair<const F *, const F *>, NDim + 1u> retval;
         for (std::size_t j = 0; j != NDim; ++j) {
             retval[j] = std::make_pair(m_coords[j].data(), m_coords[j].data() + m_coords[j].size());
         }
+        retval[NDim] = std::make_pair(m_masses.data(), m_masses.data() + m_masses.size());
         return retval;
     }
-    auto c_ranges_o() const
+    auto p_ranges_o() const
     {
-        return ord_c_ranges_impl(*this);
+        return ord_p_ranges_impl(*this);
     }
     auto m_range_u() const
     {
@@ -2091,37 +2096,40 @@ private:
         // iterator check that is present in the constructor.
     }
     template <bool Ordered, typename Func>
-    void update_positions_impl(Func &&f)
+    void update_particles_impl(Func &&f)
     {
         if constexpr (Ordered) {
-            // Create an array of ranges to the coordinates in the original order.
+            // Create an array of ranges to the coordinates and masses in the original order.
             using it_t = decltype(boost::make_permutation_iterator(m_coords[0].begin(), m_ord_ind.begin()));
-            std::array<std::pair<it_t, it_t>, NDim> c_pranges;
+            std::array<std::pair<it_t, it_t>, NDim + 1u> c_pranges;
             for (std::size_t j = 0; j != NDim; ++j) {
                 c_pranges[j] = std::make_pair(boost::make_permutation_iterator(m_coords[j].begin(), m_ord_ind.begin()),
                                               boost::make_permutation_iterator(m_coords[j].end(), m_ord_ind.end()));
             }
+            c_pranges[NDim] = std::make_pair(boost::make_permutation_iterator(m_masses.begin(), m_ord_ind.begin()),
+                                             boost::make_permutation_iterator(m_masses.end(), m_ord_ind.end()));
             // Feed it to the functor.
             std::forward<Func>(f)(c_pranges);
         } else {
-            // Create an array of ranges to the coordinates.
-            std::array<std::pair<F *, F *>, NDim> c_ranges;
+            // Create an array of ranges to the coordinates and the masses.
+            std::array<std::pair<F *, F *>, NDim + 1u> p_ranges;
             for (std::size_t j = 0; j != NDim; ++j) {
                 // NOTE: [data(), data() + size) is a valid range also for empty vectors.
-                c_ranges[j] = std::make_pair(m_coords[j].data(), m_coords[j].data() + m_coords[j].size());
+                p_ranges[j] = std::make_pair(m_coords[j].data(), m_coords[j].data() + m_coords[j].size());
             }
+            p_ranges[NDim] = std::make_pair(m_masses.data(), m_masses.data() + m_masses.size());
             // Feed it to the functor.
-            std::forward<Func>(f)(c_ranges);
+            std::forward<Func>(f)(p_ranges);
         }
         // Refresh the tree.
         refresh();
     }
     template <bool Ordered, typename Func>
-    void update_positions_dispatch(Func &&f)
+    void update_particles_dispatch(Func &&f)
     {
-        simple_timer st("overall update_positions");
+        simple_timer st("overall update_particles");
         try {
-            update_positions_impl<Ordered>(std::forward<Func>(f));
+            update_particles_impl<Ordered>(std::forward<Func>(f));
         } catch (...) {
             // Erase everything before re-throwing.
             clear_containers();
@@ -2131,14 +2139,14 @@ private:
 
 public:
     template <typename Func>
-    void update_positions_u(Func &&f)
+    void update_particles_u(Func &&f)
     {
-        update_positions_dispatch<false>(std::forward<Func>(f));
+        update_particles_dispatch<false>(std::forward<Func>(f));
     }
     template <typename Func>
-    void update_positions_o(Func &&f)
+    void update_particles_o(Func &&f)
     {
-        update_positions_dispatch<true>(std::forward<Func>(f));
+        update_particles_dispatch<true>(std::forward<Func>(f));
     }
 
 private:

@@ -9,4 +9,5 @@ function(ADD_RAKAU_TESTCASE arg1)
 endfunction()
 
 ADD_RAKAU_TESTCASE(accuracy)
+ADD_RAKAU_TESTCASE(update)
 ADD_RAKAU_TESTCASE(simd)

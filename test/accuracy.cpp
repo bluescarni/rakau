@@ -37,11 +37,10 @@ TEST_CASE("accuracy")
 {
     tuple_for_each(fp_types{}, [](auto x) {
         using fp_type = decltype(x);
-        constexpr auto theta = static_cast<fp_type>(.001);
+        constexpr auto theta = static_cast<fp_type>(.001), bsize = static_cast<fp_type>(1);
         auto sizes = {10u, 100u, 1000u, 5000u};
         auto max_leaf_ns = {1u, 2u, 8u, 16u};
         auto ncrits = {1u, 16u, 128u, 256u};
-        const fp_type bsize = 1;
         std::array<std::vector<fp_type>, 3> accs;
         auto median = [](auto &v) {
             if (!v.size()) {
@@ -60,9 +59,10 @@ TEST_CASE("accuracy")
             for (auto max_leaf_n : max_leaf_ns) {
                 for (auto ncrit : ncrits) {
                     std::vector<fp_type> x_diff, y_diff, z_diff;
-                    octree<fp_type> t(bsize, parts.begin(),
-                                      {parts.begin() + s, parts.begin() + 2u * s, parts.begin() + 3u * s}, s,
-                                      max_leaf_n, ncrit);
+                    octree<fp_type> t(
+                        bsize,
+                        std::array{parts.begin() + s, parts.begin() + 2u * s, parts.begin() + 3u * s, parts.begin()}, s,
+                        max_leaf_n, ncrit);
                     t.accs_o(accs, theta);
                     for (auto i = 0u; i < s; ++i) {
                         auto eacc = t.exact_acc_o(i);
