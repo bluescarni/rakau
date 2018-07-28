@@ -11,7 +11,7 @@
 #define CATCH_CONFIG_MAIN
 #include "catch.hpp"
 
-#include <array>
+#include <initializer_list>
 #include <iterator>
 #include <random>
 #include <tuple>
@@ -33,9 +33,8 @@ TEST_CASE("update positions")
         constexpr auto bsize = static_cast<fp_type>(1);
         constexpr auto s = 10000u;
         auto parts = get_uniform_particles<3>(s, bsize, rng);
-        octree<fp_type> t(bsize,
-                          std::array{parts.begin() + s, parts.begin() + 2u * s, parts.begin() + 3u * s, parts.begin()},
-                          s, 16, 256),
+        octree<fp_type> t(bsize, {parts.begin() + s, parts.begin() + 2u * s, parts.begin() + 3u * s, parts.begin()}, s,
+                          16, 256),
             t2(t);
         // Select randomly some particle indices to track.
         using size_type = typename decltype(t)::size_type;
@@ -44,7 +43,7 @@ TEST_CASE("update positions")
         std::generate(track_idx.begin(), track_idx.end(), [&idist]() { return idist(rng); });
         // First let's verify that the ordered ranges functions are working properly.
         auto pro = t.p_ranges_o();
-        using oit_diff_t = typename std::iterator_traits<decltype(t.m_range_o().first)>::difference_type;
+        using oit_diff_t = typename std::iterator_traits<decltype(t.p_ranges_o()[0].first)>::difference_type;
         for (auto idx : track_idx) {
             REQUIRE(pro[0].first[static_cast<oit_diff_t>(idx)] == parts[s + idx]);
             REQUIRE(pro[1].first[static_cast<oit_diff_t>(idx)] == parts[2 * s + idx]);

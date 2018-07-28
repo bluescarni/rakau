@@ -1045,6 +1045,7 @@ private:
     }
 
 public:
+    // NOTE: It needs to be a random access iterator, as we need to index into it for parallel iteration.
     template <typename It>
     explicit tree(const F &box_size, std::array<It, NDim + 1u> cm_it, const size_type &N, const size_type &max_leaf_n,
                   const size_type &ncrit)
@@ -1111,7 +1112,7 @@ public:
                     m_masses[i] = *(m_it + static_cast<it_diff_t>(i));
                     // Compute and store the code.
                     m_codes[i] = me(disc_coords(tmp_coord.begin(), m_box_size).begin());
-                    // Store the index for indirect sorting.
+                    // Store the index for indirect sorting (this is just a iota).
                     m_isort[i] = i;
                 }
             });
@@ -1147,6 +1148,32 @@ public:
             throw std::overflow_error("the number of particles (" + std::to_string(m_masses.size())
                                       + ") is too large, and it results in an overflow condition");
         }
+    }
+
+private:
+    template <typename It>
+    static auto ilist_to_array(std::initializer_list<It> ilist)
+    {
+        if (ilist.size() != NDim + 1u) {
+            throw std::invalid_argument("An initializer list containing " + std::to_string(ilist.size())
+                                        + " iterators was used in the construction of a " + std::to_string(NDim)
+                                        + "-dimensional tree, but a list with " + std::to_string(NDim + 1u)
+                                        + " iterators is required instead (" + std::to_string(NDim)
+                                        + " iterators for the coordinates, 1 for the masses)");
+        }
+        std::array<It, NDim + 1u> retval;
+        std::copy(ilist.begin(), ilist.end(), retval.begin());
+        return retval;
+    }
+
+public:
+    // NOTE: as in the other ctor, It must be a ra iterator. This ensures also we can def-construct it in the
+    // ilist_to_array() helper.
+    template <typename It>
+    explicit tree(const F &box_size, std::initializer_list<It> cm_it, const size_type &N, const size_type &max_leaf_n,
+                  const size_type &ncrit)
+        : tree(box_size, ilist_to_array(cm_it), N, max_leaf_n, ncrit)
+    {
     }
     tree(const tree &) = default;
 
@@ -1356,8 +1383,8 @@ private:
             size_type i = 0;
             if constexpr (simd_enabled && NDim == 3u) {
                 // The SIMD-accelerated part.
-                const auto x_ptr = c_ptrs[0], y_ptr = c_ptrs[1], z_ptr = c_ptrs[2], tmp_x = tmp_ptrs[0],
-                           tmp_y = tmp_ptrs[1], tmp_z = tmp_ptrs[2], tmp_dist3 = tmp_ptrs[3];
+                const auto x_ptr = c_ptrs[0], y_ptr = c_ptrs[1], z_ptr = c_ptrs[2];
+                const auto tmp_x = tmp_ptrs[0], tmp_y = tmp_ptrs[1], tmp_z = tmp_ptrs[2], tmp_dist3 = tmp_ptrs[3];
                 tuple_for_each(simd_sizes<F>, [&](auto s) {
                     constexpr auto batch_size = s.value;
                     using batch_type = xsimd::batch<F, batch_size>;
@@ -2021,15 +2048,6 @@ public:
     auto p_ranges_o() const
     {
         return ord_p_ranges_impl(*this);
-    }
-    auto m_range_u() const
-    {
-        return std::make_pair(m_masses.data(), m_masses.data() + m_masses.size());
-    }
-    auto m_range_o() const
-    {
-        return std::make_pair(boost::make_permutation_iterator(m_masses.begin(), m_ord_ind.begin()),
-                              boost::make_permutation_iterator(m_masses.end(), m_ord_ind.end()));
     }
     const auto &ord_ind() const
     {

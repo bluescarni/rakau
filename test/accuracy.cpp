@@ -60,8 +60,7 @@ TEST_CASE("accuracy")
                 for (auto ncrit : ncrits) {
                     std::vector<fp_type> x_diff, y_diff, z_diff;
                     octree<fp_type> t(
-                        bsize,
-                        std::array{parts.begin() + s, parts.begin() + 2u * s, parts.begin() + 3u * s, parts.begin()}, s,
+                        bsize, {parts.begin() + s, parts.begin() + 2u * s, parts.begin() + 3u * s, parts.begin()}, s,
                         max_leaf_n, ncrit);
                     t.accs_o(accs, theta);
                     for (auto i = 0u; i < s; ++i) {

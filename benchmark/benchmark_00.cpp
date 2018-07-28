@@ -7,6 +7,7 @@
 // with this file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
 #include <array>
+#include <initializer_list>
 #include <memory>
 #include <random>
 
@@ -93,10 +94,9 @@ int main(int argc, char **argv)
 
     // auto parts = get_uniform_particles<3>(nparts, bsize);
     auto parts = get_plummer_sphere(nparts, bsize);
-    tree<3, float> t(
-        bsize,
-        std::array{parts.begin() + nparts, parts.begin() + 2 * nparts, parts.begin() + 3 * nparts, parts.begin()},
-        nparts, max_leaf_n, ncrit);
+    tree<3, float> t(bsize,
+                     {parts.begin() + nparts, parts.begin() + 2 * nparts, parts.begin() + 3 * nparts, parts.begin()},
+                     nparts, max_leaf_n, ncrit);
     std::cout << t << '\n';
     std::array<std::vector<float>, 3> accs;
     t.accs_u(accs, 0.75f);
