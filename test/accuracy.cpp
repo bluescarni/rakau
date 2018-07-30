@@ -19,6 +19,7 @@
 #include <cstdlib>
 #include <initializer_list>
 #include <iostream>
+#include <limits>
 #include <numeric>
 #include <random>
 #include <tuple>
@@ -96,7 +97,7 @@ TEST_CASE("accuracy")
         std::cout << "\n\n\ntot_max_x_diff=" << tot_max_x_diff << '\n';
         std::cout << "tot_max_y_diff=" << tot_max_y_diff << '\n';
         std::cout << "tot_max_z_diff=" << tot_max_z_diff << "\n\n\n";
-        if constexpr (std::is_same_v<fp_type, double>) {
+        if constexpr (std::is_same_v<fp_type, double> && std::numeric_limits<fp_type>::is_iec559) {
             // These numbers are, of course, totally arbitrary, based
             // on the fact that 'double' is actually double-precision,
             // and derived experimentally.
