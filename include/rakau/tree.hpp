@@ -375,7 +375,7 @@ inline void checked_uinc(T &out, T add)
 {
     static_assert(std::is_integral_v<T> && std::is_unsigned_v<T>);
     if (out > std::numeric_limits<T>::max() - add) {
-        throw std::overflow_error("overflow in the addition of two unsigned integral values");
+        throw std::overflow_error("Overflow in the addition of two unsigned integral values");
     }
     out += add;
 }
@@ -386,7 +386,7 @@ inline void checked_uinc(std::atomic<T> &out, T add)
     static_assert(std::is_integral_v<T> && std::is_unsigned_v<T>);
     const auto prev = out.fetch_add(add);
     if (prev > std::numeric_limits<T>::max() - add) {
-        throw std::overflow_error("overflow in the addition of two unsigned integral values");
+        throw std::overflow_error("Overflow in the addition of two unsigned integral values");
     }
 }
 
@@ -788,7 +788,7 @@ private:
         using it_diff_t = typename std::iterator_traits<decltype(m_codes.begin())>::difference_type;
         using it_udiff_t = std::make_unsigned_t<it_diff_t>;
         if (m_codes.size() > static_cast<it_udiff_t>(std::numeric_limits<it_diff_t>::max())) {
-            throw std::overflow_error("the number of particles (" + std::to_string(m_codes.size())
+            throw std::overflow_error("The number of particles (" + std::to_string(m_codes.size())
                                       + ") is too large, and it results in an overflow condition");
         }
         // Computation of the level at which we start building the subtrees serially.
@@ -942,11 +942,11 @@ private:
         // NOTE: a couple of final checks to make sure we can use size_type to represent both the tree
         // size and the size of the list of critical nodes.
         if (m_tree.size() > std::numeric_limits<size_type>::max()) {
-            throw std::overflow_error("the size of the tree (" + std::to_string(m_tree.size())
+            throw std::overflow_error("The size of the tree (" + std::to_string(m_tree.size())
                                       + ") is too large, and it results in an overflow condition");
         }
         if (m_crit_nodes.size() > std::numeric_limits<size_type>::max()) {
-            throw std::overflow_error("the size of the critical nodes list (" + std::to_string(m_crit_nodes.size())
+            throw std::overflow_error("The size of the critical nodes list (" + std::to_string(m_crit_nodes.size())
                                       + ") is too large, and it results in an overflow condition");
         }
     }
@@ -992,22 +992,27 @@ private:
             const auto &x = *it;
             // Translate and rescale the coordinate so that -box_size/2 becomes zero
             // and box_size/2 becomes 1.
-            auto tmp = (x + box_size / F(2)) / box_size;
+            auto tmp = x / box_size + F(.5);
             // Rescale by factor.
             tmp *= factor;
             // Check: don't end up with a nonfinite value.
             if (!std::isfinite(tmp)) {
-                throw std::invalid_argument("Not finite!");
+                throw std::invalid_argument("While trying to discretise the input coordinate " + std::to_string(x)
+                                            + ", the non-finite value " + std::to_string(tmp) + " was generated");
             }
             // Check: don't end up outside the [0, factor) range.
             if (tmp < F(0) || tmp >= F(factor)) {
-                throw std::invalid_argument("Out of bounds!");
+                throw std::invalid_argument("The discretisation of the input coordinate " + std::to_string(x)
+                                            + " produced the floating-point value " + std::to_string(tmp)
+                                            + ", which is outside the allowed bounds");
             }
             // Cast to UInt and write to retval.
             retval[i] = static_cast<UInt>(tmp);
             // Last check, make sure we don't overflow.
             if (retval[i] >= factor) {
-                throw std::invalid_argument("Out of bounds! (after cast)");
+                throw std::invalid_argument("The discretisation of the input coordinate " + std::to_string(x)
+                                            + " produced the integral value " + std::to_string(retval[i])
+                                            + ", which is outside the allowed bounds");
             }
         }
         return retval;
@@ -1041,14 +1046,13 @@ private:
     static void check_box_size(const F &box_size)
     {
         if (!std::isfinite(box_size) || box_size <= F(0)) {
-            throw std::invalid_argument("the box size must be a finite positive value, but it is "
+            throw std::invalid_argument("The box size must be a finite positive value, but it is "
                                         + std::to_string(box_size) + " instead");
         }
     }
     // Determine the box size from an input sequence of iterators representing the coordinates and
     // the masses (unused) of the particles in the simulation.
     // NOTE: this function assumes we can index into It up to N.
-    // NOTE: this could probably be simdified.
     template <typename It>
     static F determine_box_size(const std::array<It, NDim + 1u> &cm_it, const size_type &N)
     {
@@ -1108,11 +1112,11 @@ public:
         }
         // Check the max_leaf_n param.
         if (!max_leaf_n) {
-            throw std::invalid_argument("the maximum number of particles per leaf must be nonzero");
+            throw std::invalid_argument("The maximum number of particles per leaf must be nonzero");
         }
         // Check the ncrit param.
         if (!ncrit) {
-            throw std::invalid_argument("the critical number of particles for the vectorised computation of the "
+            throw std::invalid_argument("The critical number of particles for the vectorised computation of the "
                                         "accelerations must be nonzero");
         }
         // Get out soon if there's nothing to do.
@@ -1133,7 +1137,7 @@ public:
         // https://en.cppreference.com/w/cpp/iterator/iterator_traits
         using it_udiff_t = std::make_unsigned_t<it_diff_t>;
         if (m_parts[0].size() > static_cast<it_udiff_t>(std::numeric_limits<it_diff_t>::max())) {
-            throw std::overflow_error("the number of particles (" + std::to_string(m_parts[0].size())
+            throw std::overflow_error("The number of particles (" + std::to_string(m_parts[0].size())
                                       + ") is too large, and it results in an overflow condition");
         }
         // NOTE: these ensure that, from now on, we can just cast
@@ -1315,7 +1319,7 @@ public:
     friend std::ostream &operator<<(std::ostream &os, const tree &t)
     {
         static_assert(unsigned(std::numeric_limits<UInt>::digits) <= std::numeric_limits<std::size_t>::max());
-        os << "Box size " << t.m_box_size << '\n';
+        os << "Box size                 : " << t.m_box_size << '\n';
         os << "Total number of particles: " << t.m_codes.size() << '\n';
         os << "Total number of nodes    : " << t.m_tree.size() << "\n\n";
         os << "First few nodes:\n";
@@ -1918,7 +1922,7 @@ private:
                             // temp vectors, to ensure we can load/store a simd vector starting from
                             // the last element.
                             if ((batch_size - 1u) > (std::numeric_limits<size_type>::max() - npart)) {
-                                throw std::overflow_error("the number of particles in a critical node ("
+                                throw std::overflow_error("The number of particles in a critical node ("
                                                           + std::to_string(npart)
                                                           + ") is too large, and it results in an overflow condition");
                             }
@@ -1945,7 +1949,7 @@ private:
                         // (as all the particles in the domain are contained within [-m_box_size/2, m_box_size/2)).
                         std::fill(tmp_tgt[j].data() + npart, tmp_tgt[j].data() + pdata_size, m_box_size);
                     }
-                    // For the padding masses data, we set the masses to zero. This ensures that the padding data does
+                    // For the padding data, we set the masses to zero. This ensures that the padding data does
                     // not pollute the real accelerations (accelerations from the padding data will end up being
                     // null due to the zero masses).
                     tmp_tgt[NDim].resize(pdata_size);
@@ -1971,11 +1975,11 @@ private:
         const auto theta2 = theta * theta;
         // Input param check.
         if (!std::isfinite(theta2)) {
-            throw std::domain_error("the value of the square of the theta parameter must be finite, but it is "
+            throw std::domain_error("The value of the square of the theta parameter must be finite, but it is "
                                     + std::to_string(theta2) + " instead");
         }
         if (theta < F(0)) {
-            throw std::domain_error("the value of the theta parameter must be non-negative, but it is "
+            throw std::domain_error("The value of the theta parameter must be non-negative, but it is "
                                     + std::to_string(theta) + " instead");
         }
         if constexpr (Ordered) {
@@ -1984,7 +1988,7 @@ private:
             using diff_t = typename std::iterator_traits<std::remove_reference_t<decltype(out[0])>>::difference_type;
             if (m_parts[0].size() > static_cast<std::make_unsigned_t<diff_t>>(std::numeric_limits<diff_t>::max())) {
                 throw std::overflow_error(
-                    "the number of particles (" + std::to_string(m_parts[0].size())
+                    "The number of particles (" + std::to_string(m_parts[0].size())
                     + ") is too large, and it results in an overflow condition when computing the accelerations");
             }
             using it_t = decltype(boost::make_permutation_iterator(out[0], m_isort.begin()));
@@ -2079,7 +2083,7 @@ private:
         using udiff_t = std::make_unsigned_t<diff_t>;
         // Ensure that the iterators we return can index up to the particle number.
         if (tr.m_parts[0].size() > static_cast<udiff_t>(std::numeric_limits<diff_t>::max())) {
-            throw std::overflow_error("the number of particles (" + std::to_string(tr.m_parts[0].size())
+            throw std::overflow_error("The number of particles (" + std::to_string(tr.m_parts[0].size())
                                       + ") is too large, and it results in an overflow condition when constructing "
                                         "ordered iterators to the particle data");
         }
