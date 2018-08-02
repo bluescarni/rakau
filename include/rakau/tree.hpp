@@ -58,6 +58,7 @@
 
 #include <tbb/blocked_range.h>
 #include <tbb/concurrent_vector.h>
+#include <tbb/enumerable_thread_specific.h>
 #include <tbb/parallel_for.h>
 #include <tbb/parallel_sort.h>
 #include <tbb/task_group.h>
@@ -368,18 +369,6 @@ inline void apply_isort(VVec &values, const PVec &perm)
     values = std::move(values_new);
 }
 
-// Little helper to verify that we can index into ElementIt
-// up to at least the value max_index. This is used below to verify
-// that a permuted iterator does not incur in overflows.
-template <typename ElementIt, typename Index>
-inline bool check_perm_it_range(Index max_index)
-{
-    using diff_t = typename std::iterator_traits<ElementIt>::difference_type;
-    using udiff_t = std::make_unsigned_t<diff_t>;
-    static_assert(std::is_integral_v<Index> && std::is_unsigned_v<Index>);
-    return max_index <= static_cast<udiff_t>(std::numeric_limits<diff_t>::max());
-}
-
 // Small helpers for the checked in-place addition of (atomic) unsigned integrals.
 template <typename T>
 inline void checked_uinc(T &out, T add)
@@ -552,8 +541,13 @@ inline constexpr bool use_fast_inv_sqrt =
 template <std::size_t NDim, typename F, typename UInt = std::size_t>
 class tree
 {
+    // Need at least 1 dimension.
     static_assert(NDim);
+    // We often need to compute NDim + 1.
+    static_assert(NDim < std::numeric_limits<std::size_t>::max());
+    // Only C++ FP types are supported at the moment.
     static_assert(std::is_floating_point_v<F>);
+    // UInt must be an unsigned integral.
     static_assert(std::is_integral_v<UInt> && std::is_unsigned_v<UInt>);
     // cbits shortcut.
     static constexpr unsigned cbits = cbits_v<UInt, NDim>;
@@ -971,12 +965,12 @@ private:
                 assert(end > begin);
                 const auto size = end - begin;
                 // Compute the total mass.
-                const auto tot_mass = std::accumulate(m_masses.data() + begin, m_masses.data() + end, F(0));
+                const auto tot_mass = std::accumulate(m_parts[NDim].data() + begin, m_parts[NDim].data() + end, F(0));
                 // Compute the COM for the coordinates.
+                const auto m_ptr = m_parts[NDim].data() + begin;
                 for (std::size_t j = 0; j < NDim; ++j) {
                     F acc(0);
-                    auto m_ptr = m_masses.data() + begin;
-                    auto c_ptr = m_coords[j].data() + begin;
+                    auto c_ptr = m_parts[j].data() + begin;
                     for (std::remove_const_t<decltype(size)> k = 0; k < size; ++k) {
                         acc = fma_wrap(m_ptr[k], c_ptr[k], acc);
                     }
@@ -1051,6 +1045,54 @@ private:
                                         + std::to_string(box_size) + " instead");
         }
     }
+    // Determine the box size from an input sequence of iterators representing the coordinates and
+    // the masses (unused) of the particles in the simulation.
+    // NOTE: this function assumes we can index into It up to N.
+    // NOTE: this could probably be simdified.
+    template <typename It>
+    static F determine_box_size(const std::array<It, NDim + 1u> &cm_it, const size_type &N)
+    {
+        simple_timer st_m("box size deduction");
+        using it_diff_t = typename std::iterator_traits<It>::difference_type;
+        // NOTE: we will be indexing into It up to the value N below. Make sure we checked *outside*
+        // this function that we can do that.
+        assert(N <= static_cast<std::make_unsigned_t<it_diff_t>>(std::numeric_limits<it_diff_t>::max()));
+        // Local maximum coordinates for each thread. For each thread, the initial value
+        // will be std::array<F, NDim>{}, that is, all max coordinates will be zero.
+        tbb::enumerable_thread_specific<std::array<F, NDim>> max_coords(std::array<F, NDim>{});
+        tbb::parallel_for(tbb::blocked_range<size_type>(0u, N), [&cm_it, &max_coords](const auto &range) {
+            auto &local_max = max_coords.local();
+            for (auto i = range.begin(); i != range.end(); ++i) {
+                for (std::size_t j = 0; j < NDim; ++j) {
+                    const auto tmp = std::abs(*(cm_it[j] + static_cast<it_diff_t>(i)));
+                    if (!std::isfinite(tmp)) {
+                        throw std::invalid_argument("While trying to automatically determine the domain size, a "
+                                                    "non-finite coordinate with absolute value "
+                                                    + std::to_string(tmp) + " was encountered");
+                    }
+                    local_max[j] = std::max(local_max[j], tmp);
+                }
+            }
+        });
+        // Combine the maxima from all threads into a single maximum vector.
+        const auto mc = max_coords.combine([](const auto &c1, const auto &c2) {
+            std::array<F, NDim> retval;
+            for (std::size_t j = 0; j < NDim; ++j) {
+                retval[j] = std::max(c1[j], c2[j]);
+            }
+            return retval;
+        });
+        // Pick the max of the NDim coordinates, multiply by 2 to get the box size.
+        auto retval = *std::max_element(mc.begin(), mc.end()) * F(2);
+        // Add a 5% slack.
+        retval += retval / F(20);
+        // Final check.
+        if (!std::isfinite(retval)) {
+            throw std::invalid_argument("The automatic deduction of the domain size produced the non-finite value "
+                                        + std::to_string(retval));
+        }
+        return retval;
+    }
 
 public:
     // NOTE: It needs to be a random access iterator, as we need to index into it for parallel iteration.
@@ -1080,9 +1122,19 @@ public:
             return;
         }
         // Prepare the vectors.
-        m_masses.resize(N);
-        for (auto &vc : m_coords) {
+        for (auto &vc : m_parts) {
             vc.resize(N);
+        }
+        // NOTE: in the parallel for loops below, we need to index into the random-access iterator
+        // type It up to the value N. Make sure we can do that.
+        using it_diff_t = typename std::iterator_traits<It>::difference_type;
+        // NOTE: for use in make_unsigned, it_diff_t must be a C++ integral. This should be ensured
+        // by iterator_traits, at least for input iterators:
+        // https://en.cppreference.com/w/cpp/iterator/iterator_traits
+        using it_udiff_t = std::make_unsigned_t<it_diff_t>;
+        if (m_parts[0].size() > static_cast<it_udiff_t>(std::numeric_limits<it_diff_t>::max())) {
+            throw std::overflow_error("the number of particles (" + std::to_string(m_parts[0].size())
+                                      + ") is too large, and it results in an overflow condition");
         }
         // NOTE: these ensure that, from now on, we can just cast
         // freely between the size types of the masses/coords and codes/indices vectors.
@@ -1091,26 +1143,12 @@ public:
         m_ord_ind.resize(boost::numeric_cast<decltype(m_ord_ind.size())>(N));
         // Deduce the box size, if needed.
         if (m_size_deduced) {
-            simple_timer st_m("box size deduction");
-            tbb::parallel_for(tbb::blocked_range<size_type>(0u, N), [this, &cm_it](const auto &range) {});
+            m_box_size = determine_box_size(cm_it, N);
         }
         {
             // Do the Morton encoding.
             simple_timer st_m("morton encoding");
-            // NOTE: in the parallel for, we need to index into the random-access iterator
-            // type It up to the value N. Make sure we can do that.
-            using it_diff_t = typename std::iterator_traits<It>::difference_type;
-            // NOTE: for use in make_unsigned, it_diff_t must be a C++ integral. This should be ensured
-            // by iterator_traits, at least for input iterators:
-            // https://en.cppreference.com/w/cpp/iterator/iterator_traits
-            using it_udiff_t = std::make_unsigned_t<it_diff_t>;
-            if (m_masses.size() > static_cast<it_udiff_t>(std::numeric_limits<it_diff_t>::max())) {
-                throw std::overflow_error("the number of particles (" + std::to_string(m_masses.size())
-                                          + ") is too large, and it results in an overflow condition");
-            }
             tbb::parallel_for(tbb::blocked_range<size_type>(0u, N), [this, &cm_it](const auto &range) {
-                // Extract the iterator to the masses.
-                auto m_it = cm_it[NDim];
                 // Temporary structure used in the encoding.
                 std::array<F, NDim> tmp_coord;
                 // The encoder object.
@@ -1120,10 +1158,10 @@ public:
                     // Write the coords in the temp structure and in the data members.
                     for (std::size_t j = 0; j < NDim; ++j) {
                         tmp_coord[j] = *(cm_it[j] + static_cast<it_diff_t>(i));
-                        m_coords[j][i] = *(cm_it[j] + static_cast<it_diff_t>(i));
+                        m_parts[j][i] = *(cm_it[j] + static_cast<it_diff_t>(i));
                     }
                     // Store the mass.
-                    m_masses[i] = *(m_it + static_cast<it_diff_t>(i));
+                    m_parts[NDim][i] = *(cm_it[NDim] + static_cast<it_diff_t>(i));
                     // Compute and store the code.
                     m_codes[i] = me(disc_coords(tmp_coord.begin(), m_box_size).begin());
                     // Store the index for indirect sorting (this is just a iota).
@@ -1143,10 +1181,9 @@ public:
                 // Make sure the sort worked as intended.
                 assert(std::is_sorted(m_codes.begin(), m_codes.end()));
             });
-            for (std::size_t j = 0; j < NDim; ++j) {
-                tg.run([this, j]() { apply_isort(m_coords[j], m_isort); });
+            for (std::size_t j = 0; j < NDim + 1u; ++j) {
+                tg.run([this, j]() { apply_isort(m_parts[j], m_isort); });
             }
-            tg.run([this]() { apply_isort(m_masses, m_isort); });
             // Establish the indices for ordered iteration.
             tg.run([this]() { isort_to_ord_ind(); });
             tg.wait();
@@ -1155,13 +1192,6 @@ public:
         build_tree();
         // Now move to the computation of the COM of the nodes.
         build_tree_properties();
-        // NOTE: whenever we need ordered iteration on the particles' data,
-        // we need to be able to index into the vectors' iterators with values
-        // up to the total number of particles. Verify that we can actually do that.
-        if (!check_perm_it_range<decltype(m_masses.begin())>(m_masses.size())) {
-            throw std::overflow_error("the number of particles (" + std::to_string(m_masses.size())
-                                      + ") is too large, and it results in an overflow condition");
-        }
     }
 
 private:
@@ -1195,9 +1225,8 @@ private:
     // Helper to clear all the internal containers.
     void clear_containers()
     {
-        m_masses.clear();
-        for (auto &coord : m_coords) {
-            coord.clear();
+        for (auto &p : m_parts) {
+            p.clear();
         }
         m_codes.clear();
         m_isort.clear();
@@ -1208,10 +1237,10 @@ private:
 
 public:
     tree(tree &&other) noexcept
-        : m_box_size(std::move(other.m_box_size)), m_max_leaf_n(other.m_max_leaf_n), m_ncrit(other.m_ncrit),
-          m_masses(std::move(other.m_masses)), m_coords(std::move(other.m_coords)), m_codes(std::move(other.m_codes)),
-          m_isort(std::move(other.m_isort)), m_ord_ind(std::move(other.m_ord_ind)), m_tree(std::move(other.m_tree)),
-          m_crit_nodes(std::move(other.m_crit_nodes))
+        : m_box_size(std::move(other.m_box_size)), m_size_deduced(other.m_size_deduced),
+          m_max_leaf_n(other.m_max_leaf_n), m_ncrit(other.m_ncrit), m_parts(std::move(other.m_parts)),
+          m_codes(std::move(other.m_codes)), m_isort(std::move(other.m_isort)), m_ord_ind(std::move(other.m_ord_ind)),
+          m_tree(std::move(other.m_tree)), m_crit_nodes(std::move(other.m_crit_nodes))
     {
         // Make sure other is left in an empty state, otherwise we might
         // have in principle assertions failures in the destructor of other
@@ -1223,10 +1252,10 @@ public:
         try {
             if (this != &other) {
                 m_box_size = other.m_box_size;
+                m_size_deduced = other.m_size_deduced;
                 m_max_leaf_n = other.m_max_leaf_n;
                 m_ncrit = other.m_ncrit;
-                m_masses = other.m_masses;
-                m_coords = other.m_coords;
+                m_parts = other.m_parts;
                 m_codes = other.m_codes;
                 m_isort = other.m_isort;
                 m_ord_ind = other.m_ord_ind;
@@ -1246,10 +1275,10 @@ public:
     {
         if (this != &other) {
             m_box_size = std::move(other.m_box_size);
+            m_size_deduced = other.m_size_deduced;
             m_max_leaf_n = other.m_max_leaf_n;
             m_ncrit = other.m_ncrit;
-            m_masses = std::move(other.m_masses);
-            m_coords = std::move(other.m_coords);
+            m_parts = std::move(other.m_parts);
             m_codes = std::move(other.m_codes);
             m_isort = std::move(other.m_isort);
             m_ord_ind = std::move(other.m_ord_ind);
@@ -1267,13 +1296,13 @@ public:
         // Run various debug checks.
 #if !defined(NDEBUG)
         for (std::size_t j = 0; j < NDim; ++j) {
-            assert(m_masses.size() == m_coords[j].size());
+            assert(m_parts[NDim].size() == m_parts[j].size());
         }
 #endif
-        assert(m_masses.size() == m_codes.size());
+        assert(m_parts[0].size() == m_codes.size());
         assert(std::is_sorted(m_codes.begin(), m_codes.end()));
-        assert(m_masses.size() == m_isort.size());
-        assert(m_masses.size() == m_ord_ind.size());
+        assert(m_parts[0].size() == m_isort.size());
+        assert(m_parts[0].size() == m_ord_ind.size());
 #if !defined(NDEBUG)
         for (decltype(m_isort.size()) i = 0; i < m_isort.size(); ++i) {
             assert(m_isort[i] < m_ord_ind.size());
@@ -1286,6 +1315,7 @@ public:
     friend std::ostream &operator<<(std::ostream &os, const tree &t)
     {
         static_assert(unsigned(std::numeric_limits<UInt>::digits) <= std::numeric_limits<std::size_t>::max());
+        os << "Box size " << t.m_box_size << '\n';
         os << "Total number of particles: " << t.m_codes.size() << '\n';
         os << "Total number of nodes    : " << t.m_tree.size() << "\n\n";
         os << "First few nodes:\n";
@@ -1508,8 +1538,8 @@ private:
                     // Pointers to the target node data.
                     const auto x_ptr1 = c_ptrs[0], y_ptr1 = c_ptrs[1], z_ptr1 = c_ptrs[2];
                     // Pointers to the source node data.
-                    const auto x_ptr2 = m_coords[0].data() + leaf_begin, y_ptr2 = m_coords[1].data() + leaf_begin,
-                               z_ptr2 = m_coords[2].data() + leaf_begin, m_ptr2 = m_masses.data() + leaf_begin;
+                    const auto x_ptr2 = m_parts[0].data() + leaf_begin, y_ptr2 = m_parts[1].data() + leaf_begin,
+                               z_ptr2 = m_parts[2].data() + leaf_begin, m_ptr2 = m_parts[3].data() + leaf_begin;
                     // Pointer to the result data.
                     const auto res_x = res_ptrs[0], res_y = res_ptrs[1], res_z = res_ptrs[2];
                     // The number of particles in the source node.
@@ -1663,10 +1693,11 @@ private:
                         for (size_type i2 = leaf_begin; i2 < leaf_end; ++i2) {
                             F dist2(0);
                             for (std::size_t j = 0; j < NDim; ++j) {
-                                diffs[j] = m_coords[j][i2] - pos1[j];
+                                diffs[j] = m_parts[j][i2] - pos1[j];
                                 dist2 = fma_wrap(diffs[j], diffs[j], dist2);
                             }
-                            const auto dist = std::sqrt(dist2), dist3 = dist * dist2, m_dist3 = m_masses[i2] / dist3;
+                            const auto dist = std::sqrt(dist2), dist3 = dist * dist2,
+                                       m_dist3 = m_parts[NDim][i2] / dist3;
                             for (std::size_t j = 0; j < NDim; ++j) {
                                 tmp_res[j][i1] = fma_wrap(diffs[j], m_dist3, tmp_res[j][i1]);
                             }
@@ -1906,7 +1937,7 @@ private:
                     for (std::size_t j = 0; j < NDim; ++j) {
                         tmp_tgt[j].resize(pdata_size);
                         // From 0 to npart we copy the actual node coordinates.
-                        std::copy(m_coords[j].data() + node_begin, m_coords[j].data() + node_begin + npart,
+                        std::copy(m_parts[j].data() + node_begin, m_parts[j].data() + node_begin + npart,
                                   tmp_tgt[j].data());
                         // From npart to pdata_size (the padding values) we insert coordinates outside
                         // the bounding box. This ensures that, when computing accelerations involving
@@ -1914,11 +1945,12 @@ private:
                         // (as all the particles in the domain are contained within [-m_box_size/2, m_box_size/2)).
                         std::fill(tmp_tgt[j].data() + npart, tmp_tgt[j].data() + pdata_size, m_box_size);
                     }
-                    tmp_tgt[NDim].resize(pdata_size);
-                    std::copy(m_masses.data() + node_begin, m_masses.data() + node_begin + npart, tmp_tgt[NDim].data());
-                    // For the padding data, we set the masses to zero. This ensures that the padding data does
+                    // For the padding masses data, we set the masses to zero. This ensures that the padding data does
                     // not pollute the real accelerations (accelerations from the padding data will end up being
                     // null due to the zero masses).
+                    tmp_tgt[NDim].resize(pdata_size);
+                    std::copy(m_parts[NDim].data() + node_begin, m_parts[NDim].data() + node_begin + npart,
+                              tmp_tgt[NDim].data());
                     std::fill(tmp_tgt[NDim].data() + npart, tmp_tgt[NDim].data() + pdata_size, F(0));
                     // Do the computation.
                     vec_acc_on_node<0>(theta2, npart, nodal_code, size_type(0), size_type(m_tree.size()), node_level);
@@ -1947,18 +1979,21 @@ private:
                                     + std::to_string(theta) + " instead");
         }
         if constexpr (Ordered) {
-            using it_t = decltype(boost::make_permutation_iterator(out[0], m_isort.begin()));
             // Make sure we don't run into overflows when doing a permutated iteration
             // over the iterators in out.
-            if (!check_perm_it_range<std::remove_reference_t<decltype(out[0])>>(m_masses.size())) {
+            using diff_t = typename std::iterator_traits<std::remove_reference_t<decltype(out[0])>>::difference_type;
+            if (m_parts[0].size() > static_cast<std::make_unsigned_t<diff_t>>(std::numeric_limits<diff_t>::max())) {
                 throw std::overflow_error(
-                    "the number of particles (" + std::to_string(m_masses.size())
+                    "the number of particles (" + std::to_string(m_parts[0].size())
                     + ") is too large, and it results in an overflow condition when computing the accelerations");
             }
+            using it_t = decltype(boost::make_permutation_iterator(out[0], m_isort.begin()));
             std::array<it_t, NDim> out_pits;
             for (std::size_t j = 0; j != NDim; ++j) {
                 out_pits[j] = boost::make_permutation_iterator(out[j], m_isort.begin());
             }
+            // NOTE: we are checking in the vec_accs_impl function that we can index into
+            // the permuted iterators without overflows (see the use of boost::numeric_cast()).
             vec_accs_impl(out_pits, theta2);
         } else {
             vec_accs_impl(out, theta2);
@@ -1971,7 +2006,7 @@ private:
     {
         std::array<F *, NDim> out_ptrs;
         for (std::size_t j = 0; j != NDim; ++j) {
-            out[j].resize(boost::numeric_cast<decltype(out[j].size())>(m_masses.size()));
+            out[j].resize(boost::numeric_cast<decltype(out[j].size())>(m_parts[0].size()));
             out_ptrs[j] = out[j].data();
         }
         accs_dispatch<Ordered>(out_ptrs, theta);
@@ -2004,7 +2039,7 @@ private:
     std::array<F, NDim> exact_acc_impl(size_type orig_idx) const
     {
         simple_timer st("exact acc computation");
-        const auto size = m_masses.size();
+        const auto size = m_parts[0].size();
         std::array<F, NDim> retval{};
         const auto idx = Ordered ? m_ord_ind[orig_idx] : orig_idx;
         for (size_type i = 0; i < size; ++i) {
@@ -2013,12 +2048,11 @@ private:
             }
             F dist2(0);
             for (std::size_t j = 0; j < NDim; ++j) {
-                dist2 += (m_coords[j][i] - m_coords[j][idx]) * (m_coords[j][i] - m_coords[j][idx]);
+                dist2 += (m_parts[j][i] - m_parts[j][idx]) * (m_parts[j][i] - m_parts[j][idx]);
             }
-            const auto dist = std::sqrt(dist2);
-            const auto dist3 = dist * dist2;
+            const auto dist = std::sqrt(dist2), dist3 = dist * dist2, m_dist3 = m_parts[NDim][i] / dist3;
             for (std::size_t j = 0; j < NDim; ++j) {
-                retval[j] += (m_coords[j][i] - m_coords[j][idx]) * m_masses[i] / dist3;
+                retval[j] += (m_parts[j][i] - m_parts[j][idx]) * m_dist3;
             }
         }
         return retval;
@@ -2035,33 +2069,45 @@ public:
     }
 
 private:
+    // Implementations of the functions to get (un)ordered iterators into the particles.
+    // They are static functions because we need both const and non-const variants of this.
     template <typename Tr>
-    static auto ord_p_ranges_impl(Tr &tr)
+    static auto ord_p_its_impl(Tr &tr)
     {
-        using it_t = decltype(boost::make_permutation_iterator(tr.m_coords[0].begin(), tr.m_ord_ind.begin()));
-        std::array<std::pair<it_t, it_t>, NDim + 1u> retval;
-        for (std::size_t j = 0; j != NDim; ++j) {
-            retval[j] = std::make_pair(boost::make_permutation_iterator(tr.m_coords[j].begin(), tr.m_ord_ind.begin()),
-                                       boost::make_permutation_iterator(tr.m_coords[j].end(), tr.m_ord_ind.end()));
+        using it_t = decltype(boost::make_permutation_iterator(tr.m_parts[0].data(), tr.m_ord_ind.begin()));
+        using diff_t = typename std::iterator_traits<it_t>::difference_type;
+        using udiff_t = std::make_unsigned_t<diff_t>;
+        // Ensure that the iterators we return can index up to the particle number.
+        if (tr.m_parts[0].size() > static_cast<udiff_t>(std::numeric_limits<diff_t>::max())) {
+            throw std::overflow_error("the number of particles (" + std::to_string(tr.m_parts[0].size())
+                                      + ") is too large, and it results in an overflow condition when constructing "
+                                        "ordered iterators to the particle data");
         }
-        retval[NDim] = std::make_pair(boost::make_permutation_iterator(tr.m_masses.begin(), tr.m_ord_ind.begin()),
-                                      boost::make_permutation_iterator(tr.m_masses.end(), tr.m_ord_ind.end()));
+        std::array<it_t, NDim + 1u> retval;
+        for (std::size_t j = 0; j != NDim + 1u; ++j) {
+            retval[j] = boost::make_permutation_iterator(tr.m_parts[j].data(), tr.m_ord_ind.begin());
+        }
+        return retval;
+    }
+    template <typename Tr>
+    static auto unord_p_its_impl(Tr &tr)
+    {
+        using ptr_t = decltype(tr.m_parts[0].data());
+        std::array<ptr_t, NDim + 1u> retval;
+        for (std::size_t j = 0; j != NDim + 1u; ++j) {
+            retval[j] = tr.m_parts[j].data();
+        }
         return retval;
     }
 
 public:
-    auto p_ranges_u() const
+    auto p_its_u() const
     {
-        std::array<std::pair<const F *, const F *>, NDim + 1u> retval;
-        for (std::size_t j = 0; j != NDim; ++j) {
-            retval[j] = std::make_pair(m_coords[j].data(), m_coords[j].data() + m_coords[j].size());
-        }
-        retval[NDim] = std::make_pair(m_masses.data(), m_masses.data() + m_masses.size());
-        return retval;
+        return unord_p_its_impl(*this);
     }
-    auto p_ranges_o() const
+    auto p_its_o() const
     {
-        return ord_p_ranges_impl(*this);
+        return ord_p_its_impl(*this);
     }
     const auto &ord_ind() const
     {
@@ -2073,27 +2119,32 @@ private:
     // to reconstruct the other data members according to the new positions.
     void refresh()
     {
-        // Let's start with generating the new codes, and a create a vector
+        const auto nparts = m_parts[0].size();
+        // First, we need to determine if we need to re-deduce the box size.
+        if (m_size_deduced) {
+            m_box_size = determine_box_size(p_its_u(), nparts);
+        }
+        // Second, let's generate the new codes, and a create a vector
         // for the new indirect sorting of the new codes.
         // NOTE: this is a slight repetition of some code in the constructor.
         // However, there it makes sense to mix the morton encoding with data movement,
         // while here the data is already in the member vectors. So we cannot really
         // refactor these bits in a common function.
-        const auto nparts = m_masses.size();
         std::vector<size_type, di_aligned_allocator<size_type>> v_ind;
         v_ind.resize(boost::numeric_cast<decltype(v_ind.size())>(nparts));
-        tbb::parallel_for(tbb::blocked_range<decltype(m_masses.size())>(0u, nparts), [this, &v_ind](const auto &range) {
-            std::array<F, NDim> tmp_coord;
-            morton_encoder<NDim, UInt> me;
-            for (auto i = range.begin(); i != range.end(); ++i) {
-                for (std::size_t j = 0; j != NDim; ++j) {
-                    tmp_coord[j] = m_coords[j][i];
-                }
-                m_codes[i] = me(disc_coords(tmp_coord.begin(), m_box_size).begin());
-                // NOTE: this is just a iota.
-                v_ind[i] = i;
-            }
-        });
+        tbb::parallel_for(tbb::blocked_range<decltype(m_parts[0].size())>(0u, nparts),
+                          [this, &v_ind](const auto &range) {
+                              std::array<F, NDim> tmp_coord;
+                              morton_encoder<NDim, UInt> me;
+                              for (auto i = range.begin(); i != range.end(); ++i) {
+                                  for (std::size_t j = 0; j != NDim; ++j) {
+                                      tmp_coord[j] = m_parts[j][i];
+                                  }
+                                  m_codes[i] = me(disc_coords(tmp_coord.begin(), m_box_size).begin());
+                                  // NOTE: this is just a iota.
+                                  v_ind[i] = i;
+                              }
+                          });
         // Do the sorting.
         indirect_code_sort(v_ind.begin(), v_ind.end());
         {
@@ -2106,10 +2157,9 @@ private:
                 // Make sure the sort worked as intended.
                 assert(std::is_sorted(m_codes.begin(), m_codes.end()));
             });
-            for (std::size_t j = 0; j < NDim; ++j) {
-                tg.run([this, j, &v_ind]() { apply_isort(m_coords[j], v_ind); });
+            for (std::size_t j = 0; j < NDim + 1u; ++j) {
+                tg.run([this, j, &v_ind]() { apply_isort(m_parts[j], v_ind); });
             }
-            tg.run([this, &v_ind]() { apply_isort(m_masses, v_ind); });
             tg.run([this, &v_ind]() {
                 // Apply the new indirect sorting to the original one.
                 apply_isort(m_isort, v_ind);
@@ -2124,38 +2174,23 @@ private:
         m_tree.clear();
         build_tree();
         build_tree_properties();
-        // NOTE: we are not adding new particles, we don't need the permutation
-        // iterator check that is present in the constructor.
     }
+    // Implementation of the particles update function.
     template <bool Ordered, typename Func>
     void update_particles_impl(Func &&f)
     {
         if constexpr (Ordered) {
-            // Create an array of ranges to the coordinates and masses in the original order.
-            using it_t = decltype(boost::make_permutation_iterator(m_coords[0].begin(), m_ord_ind.begin()));
-            std::array<std::pair<it_t, it_t>, NDim + 1u> c_pranges;
-            for (std::size_t j = 0; j != NDim; ++j) {
-                c_pranges[j] = std::make_pair(boost::make_permutation_iterator(m_coords[j].begin(), m_ord_ind.begin()),
-                                              boost::make_permutation_iterator(m_coords[j].end(), m_ord_ind.end()));
-            }
-            c_pranges[NDim] = std::make_pair(boost::make_permutation_iterator(m_masses.begin(), m_ord_ind.begin()),
-                                             boost::make_permutation_iterator(m_masses.end(), m_ord_ind.end()));
-            // Feed it to the functor.
-            std::forward<Func>(f)(c_pranges);
+            // Apply the functor to the ordered iterators.
+            std::forward<Func>(f)(ord_p_its_impl(*this));
         } else {
-            // Create an array of ranges to the coordinates and the masses.
-            std::array<std::pair<F *, F *>, NDim + 1u> p_ranges;
-            for (std::size_t j = 0; j != NDim; ++j) {
-                // NOTE: [data(), data() + size) is a valid range also for empty vectors.
-                p_ranges[j] = std::make_pair(m_coords[j].data(), m_coords[j].data() + m_coords[j].size());
-            }
-            p_ranges[NDim] = std::make_pair(m_masses.data(), m_masses.data() + m_masses.size());
-            // Feed it to the functor.
-            std::forward<Func>(f)(p_ranges);
+            // Apply the functor to the unordered iterators.
+            std::forward<Func>(f)(unord_p_its_impl(*this));
         }
         // Refresh the tree.
         refresh();
     }
+    // Small wrapper around the particle update function that does
+    // some exception-safe error handling.
     template <bool Ordered, typename Func>
     void update_particles_dispatch(Func &&f)
     {
@@ -2192,10 +2227,8 @@ private:
     // a node is ncrit or less, then we will compute the accelerations on the
     // particles in that node in a vectorised fashion.
     size_type m_ncrit;
-    // The particles' masses.
-    fp_vector m_masses;
-    // The particles' coordinates.
-    std::array<fp_vector, NDim> m_coords;
+    // The particles: NDim coordinates plus masses.
+    std::array<fp_vector, NDim + 1u> m_parts;
     // The particles' Morton codes.
     std::vector<UInt, di_aligned_allocator<UInt>> m_codes;
     // The indirect sorting vector. It establishes how to re-order the

@@ -56,16 +56,16 @@ TEST_CASE("accelerations ordering")
         auto rot_angle = urd(rng);
         t.update_particles_u([rot_angle](const auto &r) {
             for (auto i = 0u; i < s; ++i) {
-                const auto x0 = r[0].first[i];
-                const auto y0 = r[1].first[i];
-                const auto z0 = r[2].first[i];
+                const auto x0 = r[0][i];
+                const auto y0 = r[1][i];
+                const auto z0 = r[2][i];
                 const auto r0 = std::hypot(x0, y0, z0);
                 const auto th0 = std::acos(z0 / r0);
                 const auto phi0 = std::atan2(y0, x0);
                 const auto phi1 = phi0 + rot_angle;
-                r[0].first[i] = r0 * std::sin(th0) * std::cos(phi1);
-                r[1].first[i] = r0 * std::sin(th0) * std::sin(phi1);
-                r[2].first[i] = r0 * std::cos(th0);
+                r[0][i] = r0 * std::sin(th0) * std::cos(phi1);
+                r[1][i] = r0 * std::sin(th0) * std::sin(phi1);
+                r[2][i] = r0 * std::cos(th0);
             }
         });
         // Now let's get the tree-calculated accelerations.
@@ -93,16 +93,16 @@ TEST_CASE("accelerations ordering")
         rot_angle = urd(rng);
         t.update_particles_u([rot_angle](const auto &r) {
             for (auto i = 0u; i < s; ++i) {
-                const auto x0 = r[0].first[i];
-                const auto y0 = r[1].first[i];
-                const auto z0 = r[2].first[i];
+                const auto x0 = r[0][i];
+                const auto y0 = r[1][i];
+                const auto z0 = r[2][i];
                 const auto r0 = std::hypot(x0, y0, z0);
                 const auto th0 = std::acos(z0 / r0);
                 const auto phi0 = std::atan2(y0, x0);
                 const auto phi1 = phi0 + rot_angle;
-                r[0].first[i] = r0 * std::sin(th0) * std::cos(phi1);
-                r[1].first[i] = r0 * std::sin(th0) * std::sin(phi1);
-                r[2].first[i] = r0 * std::cos(th0);
+                r[0][i] = r0 * std::sin(th0) * std::cos(phi1);
+                r[1][i] = r0 * std::sin(th0) * std::sin(phi1);
+                r[2][i] = r0 * std::cos(th0);
             }
         });
         t.accs_o(t_accs, theta);
@@ -127,9 +127,9 @@ TEST_CASE("accelerations ordering")
         auto delta = urd2(rng);
         t.update_particles_u([delta](const auto &r) {
             for (auto i = 0u; i < s; ++i) {
-                r[0].first[i] += delta;
-                r[1].first[i] += delta;
-                r[2].first[i] += delta;
+                r[0][i] += delta;
+                r[1][i] += delta;
+                r[2][i] += delta;
             }
         });
         t.accs_o(t_accs, theta);
@@ -156,9 +156,9 @@ TEST_CASE("accelerations ordering")
         // Let's remove the delta.
         t.update_particles_u([delta](const auto &r) {
             for (auto i = 0u; i < s; ++i) {
-                r[0].first[i] -= delta;
-                r[1].first[i] -= delta;
-                r[2].first[i] -= delta;
+                r[0][i] -= delta;
+                r[1][i] -= delta;
+                r[2][i] -= delta;
             }
         });
         // Compute the tree accelerations.
