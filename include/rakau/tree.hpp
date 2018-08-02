@@ -1043,19 +1043,26 @@ private:
             return codes_ptr[idx1] < codes_ptr[idx2];
         });
     }
+    // Small helper to check that the box size is sane.
+    static void check_box_size(const F &box_size)
+    {
+        if (!std::isfinite(box_size) || box_size <= F(0)) {
+            throw std::invalid_argument("the box size must be a finite positive value, but it is "
+                                        + std::to_string(box_size) + " instead");
+        }
+    }
 
 public:
     // NOTE: It needs to be a random access iterator, as we need to index into it for parallel iteration.
     template <typename It>
-    explicit tree(const F &box_size, std::array<It, NDim + 1u> cm_it, const size_type &N, const size_type &max_leaf_n,
-                  const size_type &ncrit)
-        : m_box_size(box_size), m_max_leaf_n(max_leaf_n), m_ncrit(ncrit)
+    explicit tree(const F &box_size, const std::array<It, NDim + 1u> &cm_it, const size_type &N,
+                  const size_type &max_leaf_n, const size_type &ncrit)
+        : m_box_size(box_size), m_size_deduced(box_size == F(0)), m_max_leaf_n(max_leaf_n), m_ncrit(ncrit)
     {
         simple_timer st("overall tree construction");
-        // Check the box size.
-        if (!std::isfinite(box_size) || box_size <= F(0)) {
-            throw std::invalid_argument("the box size must be a finite positive value, but it is "
-                                        + std::to_string(box_size) + " instead");
+        // Check the box size, if it is not deduced.
+        if (!m_size_deduced) {
+            check_box_size(box_size);
         }
         // Check the max_leaf_n param.
         if (!max_leaf_n) {
@@ -1067,6 +1074,8 @@ public:
                                         "accelerations must be nonzero");
         }
         // Get out soon if there's nothing to do.
+        // NOTE: if the size is deduced, we'll end up with a box size of zero. This is fine
+        // as long as we never do anything with the box size if there are not particles.
         if (!N) {
             return;
         }
@@ -1080,6 +1089,11 @@ public:
         m_codes.resize(boost::numeric_cast<decltype(m_codes.size())>(N));
         m_isort.resize(boost::numeric_cast<decltype(m_isort.size())>(N));
         m_ord_ind.resize(boost::numeric_cast<decltype(m_ord_ind.size())>(N));
+        // Deduce the box size, if needed.
+        if (m_size_deduced) {
+            simple_timer st_m("box size deduction");
+            tbb::parallel_for(tbb::blocked_range<size_type>(0u, N), [this, &cm_it](const auto &range) {});
+        }
         {
             // Do the Morton encoding.
             simple_timer st_m("morton encoding");
@@ -2170,6 +2184,8 @@ public:
 private:
     // The size of the domain.
     F m_box_size;
+    // Flag to signal if the domain size was deduced or explicitly specified.
+    bool m_size_deduced;
     // The maximum number of particles in a leaf node.
     size_type m_max_leaf_n;
     // Number of particles in a critical node: if the number of particles in
