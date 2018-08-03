@@ -1,11 +1,13 @@
 // Copyright 2018 Francesco Biscani (bluescarni@gmail.com)
 //
-// This file is part of the mp++ library.
+// This file is part of the rakau library.
 //
 // This Source Code Form is subject to the terms of the Mozilla
 // Public License v. 2.0. If a copy of the MPL was not distributed
 // with this file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
+#include <array>
+#include <initializer_list>
 #include <memory>
 #include <random>
 
@@ -92,120 +94,14 @@ int main(int argc, char **argv)
 
     // auto parts = get_uniform_particles<3>(nparts, bsize);
     auto parts = get_plummer_sphere(nparts, bsize);
-    tree<3, float> t(bsize, parts.begin(),
-                     {parts.begin() + nparts, parts.begin() + 2 * nparts, parts.begin() + 3 * nparts}, nparts,
-                     max_leaf_n, ncrit);
+    tree<3, float> t(bsize,
+                     {parts.begin() + nparts, parts.begin() + 2 * nparts, parts.begin() + 3 * nparts, parts.begin()},
+                     nparts, max_leaf_n, ncrit);
     std::cout << t << '\n';
     std::array<std::vector<float>, 3> accs;
-    // std::cout << accs[idx * 3] << ", " << accs[idx * 3 + 1] << ", " << accs[idx * 3 + 2] << '\n';
     t.accs_u(accs, 0.75f);
     std::cout << accs[0][t.ord_ind()[idx]] << ", " << accs[1][t.ord_ind()[idx]] << ", " << accs[2][t.ord_ind()[idx]]
               << '\n';
     auto eacc = t.exact_acc_u(t.ord_ind()[idx]);
     std::cout << eacc[0] << ", " << eacc[1] << ", " << eacc[2] << '\n';
-    t.accs_o(accs, 0.75f);
-    std::cout << accs[0][idx] << ", " << accs[1][idx] << ", " << accs[2][idx] << '\n';
-    eacc = t.exact_acc_o(idx);
-    std::cout << eacc[0] << ", " << eacc[1] << ", " << eacc[2] << '\n';
-    std::cout << "ZERO\n";
-    std::cout << accs[0][0] << ", " << accs[1][0] << ", " << accs[2][0] << '\n';
-    eacc = t.exact_acc_o(0);
-    std::cout << eacc[0] << ", " << eacc[1] << ", " << eacc[2] << '\n';
-    // Slightly change the position of a single particle.
-    t.update_positions_o([idx](auto s) {
-        for (std::size_t j = 0; j < 3u; ++j) {
-            s[j].first[idx] += 1E-6;
-        }
-    });
-    t.accs_o(accs, 0.75f);
-    std::cout << accs[0][idx] << ", " << accs[1][idx] << ", " << accs[2][idx] << '\n';
-    eacc = t.exact_acc_o(idx);
-    std::cout << eacc[0] << ", " << eacc[1] << ", " << eacc[2] << '\n';
-    std::cout << accs[0][0] << ", " << accs[1][0] << ", " << accs[2][0] << '\n';
-    eacc = t.exact_acc_o(0);
-    std::cout << eacc[0] << ", " << eacc[1] << ", " << eacc[2] << '\n';
-#if 0
-    // Test ordered iters.
-    auto test_ordered_iters = [&]() {
-        auto [x_r, y_r, z_r] = t.ord_c_ranges();
-        std::cout << *x_r.first << ", " << *y_r.first << ", " << *z_r.first << '\n';
-        std::cout << *(parts.begin() + nparts) << ", " << *(parts.begin() + 2 * nparts) << ", "
-                  << *(parts.begin() + 3 * nparts) << '\n';
-        x_r.first += 5;
-        y_r.first += 5;
-        z_r.first += 5;
-        std::cout << *x_r.first << ", " << *y_r.first << ", " << *z_r.first << '\n';
-        std::cout << *(parts.begin() + nparts + 5) << ", " << *(parts.begin() + 2 * nparts + 5) << ", "
-                  << *(parts.begin() + 3 * nparts + 5) << '\n';
-    };
-    test_ordered_iters();
-    // Update positions, identity.
-    t.update_positions([](const auto &) {});
-    test_ordered_iters();
-    // Again.
-    t.update_positions([](const auto &) {});
-    test_ordered_iters();
-    // Update positions, divide by two.
-    t.update_positions([](auto s) {
-        for (std::size_t j = 0; j < 3u; ++j) {
-            for (; s[j].first != s[j].second; ++s[j].first) {
-                *s[j].first /= 2;
-            }
-        }
-    });
-    test_ordered_iters();
-    // Update positions, take square root.
-    t.update_positions([](auto s) {
-        for (std::size_t j = 0; j < 3u; ++j) {
-            for (; s[j].first != s[j].second; ++s[j].first) {
-                const auto sign = *s[j].first >= 0;
-                if (sign) {
-                    *s[j].first = std::sqrt(*s[j].first);
-                } else {
-                    *s[j].first = -std::sqrt(-*s[j].first);
-                }
-            }
-        }
-    });
-    test_ordered_iters();
-    // Rotate around the z axis by 180 degrees.
-    t.vec_accs_u(accs, 0.75f);
-    std::cout << "vec acc before rotation at idx 42: " << accs[0][t.ord_ind()[42]] << ", " << accs[1][t.ord_ind()[42]]
-              << ", " << accs[2][t.ord_ind()[42]] << '\n';
-    t.update_positions([](const auto &s) {
-        for (auto i = 0u; i < nparts; ++i) {
-            const auto x0 = s[0].first[i];
-            const auto y0 = s[1].first[i];
-            const auto z0 = s[2].first[i];
-            const auto r0 = std::hypot(x0, y0, z0);
-            const auto th0 = std::acos(z0 / r0);
-            const auto phi0 = std::atan2(y0, x0);
-            const auto phi1 = phi0 + boost::math::constants::pi<std::remove_reference_t<decltype(s[0].first[0])>>();
-            s[0].first[i] = r0 * std::sin(th0) * std::cos(phi1);
-            s[1].first[i] = r0 * std::sin(th0) * std::sin(phi1);
-            s[2].first[i] = r0 * std::cos(th0);
-        }
-    });
-    t.vec_accs_u(accs, 0.75f);
-    std::cout << "vec acc after rotation at idx 42: " << accs[0][t.ord_ind()[42]] << ", " << accs[1][t.ord_ind()[42]]
-              << ", " << accs[2][t.ord_ind()[42]] << '\n';
-    // Rotate again.
-    t.update_positions([](const auto &s) {
-        for (auto i = 0u; i < nparts; ++i) {
-            const auto x0 = s[0].first[i];
-            const auto y0 = s[1].first[i];
-            const auto z0 = s[2].first[i];
-            const auto r0 = std::hypot(x0, y0, z0);
-            const auto th0 = std::acos(z0 / r0);
-            const auto phi0 = std::atan2(y0, x0);
-            const auto phi1 = phi0 + boost::math::constants::pi<std::remove_reference_t<decltype(s[0].first[0])>>();
-            s[0].first[i] = r0 * std::sin(th0) * std::cos(phi1);
-            s[1].first[i] = r0 * std::sin(th0) * std::sin(phi1);
-            s[2].first[i] = r0 * std::cos(th0);
-        }
-    });
-    t.vec_accs_u(accs, 0.75f);
-    std::cout << "vec acc after rotation at idx 42: " << accs[0][t.ord_ind()[42]] << ", " << accs[1][t.ord_ind()[42]]
-              << ", " << accs[2][t.ord_ind()[42]] << '\n';
-#endif
 }
