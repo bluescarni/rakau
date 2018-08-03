@@ -1120,8 +1120,7 @@ public:
                                         "accelerations must be nonzero");
         }
         // Get out soon if there's nothing to do.
-        // NOTE: if the size is deduced, we'll end up with a box size of zero. This is fine
-        // as long as we never do anything with the box size if there are not particles.
+        // NOTE: if the size is deduced, we'll end up with a box size of zero.
         if (!N) {
             return;
         }
@@ -1135,8 +1134,7 @@ public:
         // NOTE: for use in make_unsigned, it_diff_t must be a C++ integral. This should be ensured
         // by iterator_traits, at least for input iterators:
         // https://en.cppreference.com/w/cpp/iterator/iterator_traits
-        using it_udiff_t = std::make_unsigned_t<it_diff_t>;
-        if (m_parts[0].size() > static_cast<it_udiff_t>(std::numeric_limits<it_diff_t>::max())) {
+        if (m_parts[0].size() > static_cast<std::make_unsigned_t<it_diff_t>>(std::numeric_limits<it_diff_t>::max())) {
             throw std::overflow_error("The number of particles (" + std::to_string(m_parts[0].size())
                                       + ") is too large, and it results in an overflow condition");
         }
@@ -2218,6 +2216,14 @@ public:
     void update_particles_o(Func &&f)
     {
         update_particles_dispatch<true>(std::forward<Func>(f));
+    }
+    F get_box_size() const
+    {
+        return m_box_size;
+    }
+    bool box_size_deduced() const
+    {
+        return m_size_deduced;
     }
 
 private:

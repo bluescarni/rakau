@@ -9,6 +9,7 @@ function(ADD_RAKAU_TESTCASE arg1)
 endfunction()
 
 ADD_RAKAU_TESTCASE(accuracy)
+ADD_RAKAU_TESTCASE(auto_box_size)
 ADD_RAKAU_TESTCASE(update)
 ADD_RAKAU_TESTCASE(simd)
 ADD_RAKAU_TESTCASE(accel_ordering)
