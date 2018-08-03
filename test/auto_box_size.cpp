@@ -38,6 +38,15 @@ TEST_CASE("automatic box size")
             });
             REQUIRE(t.box_size_deduced());
             REQUIRE(t.get_box_size() == 28 + fp_type(1.4));
+            t.update_particles_u([](const auto &its) {
+                for (std::size_t i = 0; i < 4u; ++i) {
+                    for (std::size_t j = 0; j < 3u; ++j) {
+                        its[j][i] /= 4;
+                    }
+                }
+            });
+            REQUIRE(t.box_size_deduced());
+            REQUIRE(t.get_box_size() == 7 + fp_type(0.35));
         }
     });
 }
