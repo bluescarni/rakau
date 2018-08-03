@@ -47,6 +47,22 @@ TEST_CASE("automatic box size")
             });
             REQUIRE(t.box_size_deduced());
             REQUIRE(t.get_box_size() == 7 + fp_type(0.35));
+            auto its = t.p_its_o();
+
+            REQUIRE(its[0][0] == 0);
+            REQUIRE(its[0][1] == fp_type(1) / 2);
+            REQUIRE(its[0][2] == fp_type(2) / 2);
+            REQUIRE(its[0][3] == fp_type(3) / 2);
+
+            REQUIRE(its[1][0] == fp_type(-4) / 2);
+            REQUIRE(its[1][1] == fp_type(-5) / 2);
+            REQUIRE(its[1][2] == fp_type(-6) / 2);
+            REQUIRE(its[1][3] == fp_type(-7) / 2);
+
+            REQUIRE(its[2][0] == fp_type(4) / 2);
+            REQUIRE(its[2][1] == fp_type(5) / 2);
+            REQUIRE(its[2][2] == fp_type(3) / 2);
+            REQUIRE(its[2][3] == fp_type(1) / 2);
         }
     });
 }
