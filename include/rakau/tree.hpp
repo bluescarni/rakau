@@ -1947,7 +1947,7 @@ private:
                     vec_acc_on_node(0, theta2, npart, nodal_code, size_type(0), size_type(m_tree.size()), node_level);
                     // Write out the result.
                     using it_diff_t = typename std::iterator_traits<It>::difference_type;
-                    for (std::size_t j = 0; j != NDim; ++j) {
+                    for (std::size_t j = 0; j < NDim; ++j) {
                         std::copy(tmp_res[j].data(), tmp_res[j].data() + npart,
                                   out[j] + boost::numeric_cast<it_diff_t>(node_begin));
                     }
@@ -1980,7 +1980,7 @@ private:
             }
             using it_t = decltype(boost::make_permutation_iterator(out[0], m_isort.begin()));
             std::array<it_t, NDim> out_pits;
-            for (std::size_t j = 0; j != NDim; ++j) {
+            for (std::size_t j = 0; j < NDim; ++j) {
                 out_pits[j] = boost::make_permutation_iterator(out[j], m_isort.begin());
             }
             // NOTE: we are checking in the vec_accs_impl function that we can index into
@@ -1996,7 +1996,7 @@ private:
     void accs_dispatch(std::array<std::vector<F, Allocator>, NDim> &out, const F &theta) const
     {
         std::array<F *, NDim> out_ptrs;
-        for (std::size_t j = 0; j != NDim; ++j) {
+        for (std::size_t j = 0; j < NDim; ++j) {
             out[j].resize(boost::numeric_cast<decltype(out[j].size())>(m_parts[0].size()));
             out_ptrs[j] = out[j].data();
         }
@@ -2075,7 +2075,7 @@ private:
                                         "ordered iterators to the particle data");
         }
         std::array<it_t, NDim + 1u> retval;
-        for (std::size_t j = 0; j != NDim + 1u; ++j) {
+        for (std::size_t j = 0; j < NDim + 1u; ++j) {
             retval[j] = boost::make_permutation_iterator(tr.m_parts[j].data(), tr.m_ord_ind.begin());
         }
         return retval;
@@ -2085,7 +2085,7 @@ private:
     {
         using ptr_t = decltype(tr.m_parts[0].data());
         std::array<ptr_t, NDim + 1u> retval;
-        for (std::size_t j = 0; j != NDim + 1u; ++j) {
+        for (std::size_t j = 0; j < NDim + 1u; ++j) {
             retval[j] = tr.m_parts[j].data();
         }
         return retval;
@@ -2128,7 +2128,7 @@ private:
                               std::array<F, NDim> tmp_coord;
                               morton_encoder<NDim, UInt> me;
                               for (auto i = range.begin(); i != range.end(); ++i) {
-                                  for (std::size_t j = 0; j != NDim; ++j) {
+                                  for (std::size_t j = 0; j < NDim; ++j) {
                                       tmp_coord[j] = m_parts[j][i];
                                   }
                                   m_codes[i] = me(disc_coords(tmp_coord.begin(), m_box_size).begin());
