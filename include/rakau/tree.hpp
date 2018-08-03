@@ -1021,7 +1021,11 @@ private:
     // This is used when (re)building the tree.
     void isort_to_ord_ind()
     {
-        tbb::parallel_for(tbb::blocked_range<size_type>(0u, static_cast<size_type>(m_codes.size())),
+        // NOTE: it's *very* important here that we read/write only to/from m_isort and m_ord_ind.
+        // This function is often run in parallel with other functions that touch other members
+        // of the tree, and if we try to access those members here we'll end up with data races.
+        assert(m_isort.size() == m_ord_ind.size());
+        tbb::parallel_for(tbb::blocked_range<size_type>(0u, static_cast<size_type>(m_isort.size())),
                           [this](const auto &range) {
                               for (auto i = range.begin(); i != range.end(); ++i) {
                                   assert(i < m_isort.size());
