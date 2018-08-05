@@ -837,7 +837,7 @@ private:
         const auto root_sqr_node_dim = m_box_size * m_box_size;
         if (!std::isfinite(root_sqr_node_dim)) {
             throw std::invalid_argument(
-                "The computation of the square of the dimension of the domain leads to the non-finite value "
+                "The computation of the square of the dimension of the root node leads to the non-finite value "
                 + std::to_string(root_sqr_node_dim));
         }
         m_tree.emplace_back(1,
@@ -848,7 +848,7 @@ private:
                             // NOTE: make sure mass and COM coords are initialised in a known state (i.e.,
                             // zero for C++ floating-point).
                             0, std::array<F, NDim>{},
-                            // Tree level and square of node dimension.
+                            // Tree level and square of the root node dimension.
                             0, root_sqr_node_dim);
         // Check if the root node is a critical node. It is a critical node if the number of particles is leq m_ncrit
         // (the definition of critical node) or m_max_leaf_n (in which case it will have no children).
@@ -1018,6 +1018,7 @@ private:
     {
         constexpr UInt factor = UInt(1) << cbits;
         for (std::size_t j = 0; j < NDim; ++j) {
+            // Load the coordinate locally.
             const auto x = m_parts[j][idx];
             // Translate and rescale the coordinate so that -box_size/2 becomes zero
             // and box_size/2 becomes 1.
@@ -1435,7 +1436,7 @@ private:
             using batch_type = xsimd::simd_type<F>;
             // Size of batch_type.
             constexpr auto batch_size = batch_type::size;
-            // Shortcuts to the node coordinates / masses.
+            // Shortcuts to the node coordinates.
             const auto x_ptr = p_ptrs[0], y_ptr = p_ptrs[1], z_ptr = p_ptrs[2];
             // Shortcuts to the result vectors.
             const auto res_x = res_ptrs[0], res_y = res_ptrs[1], res_z = res_ptrs[2];
@@ -1745,7 +1746,7 @@ private:
         }
     }
     // Function to check if a source node satisfies the BH criterion and, possibly, to compute
-    // the accelerations due to the source node. src_idx is the index, in the tree structure, of the
+    // the accelerations due to that source node. src_idx is the index, in the tree structure, of the
     // source node, theta2 the square of the opening angle, tgt_size the number
     // of particles in the target node, p_ptrs pointers to the coordinates/masses of the particles
     // in the target node, res_ptrs pointers to the output arrays. The return value is the index
@@ -1768,8 +1769,8 @@ private:
         const auto n_children_src = get<1>(src_node)[2];
         // Copy locally the COM coords of the source.
         const auto com_pos = get<3>(src_node);
-        // Copy locally the size2 of the source node.
-        const auto src_size2 = get<5>(src_node);
+        // Copy locally the dim2 of the source node.
+        const auto src_dim2 = get<5>(src_node);
         // Iteration variables.
         size_type i = 0;
         bool bh_flag = true;
@@ -1781,14 +1782,14 @@ private:
                 constexpr auto batch_size = s.value;
                 using batch_type = xsimd::batch<F, batch_size>;
                 const auto tgt_vec_size = static_cast<size_type>(tgt_size - tgt_size % batch_size);
-                const batch_type src_size2_vec(src_size2), theta2_vec(theta2), x_com_vec(com_pos[0]),
+                const batch_type src_dim2_vec(src_dim2), theta2_vec(theta2), x_com_vec(com_pos[0]),
                     y_com_vec(com_pos[1]), z_com_vec(com_pos[2]);
                 for (; i < tgt_vec_size; i += batch_size) {
                     const auto diff_x = x_com_vec - batch_type(x_ptr + i, xsimd::aligned_mode{}),
                                diff_y = y_com_vec - batch_type(y_ptr + i, xsimd::aligned_mode{}),
                                diff_z = z_com_vec - batch_type(z_ptr + i, xsimd::aligned_mode{}),
                                dist2 = diff_x * diff_x + diff_y * diff_y + diff_z * diff_z;
-                    if (xsimd::any(src_size2_vec >= theta2_vec * dist2)) {
+                    if (xsimd::any(src_dim2_vec >= theta2_vec * dist2)) {
                         // At least one particle in the current batch fails the BH criterion
                         // check. Mark the bh_flag as false, and set i to tgt_size in order
                         // to skip the next calculations. Then break out.
@@ -1816,7 +1817,7 @@ private:
                 tmp_ptrs[j][i] = diff;
                 dist2 = fma_wrap(diff, diff, dist2);
             }
-            if (src_size2 >= theta2 * dist2) {
+            if (src_dim2 >= theta2 * dist2) {
                 // At least one of the particles in the target
                 // node is too close to the COM. Set the flag
                 // to false and exit.
@@ -1851,8 +1852,10 @@ private:
     {
         assert(!m_tree.empty());
         // Tree level of the target node.
-        // NOTE: in principle this could be pre-computed during the construction of the tree
-        // (perhaps for free?), but probably it's not worth it.
+        // NOTE: the target level is available in the tree structure, so in principle we could get
+        // it from there. However, the target node is taken from the list of critical nodes, which
+        // currently does not store the target node index. Let's keep this in mind if we change
+        // the tree building routine.
         const auto tgt_level = tree_level<NDim>(tgt_code);
         // Total size of the tree.
         const auto tree_size = static_cast<size_type>(m_tree.size());
