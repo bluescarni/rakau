@@ -1012,18 +1012,16 @@ private:
             }
         });
     }
-    // Function to discretise the input NDim floating-point coordinates starting at 'it'
-    // into a box of a given size box_size.
-    template <typename It>
-    static auto disc_coords(It it, const F &box_size)
+    // Discretize the coordinates of the particle at index idx. The result will
+    // be written into retval.
+    void disc_coords(std::array<UInt, NDim> &retval, size_type idx) const
     {
         constexpr UInt factor = UInt(1) << cbits;
-        std::array<UInt, NDim> retval;
-        for (std::size_t i = 0; i < NDim; ++i, ++it) {
-            const auto &x = *it;
+        for (std::size_t j = 0; j < NDim; ++j) {
+            const auto x = m_parts[j][idx];
             // Translate and rescale the coordinate so that -box_size/2 becomes zero
             // and box_size/2 becomes 1.
-            auto tmp = x / box_size + F(.5);
+            auto tmp = x / m_box_size + F(.5);
             // Rescale by factor.
             tmp *= factor;
             // Check: don't end up with a nonfinite value.
@@ -1038,15 +1036,14 @@ private:
                                             + ", which is outside the allowed bounds");
             }
             // Cast to UInt and write to retval.
-            retval[i] = static_cast<UInt>(tmp);
+            retval[j] = static_cast<UInt>(tmp);
             // Last check, make sure we don't overflow.
-            if (retval[i] >= factor) {
+            if (retval[j] >= factor) {
                 throw std::invalid_argument("The discretisation of the input coordinate " + std::to_string(x)
-                                            + " produced the integral value " + std::to_string(retval[i])
+                                            + " produced the integral value " + std::to_string(retval[j])
                                             + ", which is outside the allowed bounds");
             }
         }
-        return retval;
     }
     // Small helper to determine m_ord_ind based on the indirect sorting vector m_isort.
     // This is used when (re)building the tree.
@@ -1187,20 +1184,20 @@ public:
             simple_timer st_m("morton encoding");
             tbb::parallel_for(tbb::blocked_range<size_type>(0u, N), [this, &cm_it](const auto &range) {
                 // Temporary structure used in the encoding.
-                std::array<F, NDim> tmp_coord;
+                std::array<UInt, NDim> tmp_dcoord;
                 // The encoder object.
                 morton_encoder<NDim, UInt> me;
                 // Determine the particles' codes, and fill in the particles' data.
                 for (auto i = range.begin(); i != range.end(); ++i) {
                     // Write the coords in the temp structure and in the data members.
                     for (std::size_t j = 0; j < NDim; ++j) {
-                        tmp_coord[j] = *(cm_it[j] + static_cast<it_diff_t>(i));
                         m_parts[j][i] = *(cm_it[j] + static_cast<it_diff_t>(i));
                     }
                     // Store the mass.
                     m_parts[NDim][i] = *(cm_it[NDim] + static_cast<it_diff_t>(i));
                     // Compute and store the code.
-                    m_codes[i] = me(disc_coords(tmp_coord.begin(), m_box_size).begin());
+                    disc_coords(tmp_dcoord, i);
+                    m_codes[i] = me(tmp_dcoord.data());
                     // Store the index for indirect sorting (this is just a iota).
                     m_isort[i] = i;
                 }
@@ -2152,13 +2149,11 @@ private:
         v_ind.resize(boost::numeric_cast<decltype(v_ind.size())>(nparts));
         tbb::parallel_for(tbb::blocked_range<decltype(m_parts[0].size())>(0u, nparts),
                           [this, &v_ind](const auto &range) {
-                              std::array<F, NDim> tmp_coord;
+                              std::array<UInt, NDim> tmp_dcoord;
                               morton_encoder<NDim, UInt> me;
                               for (auto i = range.begin(); i != range.end(); ++i) {
-                                  for (std::size_t j = 0; j < NDim; ++j) {
-                                      tmp_coord[j] = m_parts[j][i];
-                                  }
-                                  m_codes[i] = me(disc_coords(tmp_coord.begin(), m_box_size).begin());
+                                  disc_coords(tmp_dcoord, i);
+                                  m_codes[i] = me(tmp_dcoord.data());
                                   // NOTE: this is just a iota.
                                   v_ind[i] = i;
                               }
