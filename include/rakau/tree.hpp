@@ -61,7 +61,6 @@
 #include <tbb/enumerable_thread_specific.h>
 #include <tbb/parallel_for.h>
 #include <tbb/parallel_sort.h>
-#include <tbb/partitioner.h>
 #include <tbb/task_group.h>
 
 #include <xsimd/xsimd.hpp>
@@ -1183,28 +1182,26 @@ public:
         {
             // Do the Morton encoding.
             simple_timer st_m("morton encoding");
-            tbb::parallel_for(tbb::blocked_range<size_type>(0u, N, 200000ul),
-                              [this, &cm_it](const auto &range) {
-                                  // Temporary structure used in the encoding.
-                                  std::array<UInt, NDim> tmp_dcoord;
-                                  // The encoder object.
-                                  morton_encoder<NDim, UInt> me;
-                                  // Determine the particles' codes, and fill in the particles' data.
-                                  for (auto i = range.begin(); i != range.end(); ++i) {
-                                      // Write the coords in the temp structure and in the data members.
-                                      for (std::size_t j = 0; j < NDim; ++j) {
-                                          m_parts[j][i] = *(cm_it[j] + static_cast<it_diff_t>(i));
-                                      }
-                                      // Store the mass.
-                                      m_parts[NDim][i] = *(cm_it[NDim] + static_cast<it_diff_t>(i));
-                                      // Compute and store the code.
-                                      disc_coords(tmp_dcoord, i);
-                                      m_codes[i] = me(tmp_dcoord.data());
-                                      // Store the index for indirect sorting (this is just a iota).
-                                      m_isort[i] = i;
-                                  }
-                              },
-                              tbb::simple_partitioner{});
+            tbb::parallel_for(tbb::blocked_range<size_type>(0u, N), [this, &cm_it](const auto &range) {
+                // Temporary structure used in the encoding.
+                std::array<UInt, NDim> tmp_dcoord;
+                // The encoder object.
+                morton_encoder<NDim, UInt> me;
+                // Determine the particles' codes, and fill in the particles' data.
+                for (auto i = range.begin(); i != range.end(); ++i) {
+                    // Write the coords in the temp structure and in the data members.
+                    for (std::size_t j = 0; j < NDim; ++j) {
+                        m_parts[j][i] = *(cm_it[j] + static_cast<it_diff_t>(i));
+                    }
+                    // Store the mass.
+                    m_parts[NDim][i] = *(cm_it[NDim] + static_cast<it_diff_t>(i));
+                    // Compute and store the code.
+                    disc_coords(tmp_dcoord, i);
+                    m_codes[i] = me(tmp_dcoord.data());
+                    // Store the index for indirect sorting (this is just a iota).
+                    m_isort[i] = i;
+                }
+            });
         }
         // Do the sorting of m_isort.
         indirect_code_sort(m_isort.begin(), m_isort.end());
