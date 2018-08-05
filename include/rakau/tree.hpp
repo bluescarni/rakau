@@ -2379,19 +2379,106 @@ public:
                                   const std::array<const F *, NDim + 1u> &p_ptrs,
                                   const std::array<F *, NDim> &res_ptrs) const
     {
+        // Local cache.
+        const auto &src_node = m_tree[src_idx];
         // Temporary vectors to store the data computed during the BH criterion check.
         // We will re-use this data later in tree_accel_bh_com().
         auto &tmp_vecs = vec_acc_tmp_vecs();
         std::array<F *, NDim + 1u> tmp_ptrs;
-        if constexpr (simd_enabled && NDim == 3u && false) {
+        if constexpr (simd_enabled && NDim == 3u) {
+            // xsimd batch type.
+            using batch_type = xsimd::simd_type<F>;
+            // The corresponding boolean batch type.
+            using batch_bool_type = typename xsimd::simd_batch_traits<batch_type>::batch_bool_type;
+            // Size of batch_type.
+            constexpr auto batch_size = batch_type::size;
+            // Let's prepare the temp data. We need batch_size * tgt_size space.
+            if (tgt_size > std::numeric_limits<size_type>::max() / batch_size) {
+                throw std::overflow_error("The number of particles in a node, " + std::to_string(tgt_size)
+                                          + ", is too large and leads to an overflow condition during the vectorised "
+                                            "computation of the accelerations");
+            }
+            const auto tmp_data_size = static_cast<size_type>(tgt_size * batch_size);
+            for (std::size_t j = 0; j < NDim + 1u; ++j) {
+                tmp_vecs[j].resize(tmp_data_size);
+                tmp_ptrs[j] = tmp_vecs[j].data();
+            }
+            // Arrays that will contain the COM coordinates, node_dim**2 and BH flag of up to batch_size nodes. The
+            // first elements are initialised with the values from the source node.
+            alignas(XSIMD_DEFAULT_ALIGNMENT) F x_coms[batch_size], y_coms[batch_size], z_coms[batch_size],
+                nd2[batch_size], bh_flags[batch_size];
+            x_coms[0] = get<3>(src_node)[0];
+            y_coms[0] = get<3>(src_node)[1];
+            z_coms[0] = get<3>(src_node)[2];
+            nd2[0] = get_sqr_node_dim(src_level);
+            // NOTE: set the flag to false, which means that the node does *not* fail the
+            // BH criterion check.
+            bh_flags[0] = F(0);
+            // Establish how many nodes we can BH probe in a vectorized fashion.
+            // These are at most batch_size nodes resulting from the depth-first
+            // traversal starting from src_idx up until the first leaf node is found.
+            // NOTE: we are prevented from reading past the end of the tree by
+            // the fact that we stop if the node does not have children (the
+            // last node in the tree won't have any).
+            size_type n_vec_bh = 1;
+            for (auto idx = src_idx; n_vec_bh < batch_size && get<1>(m_tree[idx])[2]; ++n_vec_bh, ++idx) {
+                // Load the COM coordinates into the arrays.
+                x_coms[n_vec_bh] = get<3>(m_tree[idx])[0];
+                y_coms[n_vec_bh] = get<3>(m_tree[idx])[1];
+                z_coms[n_vec_bh] = get<3>(m_tree[idx])[2];
+                // NOTE: going deeper, the node dimension halves, its square is divided by 4.
+                nd2[n_vec_bh] = nd2[n_vec_bh - 1u] / F(4);
+                bh_flags[n_vec_bh] = F(0);
+            }
+            // Make sure to zero init the rest so we don't end up loading garbage in the simd registers.
+            std::fill(x_coms + n_vec_bh, x_coms + batch_size, F(0));
+            std::fill(y_coms + n_vec_bh, y_coms + batch_size, F(0));
+            std::fill(z_coms + n_vec_bh, z_coms + batch_size, F(0));
+            std::fill(nd2 + n_vec_bh, nd2 + batch_size, F(0));
+            // NOTE: the flags are set to 1 to signal failure in the BH criterion check. That is, the padding
+            // data will always fail the BH criterion check.
+            std::fill(bh_flags + n_vec_bh, bh_flags + batch_size, F(1));
+            // Let's create the corresponding batches.
+            const auto x_coms_vec = xsimd::load_aligned(x_coms), y_coms_vec = xsimd::load_aligned(y_coms),
+                       z_coms_vec = xsimd::load_aligned(z_coms), nd2_vec = xsimd::load_aligned(nd2);
+            batch_bool_type bh_flags_vec(xsimd::load_aligned(bh_flags));
+            // Vector version of theta2.
+            const batch_type theta2_vec(theta2);
+            // Get out the pointers to the target and tmp data.
+            const auto x_ptr = p_ptrs[0], y_ptr = p_ptrs[1], z_ptr = p_ptrs[2];
+            const auto tmp_x = tmp_ptrs[0], tmp_y = tmp_ptrs[1], tmp_z = tmp_ptrs[2], tmp_dist3 = tmp_ptrs[3];
+            const auto tgt_vec_size = static_cast<size_type>(tgt_size - tgt_size % batch_size);
+            bool bh_flag = true;
+            size_type i = 0;
+            for (; i < tgt_vec_size; i += batch_size) {
+                const auto diff_x = x_coms_vec - batch_type(x_ptr + i, xsimd::aligned_mode{}),
+                           diff_y = y_coms_vec - batch_type(y_ptr + i, xsimd::aligned_mode{}),
+                           diff_z = z_coms_vec - batch_type(z_ptr + i, xsimd::aligned_mode{}),
+                           dist2 = diff_x * diff_x + diff_y * diff_y + diff_z * diff_z;
+                bh_flags_vec = bh_flags_vec || (nd2_vec >= (theta2_vec * dist2));
+                if (xsimd::all(bh_flags_vec)) {
+                    // For all the nodes, at least one particle fails the BH criterion
+                    // check. Mark the bh_flag as false, and set i to size in order
+                    // to skip the next calculations. Then break out.
+                    bh_flag = false;
+                    i = tgt_size;
+                    break;
+                }
+                diff_x.store_aligned(tmp_x + i);
+                diff_y.store_aligned(tmp_y + i);
+                diff_z.store_aligned(tmp_z + i);
+                if constexpr (use_fast_inv_sqrt<batch_type>) {
+                    inv_sqrt_3(dist2).store_aligned(tmp_dist3 + i);
+                } else {
+                    (xsimd::sqrt(dist2) * dist2).store_aligned(tmp_dist3 + i);
+                }
+            }
         } else {
             // The scalar computation.
             for (std::size_t j = 0; j < NDim + 1u; ++j) {
                 tmp_vecs[j].resize(tgt_size);
                 tmp_ptrs[j] = tmp_vecs[j].data();
             }
-            // Local cache.
-            const auto &src_node = m_tree[src_idx];
             // Copy locally the COM coords of the source.
             const auto com_pos = get<3>(src_node);
             // Copy locally the number of children of the source node.
