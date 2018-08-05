@@ -2064,6 +2064,9 @@ public:
         const auto tmp = m_box_size / static_cast<F>(UInt(1) << node_level);
         return tmp * tmp;
     }
+    // Function to compute the self-interactions within a target node. tgt_size is the number of particles
+    // in the target node, p_ptrs pointers to the target particles' coordinates/masses, res_ptrs pointers to the
+    // output arrays.
     void tree_accel_self_interactions(size_type tgt_size, const std::array<const F *, NDim + 1u> &p_ptrs,
                                       const std::array<F *, NDim> &res_ptrs) const
     {
@@ -2160,6 +2163,10 @@ public:
             }
         }
     }
+    // Function to compute the acceleration on a target node by all the particles of a leaf source node.
+    // src_idx is the index, in the tree structure, of the leaf node, tgt_size the number of particles
+    // in the target node, p_ptrs pointers to the target particles' coordinates/masses, res_ptrs pointers to the output
+    // arrays.
     void tree_accel_leaf(size_type src_idx, size_type tgt_size, const std::array<const F *, NDim + 1u> &p_ptrs,
                          const std::array<F *, NDim> &res_ptrs) const
     {
@@ -2337,6 +2344,10 @@ public:
             }
         }
     }
+    // Function to compute the acceleration due to the COM of a source node onto a target node. src_idx
+    // is the index, in the tree structure, of the source node, tgt_size the number of particles in the
+    // target node, tmp_ptrs are pointers to the temporary data filled in by the tree_accel_bh_check()
+    // function (which will be re-used by this function), res_ptrs pointers to the output arrays.
     void tree_accel_bh_com(size_type src_idx, size_type tgt_size, const std::array<F *, NDim + 1u> &tmp_ptrs,
                            const std::array<F *, NDim> &res_ptrs) const
     {
@@ -2375,6 +2386,12 @@ public:
             }
         }
     }
+    // Function to check if a source node satisfies the BH criterion and, possibly, to compute
+    // the accelerations due to the source node. src_idx is the index, in the tree structure, of the
+    // source node, src_level its level, theta2 the square of the opening angle, tgt_size the number
+    // of particles in the target node, p_ptrs pointers to the coordinates/masses of the particles
+    // in the target node, res_ptrs pointers to the output arrays. The return value is the index
+    // of the next source node in the tree traversal.
     size_type tree_accel_bh_check(size_type src_idx, unsigned src_level, F theta2, size_type tgt_size,
                                   const std::array<const F *, NDim + 1u> &p_ptrs,
                                   const std::array<F *, NDim> &res_ptrs) const
@@ -2383,60 +2400,94 @@ public:
         // We will re-use this data later in tree_accel_bh_com().
         auto &tmp_vecs = vec_acc_tmp_vecs();
         std::array<F *, NDim + 1u> tmp_ptrs;
-        if constexpr (simd_enabled && NDim == 3u && false) {
-        } else {
-            // The scalar computation.
-            for (std::size_t j = 0; j < NDim + 1u; ++j) {
-                tmp_vecs[j].resize(tgt_size);
-                tmp_ptrs[j] = tmp_vecs[j].data();
-            }
-            // Local cache.
-            const auto &src_node = m_tree[src_idx];
-            // Copy locally the COM coords of the source.
-            const auto com_pos = get<3>(src_node);
-            // Copy locally the number of children of the source node.
-            const auto n_children_src = get<1>(src_node)[2];
-            // Determine the size of the source node.
-            const auto src_size2 = get_sqr_node_dim(src_level);
-            // Check the distances of all the particles of the target
-            // node from the COM of the source.
-            bool bh_flag = true;
-            for (size_type i = 0; i < tgt_size; ++i) {
-                F dist2(0);
-                for (std::size_t j = 0; j < NDim; ++j) {
-                    // Store the differences for later use.
-                    const auto diff = com_pos[j] - p_ptrs[j][i];
-                    tmp_ptrs[j][i] = diff;
-                    dist2 = fma_wrap(diff, diff, dist2);
-                }
-                if (src_size2 >= theta2 * dist2) {
-                    // At least one of the particles in the target
-                    // node is too close to the COM. Set the flag
-                    // to false and exit.
-                    bh_flag = false;
-                    break;
-                }
-                // Store dist3 for later use.
-                // NOTE: in the scalar part, we always store dist3.
-                tmp_ptrs[NDim][i] = std::sqrt(dist2) * dist2;
-            }
-            if (bh_flag) {
-                // The source node satisfies the BH criterion for all the particles of the target node. Add the
-                // acceleration due to the com of the source node.
-                tree_accel_bh_com(src_idx, tgt_size, tmp_ptrs, res_ptrs);
-                // We can now skip all the children of the source node.
-                return static_cast<size_type>(src_idx + n_children_src + 1u);
-            }
-            // The source node does not satisfy the BH criterion. We check if it is a leaf
-            // node, in which case we need to compute all the pairwise interactions.
-            if (!n_children_src) {
-                // Leaf node.
-                tree_accel_leaf(src_idx, tgt_size, p_ptrs, res_ptrs);
-            }
-            // In any case, we keep traversing the tree moving to the next node in depth-first order.
-            return static_cast<size_type>(src_idx + 1u);
+        for (std::size_t j = 0; j < NDim + 1u; ++j) {
+            tmp_vecs[j].resize(tgt_size);
+            tmp_ptrs[j] = tmp_vecs[j].data();
         }
+        // Local cache.
+        const auto &src_node = m_tree[src_idx];
+        // Copy locally the COM coords of the source.
+        const auto com_pos = get<3>(src_node);
+        // Copy locally the number of children of the source node.
+        const auto n_children_src = get<1>(src_node)[2];
+        // Determine the size2 of the source node.
+        const auto src_size2 = get_sqr_node_dim(src_level);
+        // Iteration variables.
+        size_type i = 0;
+        bool bh_flag = true;
+        if constexpr (simd_enabled && NDim == 3u) {
+            // The SIMD-accelerated part.
+            const auto x_ptr = p_ptrs[0], y_ptr = p_ptrs[1], z_ptr = p_ptrs[2];
+            const auto tmp_x = tmp_ptrs[0], tmp_y = tmp_ptrs[1], tmp_z = tmp_ptrs[2], tmp_dist3 = tmp_ptrs[3];
+            tuple_for_each(simd_sizes<F>, [&](auto s) {
+                constexpr auto batch_size = s.value;
+                using batch_type = xsimd::batch<F, batch_size>;
+                const auto tgt_vec_size = static_cast<size_type>(tgt_size - tgt_size % batch_size);
+                const batch_type src_size2_vec(src_size2), theta2_vec(theta2), x_com_vec(com_pos[0]),
+                    y_com_vec(com_pos[1]), z_com_vec(com_pos[2]);
+                for (; i < tgt_vec_size; i += batch_size) {
+                    const auto diff_x = x_com_vec - batch_type(x_ptr + i, xsimd::aligned_mode{}),
+                               diff_y = y_com_vec - batch_type(y_ptr + i, xsimd::aligned_mode{}),
+                               diff_z = z_com_vec - batch_type(z_ptr + i, xsimd::aligned_mode{}),
+                               dist2 = diff_x * diff_x + diff_y * diff_y + diff_z * diff_z;
+                    if (xsimd::any(src_size2_vec >= theta2_vec * dist2)) {
+                        // At least one particle in the current batch fails the BH criterion
+                        // check. Mark the bh_flag as false, and set i to tgt_size in order
+                        // to skip the next calculations. Then break out.
+                        bh_flag = false;
+                        i = tgt_size;
+                        break;
+                    }
+                    diff_x.store_aligned(tmp_x + i);
+                    diff_y.store_aligned(tmp_y + i);
+                    diff_z.store_aligned(tmp_z + i);
+                    if constexpr (use_fast_inv_sqrt<batch_type>) {
+                        inv_sqrt_3(dist2).store_aligned(tmp_dist3 + i);
+                    } else {
+                        (xsimd::sqrt(dist2) * dist2).store_aligned(tmp_dist3 + i);
+                    }
+                }
+            });
+        }
+        // The scalar part.
+        for (; i < tgt_size; ++i) {
+            F dist2(0);
+            for (std::size_t j = 0; j < NDim; ++j) {
+                // Store the differences for later use.
+                const auto diff = com_pos[j] - p_ptrs[j][i];
+                tmp_ptrs[j][i] = diff;
+                dist2 = fma_wrap(diff, diff, dist2);
+            }
+            if (src_size2 >= theta2 * dist2) {
+                // At least one of the particles in the target
+                // node is too close to the COM. Set the flag
+                // to false and exit.
+                bh_flag = false;
+                break;
+            }
+            // Store dist3 for later use.
+            // NOTE: in the scalar part, we always store dist3.
+            tmp_ptrs[NDim][i] = std::sqrt(dist2) * dist2;
+        }
+        if (bh_flag) {
+            // The source node satisfies the BH criterion for all the particles of the target node. Add the
+            // acceleration due to the com of the source node.
+            tree_accel_bh_com(src_idx, tgt_size, tmp_ptrs, res_ptrs);
+            // We can now skip all the children of the source node.
+            return static_cast<size_type>(src_idx + n_children_src + 1u);
+        }
+        // The source node does not satisfy the BH criterion. We check if it is a leaf
+        // node, in which case we need to compute all the pairwise interactions.
+        if (!n_children_src) {
+            // Leaf node.
+            tree_accel_leaf(src_idx, tgt_size, p_ptrs, res_ptrs);
+        }
+        // In any case, we keep traversing the tree moving to the next node in depth-first order.
+        return static_cast<size_type>(src_idx + 1u);
     }
+    // Tree traversal for the computation of the accelerations. theta2 is the square of the opening angle,
+    // tgt_size the number of particles in the target node, tgt_code its code, p_ptrs are pointers to the
+    // coordinates/masses of the particles in the target node, res_ptrs pointers to the output arrays.
     void tree_accel(F theta2, size_type tgt_size, UInt tgt_code, const std::array<const F *, NDim + 1u> &p_ptrs,
                     const std::array<F *, NDim> &res_ptrs) const
     {
@@ -2485,7 +2536,7 @@ public:
             src_idx = tree_accel_bh_check(src_idx, src_level, theta2, tgt_size, p_ptrs, res_ptrs);
         }
     }
-    // Top level function fo the vectorised computation of the accelerations.
+    // Top level function for the computation of the accelerations.
     template <typename It>
     void vec_accs_impl2(std::array<It, NDim> &out, F theta2) const
     {
