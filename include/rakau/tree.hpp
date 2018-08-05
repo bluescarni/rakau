@@ -538,6 +538,7 @@ inline constexpr bool use_fast_inv_sqrt =
 // - we should probably also think about replacing the morton encoder with some generic solution. It does not
 //   need to be super high performance, as morton encoding is hardly a bottleneck here. It's more important for it
 //   to be generic (i.e., work on a general number of dimensions), correct and compact.
+// - consider turning the compile time recursion in the tree builder into a runtime recursion.
 template <std::size_t NDim, typename F, typename UInt = std::size_t>
 class tree
 {
@@ -561,14 +562,28 @@ public:
     using size_type = typename fp_vector::size_type;
 
 private:
-    // The node type.
-    using node_type = std::tuple<UInt, std::array<size_type, 3>, F, std::array<F, NDim>>;
+    // The node type:
+    // - code,
+    // - [node_start, node_end, n_children], where:
+    //   - node_start/node_end = the starting/ending indices (in the particles' array) of the node's particles,
+    //   - n_children = the number of children of the node,
+    // - total mass in the node,
+    // - COM coordinates,
+    // - node level,
+    // - square of the edge of the node.
+    using node_type = std::tuple<UInt, std::array<size_type, 3>, F, std::array<F, NDim>, unsigned, F>;
     // The tree type.
     using tree_type = std::vector<node_type, di_aligned_allocator<node_type>>;
     // The critical node descriptor type (nodal code and particle range).
     using cnode_type = std::tuple<UInt, size_type, size_type>;
     // List of critical nodes.
     using cnode_list_type = std::vector<cnode_type, di_aligned_allocator<cnode_type>>;
+    // Small helper to get the square of the dimension of a node at the tree level node_level.
+    F get_sqr_node_dim(unsigned node_level) const
+    {
+        const auto tmp = m_box_size / static_cast<F>(UInt(1) << node_level);
+        return tmp * tmp;
+    }
     // Serial construction of a subtree. The parent of the subtree is the node with code parent_code,
     // at the level ParentLevel. The particles in the children nodes have codes in the [begin, end)
     // range. The children nodes will be appended in depth-first order to tree. crit_nodes is the local
@@ -633,7 +648,9 @@ private:
                                                  size_type(0)},
                         // NOTE: make sure mass and COM coords are initialised in a known state (i.e.,
                         // zero for C++ floating-point).
-                        0, std::array<F, NDim>{});
+                        0, std::array<F, NDim>{},
+                        // Current level and square of the node dimension at the current level.
+                        ParentLevel + 1u, get_sqr_node_dim(ParentLevel + 1u));
                     // Store the tree size before possibly adding more nodes.
                     const auto tree_size = tree.size();
                     // Cast npart to the unsigned counterpart.
@@ -722,7 +739,7 @@ private:
                             std::array<size_type, 3>{static_cast<size_type>(std::distance(m_codes.begin(), it_start)),
                                                      static_cast<size_type>(std::distance(m_codes.begin(), it_end)),
                                                      size_type(0)},
-                            0, std::array<F, NDim>{});
+                            0, std::array<F, NDim>{}, ParentLevel + 1u, get_sqr_node_dim(ParentLevel + 1u));
                         const auto u_npart
                             = static_cast<std::make_unsigned_t<decltype(std::distance(it_start, it_end))>>(npart);
                         // NOTE: we have a critical node only if there are no critical ancestors and either:
@@ -817,6 +834,12 @@ private:
         // lists of critical nodes, in a similar fashion to the vector of partial trees above.
         tbb::concurrent_vector<cnode_list_type> crit_nodes;
         // Add the root node.
+        const auto root_sqr_node_dim = m_box_size * m_box_size;
+        if (!std::isfinite(root_sqr_node_dim)) {
+            throw std::invalid_argument(
+                "The computation of the square of the dimension of the root node leads to the non-finite value "
+                + std::to_string(root_sqr_node_dim));
+        }
         m_tree.emplace_back(1,
                             std::array<size_type, 3>{size_type(0), size_type(m_codes.size()),
                                                      // NOTE: the children count gets inited to zero. It
@@ -824,7 +847,9 @@ private:
                                                      size_type(0)},
                             // NOTE: make sure mass and COM coords are initialised in a known state (i.e.,
                             // zero for C++ floating-point).
-                            0, std::array<F, NDim>{});
+                            0, std::array<F, NDim>{},
+                            // Tree level and square of the root node dimension.
+                            0, root_sqr_node_dim);
         // Check if the root node is a critical node. It is a critical node if the number of particles is leq m_ncrit
         // (the definition of critical node) or m_max_leaf_n (in which case it will have no children).
         const bool root_is_crit = m_codes.size() <= m_ncrit || m_codes.size() <= m_max_leaf_n;
@@ -938,6 +963,12 @@ private:
         assert(std::is_sorted(m_crit_nodes.begin(), m_crit_nodes.end(), [](const auto &t1, const auto &t2) {
             return node_compare<NDim>(get<0>(t1), get<0>(t2));
         }));
+        // Verify the node levels.
+        assert(std::all_of(m_tree.begin(), m_tree.end(),
+                           [](const auto &tup) { return get<4>(tup) == tree_level<NDim>(get<0>(tup)); }));
+        // Verify the node dim2.
+        assert(std::all_of(m_tree.begin(), m_tree.end(),
+                           [this](const auto &tup) { return get<5>(tup) == get_sqr_node_dim(get<4>(tup)); }));
 
         // NOTE: a couple of final checks to make sure we can use size_type to represent both the tree
         // size and the size of the list of critical nodes.
@@ -981,18 +1012,17 @@ private:
             }
         });
     }
-    // Function to discretise the input NDim floating-point coordinates starting at 'it'
-    // into a box of a given size box_size.
-    template <typename It>
-    static auto disc_coords(It it, const F &box_size)
+    // Discretize the coordinates of the particle at index idx. The result will
+    // be written into retval.
+    void disc_coords(std::array<UInt, NDim> &retval, size_type idx) const
     {
         constexpr UInt factor = UInt(1) << cbits;
-        std::array<UInt, NDim> retval;
-        for (std::size_t i = 0; i < NDim; ++i, ++it) {
-            const auto &x = *it;
+        for (std::size_t j = 0; j < NDim; ++j) {
+            // Load the coordinate locally.
+            const auto x = m_parts[j][idx];
             // Translate and rescale the coordinate so that -box_size/2 becomes zero
             // and box_size/2 becomes 1.
-            auto tmp = x / box_size + F(.5);
+            auto tmp = x / m_box_size + F(.5);
             // Rescale by factor.
             tmp *= factor;
             // Check: don't end up with a nonfinite value.
@@ -1007,21 +1037,24 @@ private:
                                             + ", which is outside the allowed bounds");
             }
             // Cast to UInt and write to retval.
-            retval[i] = static_cast<UInt>(tmp);
+            retval[j] = static_cast<UInt>(tmp);
             // Last check, make sure we don't overflow.
-            if (retval[i] >= factor) {
+            if (retval[j] >= factor) {
                 throw std::invalid_argument("The discretisation of the input coordinate " + std::to_string(x)
-                                            + " produced the integral value " + std::to_string(retval[i])
+                                            + " produced the integral value " + std::to_string(retval[j])
                                             + ", which is outside the allowed bounds");
             }
         }
-        return retval;
     }
     // Small helper to determine m_ord_ind based on the indirect sorting vector m_isort.
     // This is used when (re)building the tree.
     void isort_to_ord_ind()
     {
-        tbb::parallel_for(tbb::blocked_range<size_type>(0u, static_cast<size_type>(m_codes.size())),
+        // NOTE: it's *very* important here that we read/write only to/from m_isort and m_ord_ind.
+        // This function is often run in parallel with other functions that touch other members
+        // of the tree, and if we try to access those members here we'll end up with data races.
+        assert(m_isort.size() == m_ord_ind.size());
+        tbb::parallel_for(tbb::blocked_range<size_type>(0u, static_cast<size_type>(m_isort.size())),
                           [this](const auto &range) {
                               for (auto i = range.begin(); i != range.end(); ++i) {
                                   assert(i < m_isort.size());
@@ -1152,20 +1185,20 @@ public:
             simple_timer st_m("morton encoding");
             tbb::parallel_for(tbb::blocked_range<size_type>(0u, N), [this, &cm_it](const auto &range) {
                 // Temporary structure used in the encoding.
-                std::array<F, NDim> tmp_coord;
+                std::array<UInt, NDim> tmp_dcoord;
                 // The encoder object.
                 morton_encoder<NDim, UInt> me;
                 // Determine the particles' codes, and fill in the particles' data.
                 for (auto i = range.begin(); i != range.end(); ++i) {
                     // Write the coords in the temp structure and in the data members.
                     for (std::size_t j = 0; j < NDim; ++j) {
-                        tmp_coord[j] = *(cm_it[j] + static_cast<it_diff_t>(i));
                         m_parts[j][i] = *(cm_it[j] + static_cast<it_diff_t>(i));
                     }
                     // Store the mass.
                     m_parts[NDim][i] = *(cm_it[NDim] + static_cast<it_diff_t>(i));
                     // Compute and store the code.
-                    m_codes[i] = me(disc_coords(tmp_coord.begin(), m_box_size).begin());
+                    disc_coords(tmp_dcoord, i);
+                    m_codes[i] = me(tmp_dcoord.data());
                     // Store the index for indirect sorting (this is just a iota).
                     m_isort[i] = i;
                 }
@@ -1390,366 +1423,24 @@ private:
         res_y_vec = xsimd::fma(diff_y, m2_dist3, res_y_vec);
         res_z_vec = xsimd::fma(diff_z, m2_dist3, res_z_vec);
     }
-    // Compute the accelerations on the particles of a target node induced by the particles of another
-    // node (the source). 'size' is the size of the target node (we need it because the temporary vectors might have
-    // padding data). begin/end is the range, in the tree structure, encompassing the source node and its children.
-    // node_size2 is the square of the size of the source node. The accelerations will be written into the
-    // temporary storage provided by vec_acc_tmp_res(). SLevel is the tree level of the source node.
-    template <unsigned SLevel>
-    void vec_acc_from_node(const F &theta2, size_type size, size_type begin, size_type end, const F &node_size2) const
+    // Function to compute the self-interactions within a target node. tgt_size is the number of particles
+    // in the target node, p_ptrs pointers to the target particles' coordinates/masses, res_ptrs pointers to the
+    // output arrays.
+    void tree_accel_self_interactions(size_type tgt_size, const std::array<const F *, NDim + 1u> &p_ptrs,
+                                      const std::array<F *, NDim> &res_ptrs) const
     {
-        if constexpr (SLevel <= cbits) {
-            // Check that SLevel is consistent with the tree data.
-            assert(tree_level<NDim>(get<0>(m_tree[begin])) == SLevel);
-            // Check that node_size2 is correct.
-            assert(node_size2 == m_box_size / (UInt(1) << SLevel) * m_box_size / (UInt(1) << SLevel));
-            // Prepare pointers to the input and output data.
-            auto &tmp_res = vec_acc_tmp_res();
-            const auto &tmp_tgt = tgt_tmp_data();
-            std::array<F *, NDim> res_ptrs;
-            std::array<const F *, NDim> c_ptrs;
-            for (std::size_t j = 0; j < NDim; ++j) {
-                res_ptrs[j] = tmp_res[j].data();
-                c_ptrs[j] = tmp_tgt[j].data();
-            }
-            // Temporary vectors to store the pos differences and dist3 below.
-            // We will store the data generated in the BH criterion check because
-            // we can re-use it later to compute the accelerations.
-            auto &tmp_vecs = vec_acc_tmp_vecs();
-            std::array<F *, NDim + 1u> tmp_ptrs;
-            for (std::size_t j = 0; j < NDim + 1u; ++j) {
-                tmp_vecs[j].resize(size);
-                tmp_ptrs[j] = tmp_vecs[j].data();
-            }
-            // Copy locally the COM coords of the source.
-            const auto com_pos = get<3>(m_tree[begin]);
-            // Check the distances of all the particles of the target
-            // node from the COM of the source.
-            bool bh_flag = true;
-            size_type i = 0;
-            if constexpr (simd_enabled && NDim == 3u) {
-                // The SIMD-accelerated part.
-                const auto x_ptr = c_ptrs[0], y_ptr = c_ptrs[1], z_ptr = c_ptrs[2];
-                const auto tmp_x = tmp_ptrs[0], tmp_y = tmp_ptrs[1], tmp_z = tmp_ptrs[2], tmp_dist3 = tmp_ptrs[3];
-                tuple_for_each(simd_sizes<F>, [&](auto s) {
-                    constexpr auto batch_size = s.value;
-                    using batch_type = xsimd::batch<F, batch_size>;
-                    const auto vec_size = static_cast<size_type>(size - size % batch_size);
-                    const batch_type node_size2_vec(node_size2), theta2_vec(theta2), x_com_vec(com_pos[0]),
-                        y_com_vec(com_pos[1]), z_com_vec(com_pos[2]);
-                    for (; i < vec_size; i += batch_size) {
-                        const auto diff_x = x_com_vec - batch_type(x_ptr + i, xsimd::aligned_mode{}),
-                                   diff_y = y_com_vec - batch_type(y_ptr + i, xsimd::aligned_mode{}),
-                                   diff_z = z_com_vec - batch_type(z_ptr + i, xsimd::aligned_mode{}),
-                                   dist2 = diff_x * diff_x + diff_y * diff_y + diff_z * diff_z;
-                        if (xsimd::any(node_size2_vec >= theta2_vec * dist2)) {
-                            // At least one particle in the current batch fails the BH criterion
-                            // check. Mark the bh_flag as false, and set i to size in order
-                            // to skip the next calculations. Then break out.
-                            bh_flag = false;
-                            i = size;
-                            break;
-                        }
-                        diff_x.store_aligned(tmp_x + i);
-                        diff_y.store_aligned(tmp_y + i);
-                        diff_z.store_aligned(tmp_z + i);
-                        if constexpr (use_fast_inv_sqrt<batch_type>) {
-                            inv_sqrt_3(dist2).store_aligned(tmp_dist3 + i);
-                        } else {
-                            (xsimd::sqrt(dist2) * dist2).store_aligned(tmp_dist3 + i);
-                        }
-                    }
-                });
-            }
-            for (; i < size; ++i) {
-                F dist2(0);
-                for (std::size_t j = 0; j < NDim; ++j) {
-                    // Store the differences for later use.
-                    const auto diff = com_pos[j] - c_ptrs[j][i];
-                    tmp_ptrs[j][i] = diff;
-                    dist2 = fma_wrap(diff, diff, dist2);
-                }
-                if (node_size2 >= theta2 * dist2) {
-                    // At least one of the particles in the target
-                    // node is too close to the COM. Set the flag
-                    // to false and exit.
-                    bh_flag = false;
-                    break;
-                }
-                // Store dist3 for later use.
-                // NOTE: in the scalar part, we always store dist3.
-                tmp_ptrs[NDim][i] = std::sqrt(dist2) * dist2;
-            }
-            if (bh_flag) {
-                // The source node satisfies the BH criterion for
-                // all the particles of the target node. Add the accelerations.
-                //
-                // Load the mass of the COM of the sibling node.
-                const auto m_com = get<2>(m_tree[begin]);
-                i = 0;
-                if constexpr (simd_enabled && NDim == 3u) {
-                    // The SIMD-accelerated part.
-                    const auto tmp_x = tmp_ptrs[0], tmp_y = tmp_ptrs[1], tmp_z = tmp_ptrs[2], tmp_dist3 = tmp_ptrs[3],
-                               res_x = res_ptrs[0], res_y = res_ptrs[1], res_z = res_ptrs[2];
-                    tuple_for_each(simd_sizes<F>, [&](auto s) {
-                        constexpr auto batch_size = s.value;
-                        using batch_type = xsimd::batch<F, batch_size>;
-                        const batch_type m_com_vec(m_com);
-                        const auto vec_size = static_cast<size_type>(size - size % batch_size);
-                        for (; i < vec_size; i += batch_size) {
-                            const auto m_com_dist3_vec
-                                = use_fast_inv_sqrt<batch_type>
-                                      ? m_com_vec * batch_type(tmp_dist3 + i, xsimd::aligned_mode{})
-                                      : m_com_vec / batch_type(tmp_dist3 + i, xsimd::aligned_mode{}),
-                                xdiff = batch_type(tmp_x + i, xsimd::aligned_mode{}),
-                                ydiff = batch_type(tmp_y + i, xsimd::aligned_mode{}),
-                                zdiff = batch_type(tmp_z + i, xsimd::aligned_mode{});
-                            xsimd::fma(xdiff, m_com_dist3_vec, batch_type(res_x + i, xsimd::aligned_mode{}))
-                                .store_aligned(res_x + i);
-                            xsimd::fma(ydiff, m_com_dist3_vec, batch_type(res_y + i, xsimd::aligned_mode{}))
-                                .store_aligned(res_y + i);
-                            xsimd::fma(zdiff, m_com_dist3_vec, batch_type(res_z + i, xsimd::aligned_mode{}))
-                                .store_aligned(res_z + i);
-                        }
-                    });
-                }
-                for (; i < size; ++i) {
-                    const auto m_com_dist3 = m_com / tmp_ptrs[NDim][i];
-                    for (std::size_t j = 0; j < NDim; ++j) {
-                        res_ptrs[j][i] = fma_wrap(tmp_ptrs[j][i], m_com_dist3, res_ptrs[j][i]);
-                    }
-                }
-                return;
-            }
-            // At least one particle in the target node is too close to the
-            // COM of the source node. If we can, we go deeper, otherwise we must compute
-            // all the pairwise interactions between all the particles in the
-            // target and source nodes.
-            const auto n_children = get<1>(m_tree[begin])[2];
-            if (!n_children) {
-                // The source node is a leaf, compute all the accelerations induced by its
-                // particles on the particles of the target node.
-                //
-                // NOTE: we do this here, rather than earlier, as it might be that the node
-                // is far enough to satisfy the BH criterion. In such a case we save a lot
-                // of operations, as we are avoiding all the pairwise interactions.
-                //
-                // Establish the range of the source node.
-                const auto leaf_begin = get<1>(m_tree[begin])[0], leaf_end = get<1>(m_tree[begin])[1];
-                if constexpr (simd_enabled && NDim == 3u) {
-                    // Pointers to the target node data.
-                    const auto x_ptr1 = c_ptrs[0], y_ptr1 = c_ptrs[1], z_ptr1 = c_ptrs[2];
-                    // Pointers to the source node data.
-                    const auto x_ptr2 = m_parts[0].data() + leaf_begin, y_ptr2 = m_parts[1].data() + leaf_begin,
-                               z_ptr2 = m_parts[2].data() + leaf_begin, m_ptr2 = m_parts[3].data() + leaf_begin;
-                    // Pointer to the result data.
-                    const auto res_x = res_ptrs[0], res_y = res_ptrs[1], res_z = res_ptrs[2];
-                    // The number of particles in the source node.
-                    const auto size_leaf = static_cast<size_type>(leaf_end - leaf_begin);
-                    // NOTE: we will now divide the source and target nodes into blocks whose sizes
-                    // are multiples of the available simd vector sizes. For instance, if the
-                    // available vector sizes are 16, 8, 4 (AVX512 float) and the target/source
-                    // nodes have both size 45, then we will have a size-16 block in the [0, 32)
-                    // range, a size-8 block in the [0, 40) range, a size-4 block in the [0, 44)
-                    // range and a remainder block in the [44, 45) range. We then do a double iteration
-                    // on the simd sizes, which yields the following pairs for the simd sizes (in order):
-                    //
-                    // 16-16, 16-8, 16-4,
-                    // 8-16, 8-8, 8-4,
-                    // 4-16, 4-8, 4-4.
-                    //
-                    // For each pair, we pick the minimum simd size (e.g., 16-8 will yield a simd size of 8,
-                    // 4-16 a simd size of 4, etc.) and we compute block-block interactions via vector
-                    // instructions. A worked out example:
-                    //
-                    // 16-16, i1 = 0, i2 = 0, simd_size = 16 -> [0, 32) x [0, 32) (simd-simd)
-                    // 16-8, i1 = 0, i2 = 32, simd_size = 8 -> [0, 32) x [32, 40) (simd-simd)
-                    // 16-4, i1 = 0, i2 = 40, simd_size = 4 -> [0, 32) x [40, 44) (simd-simd)
-                    // remainder, i1 = 0, i2 = 44, simd_size = 16 -> [0, 32) x [40, 45) (simd-scalar)
-                    //
-                    // 8-16, i1 = 32, i2 = 0, simd_size = 8 -> [32, 40) x [0, 32) (simd-simd)
-                    // 8-8, i1 = 32, i2 = 32, simd_size = 8 -> [32, 40) x [32, 40) (simd-simd)
-                    // 8-4, i1 = 32, i2 = 40, simd_size = 4 -> [32, 40) x [40, 44) (simd-simd)
-                    // remainder, i1 = 32, i2 = 44, simd_size = 8 -> [32, 40) x [40, 45) (simd-scalar)
-                    //
-                    // 4-16, i1 = 40, i2 = 0, simd_size = 4 -> [40, 44) x [0, 32) (simd-simd)
-                    // 4-8, i1 = 40, i2 = 32, simd_size = 4 -> [40, 44) x [32, 40) (simd-simd)
-                    // 4-4, i1 = 40, i2 = 40, simd_size = 4 -> [40, 44) x [40, 44) (simd-simd)
-                    // remainder, i1 = 40, i2 = 44, simd_size = 4 -> [40, 44) x [40, 45) (simd-scalar)
-                    size_type i1 = 0;
-                    tuple_for_each(simd_sizes<F>, [&](auto s1) {
-                        constexpr auto batch_size1 = s1.value;
-                        using batch_type1 = xsimd::batch<F, batch_size1>;
-                        const auto vec_size1 = static_cast<size_type>(size - size % batch_size1);
-                        size_type i2 = 0;
-                        tuple_for_each(simd_sizes<F>, [&](auto s2) {
-                            constexpr auto batch_size2 = s2.value;
-                            const auto vec_size2 = static_cast<size_type>(size_leaf - size_leaf % batch_size2);
-                            // The simd vector size is the smallest between s1 and s2.
-                            // NOTE: we use s1.value rather than batch_size1 to workaround a GCC ICE.
-                            constexpr auto batch_size = std::min(s1.value, batch_size2);
-                            using batch_type = xsimd::batch<F, batch_size>;
-                            if (i2 == vec_size2) {
-                                // Exit early if the inner loop has no iterations.
-                                return;
-                            }
-                            for (auto idx1 = i1; idx1 < vec_size1; idx1 += batch_size) {
-                                // Load the current batch of target data.
-                                const auto xvec1 = batch_type(x_ptr1 + idx1, xsimd::aligned_mode{}),
-                                           yvec1 = batch_type(y_ptr1 + idx1, xsimd::aligned_mode{}),
-                                           zvec1 = batch_type(z_ptr1 + idx1, xsimd::aligned_mode{});
-                                // Init the batches for computing the accelerations, loading the
-                                // accumulated acceleration for the current batch.
-                                auto res_x_vec = batch_type(res_x + idx1, xsimd::aligned_mode{}),
-                                     res_y_vec = batch_type(res_y + idx1, xsimd::aligned_mode{}),
-                                     res_z_vec = batch_type(res_z + idx1, xsimd::aligned_mode{});
-                                for (auto idx2 = i2; idx2 < vec_size2; idx2 += batch_size) {
-                                    auto xvec2 = batch_type(x_ptr2 + idx2), yvec2 = batch_type(y_ptr2 + idx2),
-                                         zvec2 = batch_type(z_ptr2 + idx2), mvec2 = batch_type(m_ptr2 + idx2);
-                                    batch_bs_3d(res_x_vec, res_y_vec, res_z_vec, xvec1, yvec1, zvec1, xvec2, yvec2,
-                                                zvec2, mvec2);
-                                    for (std::size_t j = 1; j < batch_size; ++j) {
-                                        // Above we computed the element-wise accelerations of a source batch
-                                        // onto a target batch. We need to rotate the source batch
-                                        // batch_size - 1 times and perform again the computation in order
-                                        // to compute all possible particle-particle interactions.
-                                        xvec2 = rotate(xvec2);
-                                        yvec2 = rotate(yvec2);
-                                        zvec2 = rotate(zvec2);
-                                        mvec2 = rotate(mvec2);
-                                        batch_bs_3d(res_x_vec, res_y_vec, res_z_vec, xvec1, yvec1, zvec1, xvec2, yvec2,
-                                                    zvec2, mvec2);
-                                    }
-                                }
-                                // Store the updated accelerations in the temporary vectors.
-                                res_x_vec.store_aligned(res_x + idx1);
-                                res_y_vec.store_aligned(res_y + idx1);
-                                res_z_vec.store_aligned(res_z + idx1);
-                            }
-                            // Update the index into the source node.
-                            i2 = vec_size2;
-                        });
-                        if (i2 == size_leaf) {
-                            // NOTE: exit early if possible. Note that we have to update
-                            // i1 manually here (if we run the loop below, it will be updated
-                            // in the loop header).
-                            i1 = vec_size1;
-                            return;
-                        }
-                        for (; i1 < vec_size1; i1 += batch_size1) {
-                            const auto xvec1 = batch_type1(x_ptr1 + i1, xsimd::aligned_mode{}),
-                                       yvec1 = batch_type1(y_ptr1 + i1, xsimd::aligned_mode{}),
-                                       zvec1 = batch_type1(z_ptr1 + i1, xsimd::aligned_mode{});
-                            auto res_x_vec = batch_type1(res_x + i1, xsimd::aligned_mode{}),
-                                 res_y_vec = batch_type1(res_y + i1, xsimd::aligned_mode{}),
-                                 res_z_vec = batch_type1(res_z + i1, xsimd::aligned_mode{});
-                            for (auto idx2 = i2; idx2 < size_leaf; ++idx2) {
-                                // NOTE: here we are doing batch/scalar interactions.
-                                batch_bs_3d(res_x_vec, res_y_vec, res_z_vec, xvec1, yvec1, zvec1, x_ptr2[idx2],
-                                            y_ptr2[idx2], z_ptr2[idx2], m_ptr2[idx2]);
-                            }
-                            res_x_vec.store_aligned(res_x + i1);
-                            res_y_vec.store_aligned(res_y + i1);
-                            res_z_vec.store_aligned(res_z + i1);
-                        }
-                    });
-                    // These are the interactions between the remainder of the target node
-                    // and the source node.
-                    // NOTE: here we are not using any simd operations. In principle, we could either:
-                    // - do scalar-batch interactions followed by an horizontal sum to accumulate
-                    //   the contribution of a source batch onto a single target particle, or
-                    // - do scalar-batch interactions followed by a store to a local buffer and a
-                    //   scalar accumulation.
-                    // The first option has bad performance, the second one does not seem to buy anything
-                    // performance-wise. Let's keep in mind the implementation at
-                    // 6a1618d9f5db8a61b76cd32e3c38fe2034bfe666
-                    // if we ever want to revisit this.
-                    for (; i1 < size; ++i1) {
-                        const auto x1 = x_ptr1[i1], y1 = y_ptr1[i1], z1 = z_ptr1[i1];
-                        // Load the current accelerations on the target particle into local variables.
-                        auto rx = res_x[i1], ry = res_y[i1], rz = res_z[i1];
-                        for (size_type i2 = 0; i2 < size_leaf; ++i2) {
-                            // NOTE: scalar/scalar interactions.
-                            const auto diff_x = x_ptr2[i2] - x1, diff_y = y_ptr2[i2] - y1, diff_z = z_ptr2[i2] - z1,
-                                       dist2 = diff_x * diff_x + diff_y * diff_y + diff_z * diff_z,
-                                       dist = std::sqrt(dist2), dist3 = dist * dist2, m_dist3 = m_ptr2[i2] / dist3;
-                            rx = fma_wrap(diff_x, m_dist3, rx);
-                            ry = fma_wrap(diff_y, m_dist3, ry);
-                            rz = fma_wrap(diff_z, m_dist3, rz);
-                        }
-                        // Store the updated accelerations.
-                        res_x[i1] = rx;
-                        res_y[i1] = ry;
-                        res_z[i1] = rz;
-                    }
-                } else {
-                    // Local variables for the scalar computation.
-                    std::array<F, NDim> pos1, diffs;
-                    for (size_type i1 = 0; i1 < size; ++i1) {
-                        // Load the coordinates of the current particle
-                        // in the target node.
-                        for (std::size_t j = 0; j < NDim; ++j) {
-                            pos1[j] = c_ptrs[j][i1];
-                        }
-                        // Iterate over the particles in the sibling node.
-                        for (size_type i2 = leaf_begin; i2 < leaf_end; ++i2) {
-                            F dist2(0);
-                            for (std::size_t j = 0; j < NDim; ++j) {
-                                diffs[j] = m_parts[j][i2] - pos1[j];
-                                dist2 = fma_wrap(diffs[j], diffs[j], dist2);
-                            }
-                            const auto dist = std::sqrt(dist2), dist3 = dist * dist2,
-                                       m_dist3 = m_parts[NDim][i2] / dist3;
-                            for (std::size_t j = 0; j < NDim; ++j) {
-                                tmp_res[j][i1] = fma_wrap(diffs[j], m_dist3, tmp_res[j][i1]);
-                            }
-                        }
-                    }
-                }
-                return;
-            }
-            // We can go deeper in the tree.
-            //
-            // Determine the size of the node at the next level.
-            const auto next_node_size = m_box_size / (UInt(1) << (SLevel + 1u));
-            const auto next_node_size2 = next_node_size * next_node_size;
-            // Bump up begin to move to the first child.
-            for (++begin; begin != end; begin += get<1>(m_tree[begin])[2] + 1u) {
-                vec_acc_from_node<SLevel + 1u>(theta2, size, begin, begin + get<1>(m_tree[begin])[2] + 1u,
-                                               next_node_size2);
-            }
-        } else {
-            ignore_args(size, begin, end);
-            // NOTE: we cannot go deeper than the maximum level of the tree.
-            // The n_children check above will prevent reaching this point at runtime.
-            assert(false);
-        }
-    }
-    // Compute the accelerations on the particles in a node due to node's particles themselves.
-    // npart is the number of particles in the node. The self accelerations will be added to the accelerations
-    // in the temporary storage.
-    void vec_node_self_interactions(size_type npart) const
-    {
-        // Prepare common pointers to the input and output data.
-        auto &tmp_res = vec_acc_tmp_res();
-        const auto &tmp_tgt = tgt_tmp_data();
-        std::array<F *, NDim> res_ptrs;
-        std::array<const F *, NDim> c_ptrs;
-        for (std::size_t j = 0; j < NDim; ++j) {
-            res_ptrs[j] = tmp_res[j].data();
-            c_ptrs[j] = tmp_tgt[j].data();
-        }
-        const F *m_ptr = tmp_tgt[NDim].data();
+        // Pointer to the masses.
+        const auto m_ptr = p_ptrs[NDim];
         if constexpr (simd_enabled && NDim == 3u) {
             // xsimd batch type.
             using batch_type = xsimd::simd_type<F>;
             // Size of batch_type.
             constexpr auto batch_size = batch_type::size;
             // Shortcuts to the node coordinates.
-            const auto x_ptr = c_ptrs[0], y_ptr = c_ptrs[1], z_ptr = c_ptrs[2];
+            const auto x_ptr = p_ptrs[0], y_ptr = p_ptrs[1], z_ptr = p_ptrs[2];
             // Shortcuts to the result vectors.
             const auto res_x = res_ptrs[0], res_y = res_ptrs[1], res_z = res_ptrs[2];
-            for (size_type i1 = 0; i1 < npart; i1 += batch_size) {
+            for (size_type i1 = 0; i1 < tgt_size; i1 += batch_size) {
                 // Load the first batch of particles.
                 const auto xvec1 = xsimd::load_aligned(x_ptr + i1), yvec1 = xsimd::load_aligned(y_ptr + i1),
                            zvec1 = xsimd::load_aligned(z_ptr + i1), mvec1 = xsimd::load_aligned(m_ptr + i1);
@@ -1757,7 +1448,7 @@ private:
                 batch_type res_x_vec1(F(0)), res_y_vec1(F(0)), res_z_vec1(F(0));
                 // Now we iterate over the node particles starting 1 position past i1 (to avoid self interactions).
                 // This is the classical n body inner loop.
-                for (size_type i2 = i1 + 1u; i2 < npart; ++i2) {
+                for (size_type i2 = i1 + 1u; i2 < tgt_size; ++i2) {
                     // Load the second batch of particles.
                     const auto xvec2 = xsimd::load_unaligned(x_ptr + i2), yvec2 = xsimd::load_unaligned(y_ptr + i2),
                                zvec2 = xsimd::load_unaligned(z_ptr + i2), mvec2 = xsimd::load_unaligned(m_ptr + i2);
@@ -1795,21 +1486,21 @@ private:
         } else {
             // Temporary vectors to be used in the loops below.
             std::array<F, NDim> diffs, pos1;
-            for (size_type i1 = 0; i1 < npart; ++i1) {
+            for (size_type i1 = 0; i1 < tgt_size; ++i1) {
                 // Load the coords of the current particle.
                 for (std::size_t j = 0; j < NDim; ++j) {
-                    pos1[j] = c_ptrs[j][i1];
+                    pos1[j] = p_ptrs[j][i1];
                 }
                 // Load the mass of the current particle.
                 const auto m1 = m_ptr[i1];
                 // The acceleration vector on the current particle
                 // (inited to zero).
                 std::array<F, NDim> a1{};
-                for (size_type i2 = i1 + 1u; i2 < npart; ++i2) {
+                for (size_type i2 = i1 + 1u; i2 < tgt_size; ++i2) {
                     // Determine dist2, dist and dist3.
                     F dist2(0);
                     for (std::size_t j = 0; j < NDim; ++j) {
-                        diffs[j] = c_ptrs[j][i2] - pos1[j];
+                        diffs[j] = p_ptrs[j][i2] - pos1[j];
                         dist2 = fma_wrap(diffs[j], diffs[j], dist2);
                     }
                     const auto dist = std::sqrt(dist2), dist3 = dist2 * dist, m2_dist3 = m_ptr[i2] / dist3,
@@ -1831,102 +1522,418 @@ private:
             }
         }
     }
-    // Compute the total acceleration on the particles in a target node. npart the number of particles in the node.
-    // [sib_begin, sib_end) is the index range, in the tree structure, encompassing the target, its parent and its
-    // parent's siblings at the tree level Level. nodal_code is the nodal code of the target, node_level its level.
-    template <unsigned Level>
-    void vec_acc_on_node(const F &theta2, size_type npart, UInt nodal_code, size_type sib_begin, size_type sib_end,
-                         unsigned node_level) const
+    // Function to compute the acceleration on a target node by all the particles of a leaf source node.
+    // src_idx is the index, in the tree structure, of the leaf node, tgt_size the number of particles
+    // in the target node, p_ptrs pointers to the target particles' coordinates/masses, res_ptrs pointers to the output
+    // arrays.
+    void tree_accel_leaf(size_type src_idx, size_type tgt_size, const std::array<const F *, NDim + 1u> &p_ptrs,
+                         const std::array<F *, NDim> &res_ptrs) const
     {
-        if constexpr (Level <= cbits) {
-            // Make sure the node level is consistent with the nodal code.
-            assert(node_level == tree_level<NDim>(nodal_code));
-            // We proceed breadth-first examining all the siblings of the target's parent
-            // (or of the node itself, at the last iteration) at the current level.
+        // Get a reference to the source node.
+        const auto &src_node = m_tree[src_idx];
+        // Establish the range of the source node.
+        const auto src_begin = get<1>(src_node)[0], src_end = get<1>(src_node)[1];
+        if constexpr (simd_enabled && NDim == 3u) {
+            // Pointers to the target node data.
+            const auto x_ptr1 = p_ptrs[0], y_ptr1 = p_ptrs[1], z_ptr1 = p_ptrs[2];
+            // Pointers to the source node data.
+            const auto x_ptr2 = m_parts[0].data() + src_begin, y_ptr2 = m_parts[1].data() + src_begin,
+                       z_ptr2 = m_parts[2].data() + src_begin, m_ptr2 = m_parts[3].data() + src_begin;
+            // Pointers to the result data.
+            const auto res_x = res_ptrs[0], res_y = res_ptrs[1], res_z = res_ptrs[2];
+            // The number of particles in the source node.
+            const auto src_size = static_cast<size_type>(src_end - src_begin);
+            // NOTE: we will now divide the source and target nodes into blocks whose sizes
+            // are multiples of the available simd vector sizes. For instance, if the
+            // available vector sizes are 16, 8, 4 (AVX512 float) and the target/source
+            // nodes have both size 45, then we will have a size-16 block in the [0, 32)
+            // range, a size-8 block in the [0, 40) range, a size-4 block in the [0, 44)
+            // range and a remainder block in the [44, 45) range. We then do a double iteration
+            // on the simd sizes, which yields the following pairs for the simd sizes (in order):
             //
-            // Compute the shifted code. This is the nodal code of the target's parent
-            // at the current level (or the nodal code of the target itself at the last
-            // iteration).
-            const auto s_code = nodal_code >> ((node_level - Level) * NDim);
-            auto new_sib_begin = sib_end;
-            // Determine the size of the target at the current level.
-            const auto node_size = m_box_size / (UInt(1) << Level);
-            const auto node_size2 = node_size * node_size;
-            for (auto idx = sib_begin; idx != sib_end; idx += get<1>(m_tree[idx])[2] + 1u) {
-                if (get<0>(m_tree[idx]) == s_code) {
-                    // We are in the target's parent, or the target itself.
-                    if (Level == node_level) {
-                        // Last iteration, we are in the target itself. Compute the
-                        // self-interactions within the target.
-                        vec_node_self_interactions(npart);
-                    } else {
-                        // We identified the parent of the target at the current
-                        // level. Store its starting index for later.
-                        new_sib_begin = idx;
+            // 16-16, 16-8, 16-4,
+            // 8-16, 8-8, 8-4,
+            // 4-16, 4-8, 4-4.
+            //
+            // For each pair, we pick the minimum simd size (e.g., 16-8 will yield a simd size of 8,
+            // 4-16 a simd size of 4, etc.) and we compute block-block interactions via vector
+            // instructions. A worked out example:
+            //
+            // 16-16, i1 = 0, i2 = 0, simd_size = 16 -> [0, 32) x [0, 32) (simd-simd)
+            // 16-8, i1 = 0, i2 = 32, simd_size = 8 -> [0, 32) x [32, 40) (simd-simd)
+            // 16-4, i1 = 0, i2 = 40, simd_size = 4 -> [0, 32) x [40, 44) (simd-simd)
+            // remainder, i1 = 0, i2 = 44, simd_size = 16 -> [0, 32) x [40, 45) (simd-scalar)
+            //
+            // 8-16, i1 = 32, i2 = 0, simd_size = 8 -> [32, 40) x [0, 32) (simd-simd)
+            // 8-8, i1 = 32, i2 = 32, simd_size = 8 -> [32, 40) x [32, 40) (simd-simd)
+            // 8-4, i1 = 32, i2 = 40, simd_size = 4 -> [32, 40) x [40, 44) (simd-simd)
+            // remainder, i1 = 32, i2 = 44, simd_size = 8 -> [32, 40) x [40, 45) (simd-scalar)
+            //
+            // 4-16, i1 = 40, i2 = 0, simd_size = 4 -> [40, 44) x [0, 32) (simd-simd)
+            // 4-8, i1 = 40, i2 = 32, simd_size = 4 -> [40, 44) x [32, 40) (simd-simd)
+            // 4-4, i1 = 40, i2 = 40, simd_size = 4 -> [40, 44) x [40, 44) (simd-simd)
+            // remainder, i1 = 40, i2 = 44, simd_size = 4 -> [40, 44) x [40, 45) (simd-scalar)
+            size_type i1 = 0;
+            tuple_for_each(simd_sizes<F>, [&](auto s1) {
+                constexpr auto batch_size1 = s1.value;
+                using batch_type1 = xsimd::batch<F, batch_size1>;
+                const auto vec_size1 = static_cast<size_type>(tgt_size - tgt_size % batch_size1);
+                size_type i2 = 0;
+                tuple_for_each(simd_sizes<F>, [&](auto s2) {
+                    constexpr auto batch_size2 = s2.value;
+                    const auto vec_size2 = static_cast<size_type>(src_size - src_size % batch_size2);
+                    // The simd vector size is the smallest between s1 and s2.
+                    // NOTE: we use s1.value rather than batch_size1 to workaround a GCC ICE.
+                    constexpr auto batch_size = std::min(s1.value, batch_size2);
+                    using batch_type = xsimd::batch<F, batch_size>;
+                    if (i2 == vec_size2) {
+                        // Exit early if the inner loop has no iterations.
+                        return;
                     }
-                } else {
-                    // Compute the accelerations from the current sibling.
-                    vec_acc_from_node<Level>(theta2, npart, idx, idx + 1u + get<1>(m_tree[idx])[2], node_size2);
+                    for (auto idx1 = i1; idx1 < vec_size1; idx1 += batch_size) {
+                        // Load the current batch of target data.
+                        const auto xvec1 = batch_type(x_ptr1 + idx1, xsimd::aligned_mode{}),
+                                   yvec1 = batch_type(y_ptr1 + idx1, xsimd::aligned_mode{}),
+                                   zvec1 = batch_type(z_ptr1 + idx1, xsimd::aligned_mode{});
+                        // Init the batches for computing the accelerations, loading the
+                        // accumulated acceleration for the current batch.
+                        auto res_x_vec = batch_type(res_x + idx1, xsimd::aligned_mode{}),
+                             res_y_vec = batch_type(res_y + idx1, xsimd::aligned_mode{}),
+                             res_z_vec = batch_type(res_z + idx1, xsimd::aligned_mode{});
+                        for (auto idx2 = i2; idx2 < vec_size2; idx2 += batch_size) {
+                            auto xvec2 = batch_type(x_ptr2 + idx2), yvec2 = batch_type(y_ptr2 + idx2),
+                                 zvec2 = batch_type(z_ptr2 + idx2), mvec2 = batch_type(m_ptr2 + idx2);
+                            batch_bs_3d(res_x_vec, res_y_vec, res_z_vec, xvec1, yvec1, zvec1, xvec2, yvec2, zvec2,
+                                        mvec2);
+                            for (std::size_t j = 1; j < batch_size; ++j) {
+                                // Above we computed the element-wise accelerations of a source batch
+                                // onto a target batch. We need to rotate the source batch
+                                // batch_size - 1 times and perform again the computation in order
+                                // to compute all possible particle-particle interactions.
+                                xvec2 = rotate(xvec2);
+                                yvec2 = rotate(yvec2);
+                                zvec2 = rotate(zvec2);
+                                mvec2 = rotate(mvec2);
+                                batch_bs_3d(res_x_vec, res_y_vec, res_z_vec, xvec1, yvec1, zvec1, xvec2, yvec2, zvec2,
+                                            mvec2);
+                            }
+                        }
+                        // Store the updated accelerations in the temporary vectors.
+                        res_x_vec.store_aligned(res_x + idx1);
+                        res_y_vec.store_aligned(res_y + idx1);
+                        res_z_vec.store_aligned(res_z + idx1);
+                    }
+                    // Update the index into the source node.
+                    i2 = vec_size2;
+                });
+                if (i2 == src_size) {
+                    // NOTE: exit early if possible. Note that we have to update
+                    // i1 manually here (if we run the loop below, it will be updated
+                    // in the loop header).
+                    i1 = vec_size1;
+                    return;
                 }
-            }
-            if (Level != node_level) {
-                // If we are not at the last iteration, we must have changed
-                // new_sib_begin in the loop above.
-                assert(new_sib_begin != sib_end);
-            } else {
-                ignore_args(new_sib_begin);
-            }
-            if (Level < node_level) {
-                // We are not at the level of the target yet. Recurse down.
-                vec_acc_on_node<Level + 1u>(theta2, npart, nodal_code, new_sib_begin + 1u,
-                                            new_sib_begin + 1u + get<1>(m_tree[new_sib_begin])[2], node_level);
+                for (; i1 < vec_size1; i1 += batch_size1) {
+                    const auto xvec1 = batch_type1(x_ptr1 + i1, xsimd::aligned_mode{}),
+                               yvec1 = batch_type1(y_ptr1 + i1, xsimd::aligned_mode{}),
+                               zvec1 = batch_type1(z_ptr1 + i1, xsimd::aligned_mode{});
+                    auto res_x_vec = batch_type1(res_x + i1, xsimd::aligned_mode{}),
+                         res_y_vec = batch_type1(res_y + i1, xsimd::aligned_mode{}),
+                         res_z_vec = batch_type1(res_z + i1, xsimd::aligned_mode{});
+                    for (auto idx2 = i2; idx2 < src_size; ++idx2) {
+                        // NOTE: here we are doing batch/scalar interactions.
+                        batch_bs_3d(res_x_vec, res_y_vec, res_z_vec, xvec1, yvec1, zvec1, x_ptr2[idx2], y_ptr2[idx2],
+                                    z_ptr2[idx2], m_ptr2[idx2]);
+                    }
+                    res_x_vec.store_aligned(res_x + i1);
+                    res_y_vec.store_aligned(res_y + i1);
+                    res_z_vec.store_aligned(res_z + i1);
+                }
+            });
+            // These are the interactions between the remainder of the target node
+            // and the source node.
+            // NOTE: here we are not using any simd operations. In principle, we could either:
+            // - do scalar-batch interactions followed by an horizontal sum to accumulate
+            //   the contribution of a source batch onto a single target particle, or
+            // - do scalar-batch interactions followed by a store to a local buffer and a
+            //   scalar accumulation.
+            // The first option has bad performance, the second one does not seem to buy anything
+            // performance-wise. Let's keep in mind the implementation at
+            // 6a1618d9f5db8a61b76cd32e3c38fe2034bfe666
+            // if we ever want to revisit this.
+            for (; i1 < tgt_size; ++i1) {
+                const auto x1 = x_ptr1[i1], y1 = y_ptr1[i1], z1 = z_ptr1[i1];
+                // Load the current accelerations on the target particle into local variables.
+                auto rx = res_x[i1], ry = res_y[i1], rz = res_z[i1];
+                for (size_type i2 = 0; i2 < src_size; ++i2) {
+                    // NOTE: scalar/scalar interactions.
+                    const auto diff_x = x_ptr2[i2] - x1, diff_y = y_ptr2[i2] - y1, diff_z = z_ptr2[i2] - z1,
+                               dist2 = diff_x * diff_x + diff_y * diff_y + diff_z * diff_z, dist = std::sqrt(dist2),
+                               dist3 = dist * dist2, m_dist3 = m_ptr2[i2] / dist3;
+                    rx = fma_wrap(diff_x, m_dist3, rx);
+                    ry = fma_wrap(diff_y, m_dist3, ry);
+                    rz = fma_wrap(diff_z, m_dist3, rz);
+                }
+                // Store the updated accelerations.
+                res_x[i1] = rx;
+                res_y[i1] = ry;
+                res_z[i1] = rz;
             }
         } else {
-            ignore_args(npart, nodal_code, sib_begin, sib_end);
-            // NOTE: we can never get to a level higher than cbits, which is the maximum node level.
-            // This is prevented at runtime by the Level < node_level check.
-            assert(false);
+            // Local variables for the scalar computation.
+            std::array<F, NDim> pos1, diffs;
+            for (size_type i1 = 0; i1 < tgt_size; ++i1) {
+                // Load the coordinates of the current particle
+                // in the target node.
+                for (std::size_t j = 0; j < NDim; ++j) {
+                    pos1[j] = p_ptrs[j][i1];
+                }
+                // Iterate over the particles in the src node.
+                for (size_type i2 = src_begin; i2 < src_end; ++i2) {
+                    F dist2(0);
+                    for (std::size_t j = 0; j < NDim; ++j) {
+                        diffs[j] = m_parts[j][i2] - pos1[j];
+                        dist2 = fma_wrap(diffs[j], diffs[j], dist2);
+                    }
+                    const auto dist = std::sqrt(dist2), dist3 = dist * dist2, m_dist3 = m_parts[NDim][i2] / dist3;
+                    for (std::size_t j = 0; j < NDim; ++j) {
+                        res_ptrs[j][i1] = fma_wrap(diffs[j], m_dist3, res_ptrs[j][i1]);
+                    }
+                }
+            }
         }
     }
-    // Top level function fo the vectorised computation of the accelerations.
+    // Function to compute the acceleration due to the COM of a source node onto a target node. src_idx
+    // is the index, in the tree structure, of the source node, tgt_size the number of particles in the
+    // target node, tmp_ptrs are pointers to the temporary data filled in by the tree_accel_bh_check()
+    // function (which will be re-used by this function), res_ptrs pointers to the output arrays.
+    void tree_accel_bh_com(size_type src_idx, size_type tgt_size, const std::array<F *, NDim + 1u> &tmp_ptrs,
+                           const std::array<F *, NDim> &res_ptrs) const
+    {
+        // Load locally the mass of the COM of the source node.
+        const auto m_src = get<2>(m_tree[src_idx]);
+        size_type i = 0;
+        if constexpr (simd_enabled && NDim == 3u) {
+            // The SIMD-accelerated part.
+            const auto tmp_x = tmp_ptrs[0], tmp_y = tmp_ptrs[1], tmp_z = tmp_ptrs[2], tmp_dist3 = tmp_ptrs[3],
+                       res_x = res_ptrs[0], res_y = res_ptrs[1], res_z = res_ptrs[2];
+            tuple_for_each(simd_sizes<F>, [&](auto s) {
+                constexpr auto batch_size = s.value;
+                using batch_type = xsimd::batch<F, batch_size>;
+                const batch_type m_src_vec(m_src);
+                const auto tgt_vec_size = static_cast<size_type>(tgt_size - tgt_size % batch_size);
+                for (; i < tgt_vec_size; i += batch_size) {
+                    const auto m_src_dist3_vec = use_fast_inv_sqrt<batch_type>
+                                                     ? m_src_vec * batch_type(tmp_dist3 + i, xsimd::aligned_mode{})
+                                                     : m_src_vec / batch_type(tmp_dist3 + i, xsimd::aligned_mode{}),
+                               xdiff = batch_type(tmp_x + i, xsimd::aligned_mode{}),
+                               ydiff = batch_type(tmp_y + i, xsimd::aligned_mode{}),
+                               zdiff = batch_type(tmp_z + i, xsimd::aligned_mode{});
+                    xsimd::fma(xdiff, m_src_dist3_vec, batch_type(res_x + i, xsimd::aligned_mode{}))
+                        .store_aligned(res_x + i);
+                    xsimd::fma(ydiff, m_src_dist3_vec, batch_type(res_y + i, xsimd::aligned_mode{}))
+                        .store_aligned(res_y + i);
+                    xsimd::fma(zdiff, m_src_dist3_vec, batch_type(res_z + i, xsimd::aligned_mode{}))
+                        .store_aligned(res_z + i);
+                }
+            });
+        }
+        for (; i < tgt_size; ++i) {
+            const auto m_src_dist3 = m_src / tmp_ptrs[NDim][i];
+            for (std::size_t j = 0; j < NDim; ++j) {
+                res_ptrs[j][i] = fma_wrap(tmp_ptrs[j][i], m_src_dist3, res_ptrs[j][i]);
+            }
+        }
+    }
+    // Function to check if a source node satisfies the BH criterion and, possibly, to compute
+    // the accelerations due to that source node. src_idx is the index, in the tree structure, of the
+    // source node, theta2 the square of the opening angle, tgt_size the number
+    // of particles in the target node, p_ptrs pointers to the coordinates/masses of the particles
+    // in the target node, res_ptrs pointers to the output arrays. The return value is the index
+    // of the next source node in the tree traversal.
+    size_type tree_accel_bh_check(size_type src_idx, F theta2, size_type tgt_size,
+                                  const std::array<const F *, NDim + 1u> &p_ptrs,
+                                  const std::array<F *, NDim> &res_ptrs) const
+    {
+        // Temporary vectors to store the data computed during the BH criterion check.
+        // We will re-use this data later in tree_accel_bh_com().
+        auto &tmp_vecs = vec_acc_tmp_vecs();
+        std::array<F *, NDim + 1u> tmp_ptrs;
+        for (std::size_t j = 0; j < NDim + 1u; ++j) {
+            tmp_vecs[j].resize(tgt_size);
+            tmp_ptrs[j] = tmp_vecs[j].data();
+        }
+        // Local cache.
+        const auto &src_node = m_tree[src_idx];
+        // Copy locally the number of children of the source node.
+        const auto n_children_src = get<1>(src_node)[2];
+        // Copy locally the COM coords of the source.
+        const auto com_pos = get<3>(src_node);
+        // Copy locally the dim2 of the source node.
+        const auto src_dim2 = get<5>(src_node);
+        // Iteration variables.
+        size_type i = 0;
+        bool bh_flag = true;
+        if constexpr (simd_enabled && NDim == 3u) {
+            // The SIMD-accelerated part.
+            const auto x_ptr = p_ptrs[0], y_ptr = p_ptrs[1], z_ptr = p_ptrs[2];
+            const auto tmp_x = tmp_ptrs[0], tmp_y = tmp_ptrs[1], tmp_z = tmp_ptrs[2], tmp_dist3 = tmp_ptrs[3];
+            tuple_for_each(simd_sizes<F>, [&](auto s) {
+                constexpr auto batch_size = s.value;
+                using batch_type = xsimd::batch<F, batch_size>;
+                const auto tgt_vec_size = static_cast<size_type>(tgt_size - tgt_size % batch_size);
+                const batch_type src_dim2_vec(src_dim2), theta2_vec(theta2), x_com_vec(com_pos[0]),
+                    y_com_vec(com_pos[1]), z_com_vec(com_pos[2]);
+                for (; i < tgt_vec_size; i += batch_size) {
+                    const auto diff_x = x_com_vec - batch_type(x_ptr + i, xsimd::aligned_mode{}),
+                               diff_y = y_com_vec - batch_type(y_ptr + i, xsimd::aligned_mode{}),
+                               diff_z = z_com_vec - batch_type(z_ptr + i, xsimd::aligned_mode{}),
+                               dist2 = diff_x * diff_x + diff_y * diff_y + diff_z * diff_z;
+                    if (xsimd::any(src_dim2_vec >= theta2_vec * dist2)) {
+                        // At least one particle in the current batch fails the BH criterion
+                        // check. Mark the bh_flag as false, and set i to tgt_size in order
+                        // to skip the next calculations. Then break out.
+                        bh_flag = false;
+                        i = tgt_size;
+                        break;
+                    }
+                    diff_x.store_aligned(tmp_x + i);
+                    diff_y.store_aligned(tmp_y + i);
+                    diff_z.store_aligned(tmp_z + i);
+                    if constexpr (use_fast_inv_sqrt<batch_type>) {
+                        inv_sqrt_3(dist2).store_aligned(tmp_dist3 + i);
+                    } else {
+                        (xsimd::sqrt(dist2) * dist2).store_aligned(tmp_dist3 + i);
+                    }
+                }
+            });
+        }
+        // The scalar part.
+        for (; i < tgt_size; ++i) {
+            F dist2(0);
+            for (std::size_t j = 0; j < NDim; ++j) {
+                // Store the differences for later use.
+                const auto diff = com_pos[j] - p_ptrs[j][i];
+                tmp_ptrs[j][i] = diff;
+                dist2 = fma_wrap(diff, diff, dist2);
+            }
+            if (src_dim2 >= theta2 * dist2) {
+                // At least one of the particles in the target
+                // node is too close to the COM. Set the flag
+                // to false and exit.
+                bh_flag = false;
+                break;
+            }
+            // Store dist3 for later use.
+            // NOTE: in the scalar part, we always store dist3.
+            tmp_ptrs[NDim][i] = std::sqrt(dist2) * dist2;
+        }
+        if (bh_flag) {
+            // The source node satisfies the BH criterion for all the particles of the target node. Add the
+            // acceleration due to the com of the source node.
+            tree_accel_bh_com(src_idx, tgt_size, tmp_ptrs, res_ptrs);
+            // We can now skip all the children of the source node.
+            return static_cast<size_type>(src_idx + n_children_src + 1u);
+        }
+        // The source node does not satisfy the BH criterion. We check if it is a leaf
+        // node, in which case we need to compute all the pairwise interactions.
+        if (!n_children_src) {
+            // Leaf node.
+            tree_accel_leaf(src_idx, tgt_size, p_ptrs, res_ptrs);
+        }
+        // In any case, we keep traversing the tree moving to the next node in depth-first order.
+        return static_cast<size_type>(src_idx + 1u);
+    }
+    // Tree traversal for the computation of the accelerations. theta2 is the square of the opening angle,
+    // tgt_size the number of particles in the target node, tgt_code its code, p_ptrs are pointers to the
+    // coordinates/masses of the particles in the target node, res_ptrs pointers to the output arrays.
+    void tree_accel(F theta2, size_type tgt_size, UInt tgt_code, const std::array<const F *, NDim + 1u> &p_ptrs,
+                    const std::array<F *, NDim> &res_ptrs) const
+    {
+        assert(!m_tree.empty());
+        // Tree level of the target node.
+        // NOTE: the target level is available in the tree structure, so in principle we could get
+        // it from there. However, the target node is taken from the list of critical nodes, which
+        // currently does not store the target node index. Let's keep this in mind if we change
+        // the tree building routine.
+        const auto tgt_level = tree_level<NDim>(tgt_code);
+        // Total size of the tree.
+        const auto tree_size = static_cast<size_type>(m_tree.size());
+        // Index of the current source node.
+        size_type src_idx = 0;
+        while (src_idx < tree_size) {
+            // Get a reference to the current source node.
+            const auto &src_node = m_tree[src_idx];
+            // Extract the code of the source node.
+            const auto src_code = get<0>(src_node);
+            // Number of children of the source node.
+            const auto n_children_src = get<1>(src_node)[2];
+            if (src_code == tgt_code) {
+                // If src_code == tgt_code, we are currently visiting the target node.
+                // Compute the self interactions and skip all the children of the target node.
+                tree_accel_self_interactions(tgt_size, p_ptrs, res_ptrs);
+                src_idx += n_children_src + 1u;
+                continue;
+            }
+            // Extract the level of the source node.
+            const auto src_level = get<4>(src_node);
+            // Compute the shifted target code. This is tgt_code
+            // shifted down by the difference between tgt_level
+            // and src_level. For instance, in an octree,
+            // if the target code is 1 000 000 001 000, then tgt_level
+            // is 4, and, src_level is 2, then the shifted code
+            // will be 1 000 000.
+            const auto s_tgt_code = static_cast<UInt>(tgt_code >> ((tgt_level - src_level) * NDim));
+            // Is the source node an ancestor of the target node? It is if the
+            // shifted target code coincides with the source code.
+            if (s_tgt_code == src_code) {
+                // If the source node is an ancestor of the target, then we continue the
+                // depth-first traversal.
+                ++src_idx;
+                continue;
+            }
+            // The source node is not an ancestor of the target. We need to run the BH criterion check.
+            // The tree_accel_bh_check() function will return the index of the next node in the traversal.
+            src_idx = tree_accel_bh_check(src_idx, theta2, tgt_size, p_ptrs, res_ptrs);
+        }
+    }
+    // Top level function for the computation of the accelerations.
     template <typename It>
-    void vec_accs_impl(std::array<It, NDim> &out, const F &theta2) const
+    void vec_accs_impl(std::array<It, NDim> &out, F theta2) const
     {
         tbb::parallel_for(
             tbb::blocked_range<decltype(m_crit_nodes.size())>(0u, m_crit_nodes.size()),
-            [this, &theta2, &out](const auto &range) {
+            [this, theta2, &out](const auto &range) {
+                // Get references to the local temporary data.
                 auto &tmp_res = vec_acc_tmp_res();
                 auto &tmp_tgt = tgt_tmp_data();
                 for (auto i = range.begin(); i != range.end(); ++i) {
-                    const auto nodal_code = get<0>(m_crit_nodes[i]);
-                    const auto node_begin = get<1>(m_crit_nodes[i]);
-                    const auto npart = static_cast<size_type>(get<2>(m_crit_nodes[i]) - node_begin);
-                    // NOTE: in principle this could be pre-computed during the construction of the tree
-                    // (perhaps for free?). Not sure if it's worth it.
-                    const auto node_level = tree_level<NDim>(nodal_code);
+                    const auto tgt_code = get<0>(m_crit_nodes[i]);
+                    const auto tgt_begin = get<1>(m_crit_nodes[i]);
+                    const auto tgt_size = static_cast<size_type>(get<2>(m_crit_nodes[i]) - tgt_begin);
                     // Size of the temporary vectors that will be used to store the target node
                     // data and the accelerations on its particles. If simd is not enabled, this
-                    // value will be npart. Otherwise, we add extra padding at the end based on the
+                    // value will be tgt_size. Otherwise, we add extra padding at the end based on the
                     // simd vector size because in the self interactions function we will have to read
-                    // and write past npart particles.
-                    const auto pdata_size = [&npart]() {
+                    // and write past tgt_size particles.
+                    const auto pdata_size = [tgt_size]() {
                         if constexpr (simd_enabled) {
-                            // NOTE: in the self interactions functions, we use only 1 simd size (the widest
-                            // available on the platform).
+                            // NOTE: in the self interactions functions, we use only 1 simd size (the
+                            // widest available on the platform).
                             using batch_type = xsimd::simd_type<F>;
                             constexpr auto batch_size = batch_type::size;
                             static_assert(batch_size);
                             // NOTE: we will need batch_size - 1 extra elements at the end of the
                             // temp vectors, to ensure we can load/store a simd vector starting from
                             // the last element.
-                            if ((batch_size - 1u) > (std::numeric_limits<size_type>::max() - npart)) {
+                            if ((batch_size - 1u) > (std::numeric_limits<size_type>::max() - tgt_size)) {
                                 throw std::overflow_error("The number of particles in a critical node ("
-                                                          + std::to_string(npart)
+                                                          + std::to_string(tgt_size)
                                                           + ") is too large, and it results in an overflow condition");
                             }
-                            return static_cast<size_type>(npart + (batch_size - 1u));
+                            return static_cast<size_type>(tgt_size + (batch_size - 1u));
                         } else {
-                            return npart;
+                            return tgt_size;
                         }
                     }();
                     // Prepare the temporary vectors containing the result.
@@ -1938,29 +1945,38 @@ private:
                     // Prepare the temporary vectors containing the target node's data.
                     for (std::size_t j = 0; j < NDim; ++j) {
                         tmp_tgt[j].resize(pdata_size);
-                        // From 0 to npart we copy the actual node coordinates.
-                        std::copy(m_parts[j].data() + node_begin, m_parts[j].data() + node_begin + npart,
+                        // From 0 to tgt_size we copy the actual node coordinates.
+                        std::copy(m_parts[j].data() + tgt_begin, m_parts[j].data() + tgt_begin + tgt_size,
                                   tmp_tgt[j].data());
-                        // From npart to pdata_size (the padding values) we insert coordinates outside
+                        // From tgt_size to pdata_size (the padding values) we insert coordinates outside
                         // the bounding box. This ensures that, when computing accelerations involving
-                        // the padding data in the self interaction function, we don't run into singularities
-                        // (as all the particles in the domain are contained within [-m_box_size/2, m_box_size/2)).
-                        std::fill(tmp_tgt[j].data() + npart, tmp_tgt[j].data() + pdata_size, m_box_size);
+                        // the padding data in the self interaction function, we don't run into
+                        // singularities (as all the particles in the domain are contained within
+                        // [-m_box_size/2, m_box_size/2)).
+                        std::fill(tmp_tgt[j].data() + tgt_size, tmp_tgt[j].data() + pdata_size, m_box_size);
                     }
-                    // For the padding data, we set the masses to zero. This ensures that the padding data does
-                    // not pollute the real accelerations (accelerations from the padding data will end up being
-                    // null due to the zero masses).
+                    // For the padding data, we set the masses to zero. This ensures that the padding data
+                    // does not pollute the real accelerations (accelerations from the padding data will
+                    // end up being null due to the zero masses).
                     tmp_tgt[NDim].resize(pdata_size);
-                    std::copy(m_parts[NDim].data() + node_begin, m_parts[NDim].data() + node_begin + npart,
+                    std::copy(m_parts[NDim].data() + tgt_begin, m_parts[NDim].data() + tgt_begin + tgt_size,
                               tmp_tgt[NDim].data());
-                    std::fill(tmp_tgt[NDim].data() + npart, tmp_tgt[NDim].data() + pdata_size, F(0));
+                    std::fill(tmp_tgt[NDim].data() + tgt_size, tmp_tgt[NDim].data() + pdata_size, F(0));
+                    // Prepare arrays of pointers to the temporary data.
+                    std::array<F *, NDim> res_ptrs;
+                    std::array<const F *, NDim + 1u> p_ptrs;
+                    for (std::size_t j = 0; j < NDim; ++j) {
+                        res_ptrs[j] = tmp_res[j].data();
+                        p_ptrs[j] = tmp_tgt[j].data();
+                    }
+                    p_ptrs[NDim] = tmp_tgt[NDim].data();
                     // Do the computation.
-                    vec_acc_on_node<0>(theta2, npart, nodal_code, size_type(0), size_type(m_tree.size()), node_level);
+                    tree_accel(theta2, tgt_size, tgt_code, p_ptrs, res_ptrs);
                     // Write out the result.
                     using it_diff_t = typename std::iterator_traits<It>::difference_type;
-                    for (std::size_t j = 0; j != NDim; ++j) {
-                        std::copy(tmp_res[j].data(), tmp_res[j].data() + npart,
-                                  out[j] + boost::numeric_cast<it_diff_t>(node_begin));
+                    for (std::size_t j = 0; j < NDim; ++j) {
+                        std::copy(res_ptrs[j], res_ptrs[j] + tgt_size,
+                                  out[j] + boost::numeric_cast<it_diff_t>(tgt_begin));
                     }
                 }
             });
@@ -1991,7 +2007,7 @@ private:
             }
             using it_t = decltype(boost::make_permutation_iterator(out[0], m_isort.begin()));
             std::array<it_t, NDim> out_pits;
-            for (std::size_t j = 0; j != NDim; ++j) {
+            for (std::size_t j = 0; j < NDim; ++j) {
                 out_pits[j] = boost::make_permutation_iterator(out[j], m_isort.begin());
             }
             // NOTE: we are checking in the vec_accs_impl function that we can index into
@@ -2007,7 +2023,7 @@ private:
     void accs_dispatch(std::array<std::vector<F, Allocator>, NDim> &out, const F &theta) const
     {
         std::array<F *, NDim> out_ptrs;
-        for (std::size_t j = 0; j != NDim; ++j) {
+        for (std::size_t j = 0; j < NDim; ++j) {
             out[j].resize(boost::numeric_cast<decltype(out[j].size())>(m_parts[0].size()));
             out_ptrs[j] = out[j].data();
         }
@@ -2086,7 +2102,7 @@ private:
                                         "ordered iterators to the particle data");
         }
         std::array<it_t, NDim + 1u> retval;
-        for (std::size_t j = 0; j != NDim + 1u; ++j) {
+        for (std::size_t j = 0; j < NDim + 1u; ++j) {
             retval[j] = boost::make_permutation_iterator(tr.m_parts[j].data(), tr.m_ord_ind.begin());
         }
         return retval;
@@ -2096,7 +2112,7 @@ private:
     {
         using ptr_t = decltype(tr.m_parts[0].data());
         std::array<ptr_t, NDim + 1u> retval;
-        for (std::size_t j = 0; j != NDim + 1u; ++j) {
+        for (std::size_t j = 0; j < NDim + 1u; ++j) {
             retval[j] = tr.m_parts[j].data();
         }
         return retval;
@@ -2136,13 +2152,11 @@ private:
         v_ind.resize(boost::numeric_cast<decltype(v_ind.size())>(nparts));
         tbb::parallel_for(tbb::blocked_range<decltype(m_parts[0].size())>(0u, nparts),
                           [this, &v_ind](const auto &range) {
-                              std::array<F, NDim> tmp_coord;
+                              std::array<UInt, NDim> tmp_dcoord;
                               morton_encoder<NDim, UInt> me;
                               for (auto i = range.begin(); i != range.end(); ++i) {
-                                  for (std::size_t j = 0; j != NDim; ++j) {
-                                      tmp_coord[j] = m_parts[j][i];
-                                  }
-                                  m_codes[i] = me(disc_coords(tmp_coord.begin(), m_box_size).begin());
+                                  disc_coords(tmp_dcoord, i);
+                                  m_codes[i] = me(tmp_dcoord.data());
                                   // NOTE: this is just a iota.
                                   v_ind[i] = i;
                               }
