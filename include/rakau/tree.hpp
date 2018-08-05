@@ -562,14 +562,28 @@ public:
     using size_type = typename fp_vector::size_type;
 
 private:
-    // The node type.
-    using node_type = std::tuple<UInt, std::array<size_type, 3>, F, std::array<F, NDim>>;
+    // The node type:
+    // - code,
+    // - [node_start, node_end, n_children], where:
+    //   - node_start/node_end = the starting/ending indices (in the particles' array) of the node's particles,
+    //   - n_children = the number of children of the node,
+    // - total mass in the node,
+    // - COM coordinates,
+    // - node level,
+    // - square of the edge of the node.
+    using node_type = std::tuple<UInt, std::array<size_type, 3>, F, std::array<F, NDim>, unsigned, F>;
     // The tree type.
     using tree_type = std::vector<node_type, di_aligned_allocator<node_type>>;
     // The critical node descriptor type (nodal code and particle range).
     using cnode_type = std::tuple<UInt, size_type, size_type>;
     // List of critical nodes.
     using cnode_list_type = std::vector<cnode_type, di_aligned_allocator<cnode_type>>;
+    // Small helper to get the square of the dimension of a node at the tree level node_level.
+    F get_sqr_node_dim(unsigned node_level) const
+    {
+        const auto tmp = m_box_size / static_cast<F>(UInt(1) << node_level);
+        return tmp * tmp;
+    }
     // Serial construction of a subtree. The parent of the subtree is the node with code parent_code,
     // at the level ParentLevel. The particles in the children nodes have codes in the [begin, end)
     // range. The children nodes will be appended in depth-first order to tree. crit_nodes is the local
@@ -634,7 +648,9 @@ private:
                                                  size_type(0)},
                         // NOTE: make sure mass and COM coords are initialised in a known state (i.e.,
                         // zero for C++ floating-point).
-                        0, std::array<F, NDim>{});
+                        0, std::array<F, NDim>{},
+                        // Current level and square of the node dimension at the current level.
+                        ParentLevel + 1u, get_sqr_node_dim(ParentLevel + 1u));
                     // Store the tree size before possibly adding more nodes.
                     const auto tree_size = tree.size();
                     // Cast npart to the unsigned counterpart.
@@ -723,7 +739,7 @@ private:
                             std::array<size_type, 3>{static_cast<size_type>(std::distance(m_codes.begin(), it_start)),
                                                      static_cast<size_type>(std::distance(m_codes.begin(), it_end)),
                                                      size_type(0)},
-                            0, std::array<F, NDim>{});
+                            0, std::array<F, NDim>{}, ParentLevel + 1u, get_sqr_node_dim(ParentLevel + 1u));
                         const auto u_npart
                             = static_cast<std::make_unsigned_t<decltype(std::distance(it_start, it_end))>>(npart);
                         // NOTE: we have a critical node only if there are no critical ancestors and either:
@@ -818,6 +834,12 @@ private:
         // lists of critical nodes, in a similar fashion to the vector of partial trees above.
         tbb::concurrent_vector<cnode_list_type> crit_nodes;
         // Add the root node.
+        const auto root_sqr_node_dim = m_box_size * m_box_size;
+        if (!std::isfinite(root_sqr_node_dim)) {
+            throw std::invalid_argument(
+                "The computation of the square of the dimension of the domain leads to the non-finite value "
+                + std::to_string(root_sqr_node_dim));
+        }
         m_tree.emplace_back(1,
                             std::array<size_type, 3>{size_type(0), size_type(m_codes.size()),
                                                      // NOTE: the children count gets inited to zero. It
@@ -825,7 +847,9 @@ private:
                                                      size_type(0)},
                             // NOTE: make sure mass and COM coords are initialised in a known state (i.e.,
                             // zero for C++ floating-point).
-                            0, std::array<F, NDim>{});
+                            0, std::array<F, NDim>{},
+                            // Tree level and square of node dimension.
+                            0, root_sqr_node_dim);
         // Check if the root node is a critical node. It is a critical node if the number of particles is leq m_ncrit
         // (the definition of critical node) or m_max_leaf_n (in which case it will have no children).
         const bool root_is_crit = m_codes.size() <= m_ncrit || m_codes.size() <= m_max_leaf_n;
@@ -939,6 +963,12 @@ private:
         assert(std::is_sorted(m_crit_nodes.begin(), m_crit_nodes.end(), [](const auto &t1, const auto &t2) {
             return node_compare<NDim>(get<0>(t1), get<0>(t2));
         }));
+        // Verify the node levels.
+        assert(std::all_of(m_tree.begin(), m_tree.end(),
+                           [](const auto &tup) { return get<4>(tup) == tree_level<NDim>(get<0>(tup)); }));
+        // Verify the node dim2.
+        assert(std::all_of(m_tree.begin(), m_tree.end(),
+                           [this](const auto &tup) { return get<5>(tup) == get_sqr_node_dim(get<4>(tup)); }));
 
         // NOTE: a couple of final checks to make sure we can use size_type to represent both the tree
         // size and the size of the list of critical nodes.
@@ -1395,12 +1425,6 @@ private:
         res_y_vec = xsimd::fma(diff_y, m2_dist3, res_y_vec);
         res_z_vec = xsimd::fma(diff_z, m2_dist3, res_z_vec);
     }
-    // Small helper to get the square of the dimension of a node at the tree level node_level.
-    F get_sqr_node_dim(unsigned node_level) const
-    {
-        const auto tmp = m_box_size / static_cast<F>(UInt(1) << node_level);
-        return tmp * tmp;
-    }
     // Function to compute the self-interactions within a target node. tgt_size is the number of particles
     // in the target node, p_ptrs pointers to the target particles' coordinates/masses, res_ptrs pointers to the
     // output arrays.
@@ -1725,11 +1749,11 @@ private:
     }
     // Function to check if a source node satisfies the BH criterion and, possibly, to compute
     // the accelerations due to the source node. src_idx is the index, in the tree structure, of the
-    // source node, src_level its level, theta2 the square of the opening angle, tgt_size the number
+    // source node, theta2 the square of the opening angle, tgt_size the number
     // of particles in the target node, p_ptrs pointers to the coordinates/masses of the particles
     // in the target node, res_ptrs pointers to the output arrays. The return value is the index
     // of the next source node in the tree traversal.
-    size_type tree_accel_bh_check(size_type src_idx, unsigned src_level, F theta2, size_type tgt_size,
+    size_type tree_accel_bh_check(size_type src_idx, F theta2, size_type tgt_size,
                                   const std::array<const F *, NDim + 1u> &p_ptrs,
                                   const std::array<F *, NDim> &res_ptrs) const
     {
@@ -1743,12 +1767,12 @@ private:
         }
         // Local cache.
         const auto &src_node = m_tree[src_idx];
-        // Copy locally the COM coords of the source.
-        const auto com_pos = get<3>(src_node);
         // Copy locally the number of children of the source node.
         const auto n_children_src = get<1>(src_node)[2];
-        // Determine the size2 of the source node.
-        const auto src_size2 = get_sqr_node_dim(src_level);
+        // Copy locally the COM coords of the source.
+        const auto com_pos = get<3>(src_node);
+        // Copy locally the size2 of the source node.
+        const auto src_size2 = get<5>(src_node);
         // Iteration variables.
         size_type i = 0;
         bool bh_flag = true;
@@ -1851,11 +1875,11 @@ private:
                 src_idx += n_children_src + 1u;
                 continue;
             }
-            // Compute the level of the source node.
-            const auto src_level = tree_level<NDim>(src_code);
+            // Extract the level of the source node.
+            const auto src_level = get<4>(src_node);
             // Compute the shifted target code. This is tgt_code
             // shifted down by the difference between tgt_level
-            // and src level. For instance, in an octree,
+            // and src_level. For instance, in an octree,
             // if the target code is 1 000 000 001 000, then tgt_level
             // is 4, and, src_level is 2, then the shifted code
             // will be 1 000 000.
@@ -1870,7 +1894,7 @@ private:
             }
             // The source node is not an ancestor of the target. We need to run the BH criterion check.
             // The tree_accel_bh_check() function will return the index of the next node in the traversal.
-            src_idx = tree_accel_bh_check(src_idx, src_level, theta2, tgt_size, p_ptrs, res_ptrs);
+            src_idx = tree_accel_bh_check(src_idx, theta2, tgt_size, p_ptrs, res_ptrs);
         }
     }
     // Top level function for the computation of the accelerations.
