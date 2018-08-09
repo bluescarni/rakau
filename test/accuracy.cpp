@@ -39,7 +39,7 @@ TEST_CASE("accuracy")
     tuple_for_each(fp_types{}, [](auto x) {
         using fp_type = decltype(x);
         constexpr auto theta = static_cast<fp_type>(.001), bsize = static_cast<fp_type>(1);
-        auto sizes = {10u, 100u, 1000u, 5000u};
+        auto sizes = {10u, 100u, 1000u, 2000u};
         auto max_leaf_ns = {1u, 2u, 8u, 16u};
         auto ncrits = {1u, 16u, 128u, 256u};
         std::array<std::vector<fp_type>, 3> accs;
@@ -64,6 +64,10 @@ TEST_CASE("accuracy")
                         bsize, {parts.begin() + s, parts.begin() + 2u * s, parts.begin() + 3u * s, parts.begin()}, s,
                         max_leaf_n, ncrit);
                     t.accs_o(accs, theta);
+                    // Check that all accelerations are finite.
+                    REQUIRE(std::all_of(accs[0].begin(), accs[0].end(), [](auto c) { return std::isfinite(c); }));
+                    REQUIRE(std::all_of(accs[1].begin(), accs[1].end(), [](auto c) { return std::isfinite(c); }));
+                    REQUIRE(std::all_of(accs[2].begin(), accs[2].end(), [](auto c) { return std::isfinite(c); }));
                     for (auto i = 0u; i < s; ++i) {
                         auto eacc = t.exact_acc_o(i);
                         x_diff.emplace_back(std::abs((eacc[0] - accs[0][i]) / eacc[0]));
