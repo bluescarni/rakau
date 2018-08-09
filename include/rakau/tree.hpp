@@ -1347,17 +1347,21 @@ public:
         assert(std::unique(m_isort.begin(), m_isort.end()) == m_isort.end());
 #endif
     }
-    friend std::ostream &operator<<(std::ostream &os, const tree &t)
+    std::ostream &pprint(std::ostream &os, size_type max_nodes = 0) const
     {
+        // NOTE: sanity check for the use of UInt in std::bitset.
         static_assert(unsigned(std::numeric_limits<UInt>::digits) <= std::numeric_limits<std::size_t>::max());
-        os << "Box size                 : " << t.m_box_size << '\n';
-        os << "Total number of particles: " << t.m_codes.size() << '\n';
-        os << "Total number of nodes    : " << t.m_tree.size() << "\n\n";
-        os << "First few nodes:\n";
-        constexpr unsigned max_nodes = 20;
-        auto i = 0u;
-        for (const auto &tup : t.m_tree) {
-            if (i > max_nodes) {
+        os << "Box size                 : " << m_box_size << '\n';
+        os << "Total number of particles: " << m_codes.size() << '\n';
+        os << "Total number of nodes    : " << m_tree.size() << "\n\n";
+        if (max_nodes) {
+            os << "First " << max_nodes << " nodes:\n";
+        } else {
+            os << "Nodes:\n";
+        }
+        size_type i = 0;
+        for (const auto &tup : m_tree) {
+            if (max_nodes && i > max_nodes) {
                 break;
             }
             os << std::bitset<std::numeric_limits<UInt>::digits>(get<0>(tup)) << '|' << get<1>(tup)[0] << ','
@@ -1371,10 +1375,14 @@ public:
             os << "]\n";
             ++i;
         }
-        if (i > max_nodes) {
+        if (max_nodes && i > max_nodes) {
             std::cout << "...\n";
         }
         return os;
+    }
+    friend std::ostream &operator<<(std::ostream &os, const tree &t)
+    {
+        return t.pprint(os, 20);
     }
 
 private:
