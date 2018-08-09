@@ -1347,23 +1347,32 @@ public:
         assert(std::unique(m_isort.begin(), m_isort.end()) == m_isort.end());
 #endif
     }
+    // Tree pretty printing. Will print up to max_nodes, or all the nodes if max_nodes is zero.
     std::ostream &pprint(std::ostream &os, size_type max_nodes = 0) const
     {
         // NOTE: sanity check for the use of UInt in std::bitset.
         static_assert(unsigned(std::numeric_limits<UInt>::digits) <= std::numeric_limits<std::size_t>::max());
-        os << "Box size                 : " << m_box_size << '\n';
+        const auto n_nodes = m_tree.size();
+        os << "Box size                 : " << m_box_size << (m_size_deduced ? " (deduced)" : "") << '\n';
         os << "Total number of particles: " << m_codes.size() << '\n';
-        os << "Total number of nodes    : " << m_tree.size() << "\n\n";
-        if (max_nodes) {
+        os << "Total number of nodes    : " << n_nodes << "\n\n";
+        if (!n_nodes) {
+            // Exit early if there are no nodes.
+            return os;
+        }
+        if (max_nodes && max_nodes < n_nodes) {
+            // We have a limit and the limit is smaller than the number
+            // of nodes. We will be printing only some of the nodes.
             os << "First " << max_nodes << " nodes:\n";
         } else {
+            // Either we don't have a limit, or the limit is equal to or larger
+            // than the number of nodes. We will be printing all nodes.
             os << "Nodes:\n";
         }
-        size_type i = 0;
+        // Init the number of nodes printed so far.
+        size_type n_printed = 0;
         for (const auto &tup : m_tree) {
-            if (max_nodes && i > max_nodes) {
-                break;
-            }
+            // Print the node.
             os << std::bitset<std::numeric_limits<UInt>::digits>(get<0>(tup)) << '|' << get<1>(tup)[0] << ','
                << get<1>(tup)[1] << ',' << get<1>(tup)[2] << "|" << get<2>(tup) << "|[";
             for (std::size_t j = 0; j < NDim; ++j) {
@@ -1373,9 +1382,16 @@ public:
                 }
             }
             os << "]\n";
-            ++i;
+            // Increase the printed nodes counter and check against max_nodes.
+            // NOTE: if max_nodes is zero, this condition will never be true, so we will end
+            // up printing all the nodes.
+            if (++n_printed == max_nodes) {
+                // We have a limit for the max number of printed nodes, and we hit it. Break out.
+                break;
+            }
         }
-        if (max_nodes && i > max_nodes) {
+        if (n_printed < n_nodes) {
+            // We have not printed all the nodes in the tree. Add an ellipsis.
             std::cout << "...\n";
         }
         return os;
