@@ -67,6 +67,10 @@ TEST_CASE("softening")
                             bsize, {parts.begin() + s, parts.begin() + 2u * s, parts.begin() + 3u * s, parts.begin()},
                             s, max_leaf_n, ncrit);
                         t.accs_o(accs, theta, eps);
+                        // Check that all accelerations are finite.
+                        REQUIRE(std::all_of(accs[0].begin(), accs[0].end(), [](auto c) { return std::isfinite(c); }));
+                        REQUIRE(std::all_of(accs[1].begin(), accs[1].end(), [](auto c) { return std::isfinite(c); }));
+                        REQUIRE(std::all_of(accs[2].begin(), accs[2].end(), [](auto c) { return std::isfinite(c); }));
                         for (auto i = 0u; i < s; ++i) {
                             auto eacc = t.exact_acc_o(i, eps);
                             x_diff.emplace_back(std::abs((eacc[0] - accs[0][i]) / eacc[0]));
@@ -96,18 +100,19 @@ TEST_CASE("softening")
                         tot_max_z_diff = std::max(local_max_z_diff, tot_max_z_diff);
                         if (eps != fp_type(0)) {
                             // Put a few particles in the same spots to generate a singularity.
+                            auto new_parts(parts);
                             std::uniform_int_distribution<unsigned> dist(0u, s - 2u);
                             for (int i = 0; i < 10; ++i) {
                                 const auto idx = dist(rng);
-                                *(parts.begin() + s + idx) = *(parts.begin() + s + idx + 1u);
-                                *(parts.begin() + 2u * s + idx) = *(parts.begin() + 2u * s + idx + 1u);
-                                *(parts.begin() + 3u * s + idx) = *(parts.begin() + 3u * s + idx + 1u);
+                                *(new_parts.begin() + s + idx) = *(new_parts.begin() + s + idx + 1u);
+                                *(new_parts.begin() + 2u * s + idx) = *(new_parts.begin() + 2u * s + idx + 1u);
+                                *(new_parts.begin() + 3u * s + idx) = *(new_parts.begin() + 3u * s + idx + 1u);
                             }
                             // Create a new tree.
-                            t = octree<fp_type>(
-                                bsize,
-                                {parts.begin() + s, parts.begin() + 2u * s, parts.begin() + 3u * s, parts.begin()}, s,
-                                max_leaf_n, ncrit);
+                            t = octree<fp_type>(bsize,
+                                                {new_parts.begin() + s, new_parts.begin() + 2u * s,
+                                                 new_parts.begin() + 3u * s, new_parts.begin()},
+                                                s, max_leaf_n, ncrit);
                             // Compute the accelerations.
                             t.accs_u(accs, theta, eps);
                             // Verify all values are finite.
