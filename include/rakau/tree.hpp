@@ -1398,6 +1398,7 @@ public:
     }
     friend std::ostream &operator<<(std::ostream &os, const tree &t)
     {
+        // Hard code to 20 max nodes for the streaming operator.
         return t.pprint(os, 20);
     }
 
