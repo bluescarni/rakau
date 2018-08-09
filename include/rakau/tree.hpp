@@ -1401,24 +1401,21 @@ private:
         return tmp_tgt;
     }
     // Compute the element-wise attraction on the batch of particles at xvec1, yvec1, zvec1 by the
-    // particle(s) at x2, y2, z2 with mass(es) mvec2, and add the result into res_x_vec, res_y_vec,
-    // res_z_vec. B must be an xsimd batch. BS must be either the same as B, or the scalar type of B.
-    // eps2_vec is the square of the softening length.
-    template <typename B, typename BS>
-    static void batch_bs_3d(B eps2_vec, B &res_x_vec, B &res_y_vec, B &res_z_vec, B xvec1, B yvec1, B zvec1, BS x2,
-                            BS y2, BS z2, BS m2)
+    // particles at xvec2, yvec2, zvec2 with masses mvec2, and add the result into res_x_vec, res_y_vec,
+    // res_z_vec. eps2_vec is the square of the softening length.
+    template <typename B>
+    static void batch_batch_3d(B &res_x_vec, B &res_y_vec, B &res_z_vec, B xvec1, B yvec1, B zvec1, B xvec2, B yvec2,
+                               B zvec2, B mvec2, B eps2_vec)
     {
-        const B diff_x = x2 - xvec1;
-        const B diff_y = y2 - yvec1;
-        const B diff_z = z2 - zvec1;
-        const B dist2 = diff_x * diff_x + diff_y * diff_y + xsimd::fma(diff_z, diff_z, eps2_vec);
+        const B diff_x = xvec2 - xvec1, diff_y = yvec2 - yvec1, diff_z = zvec2 - zvec1,
+                dist2 = diff_x * diff_x + diff_y * diff_y + xsimd::fma(diff_z, diff_z, eps2_vec);
         B m2_dist3;
         if constexpr (use_fast_inv_sqrt<B>) {
-            m2_dist3 = m2 * inv_sqrt_3(dist2);
+            m2_dist3 = mvec2 * inv_sqrt_3(dist2);
         } else {
             const B dist = xsimd::sqrt(dist2);
             const B dist3 = dist * dist2;
-            m2_dist3 = m2 / dist3;
+            m2_dist3 = mvec2 / dist3;
         }
         res_x_vec = xsimd::fma(diff_x, m2_dist3, res_x_vec);
         res_y_vec = xsimd::fma(diff_y, m2_dist3, res_y_vec);
@@ -1455,7 +1452,7 @@ private:
                     // Load the second batch of particles.
                     const auto xvec2 = xsimd::load_unaligned(x_ptr + i2), yvec2 = xsimd::load_unaligned(y_ptr + i2),
                                zvec2 = xsimd::load_unaligned(z_ptr + i2), mvec2 = xsimd::load_unaligned(m_ptr + i2);
-                    // NOTE: now we are going to do a slight repetition of batch_bs_3d(), with the goal
+                    // NOTE: now we are going to do a slight repetition of batch_batch_3d(), with the goal
                     // of avoiding doing extra needless computations.
                     // Compute the relative positions of 2 wrt 1, and the distance square.
                     const auto diff_x = xvec2 - xvec1, diff_y = yvec2 - yvec1, diff_z = zvec2 - zvec1,
@@ -1607,8 +1604,8 @@ private:
                         for (auto idx2 = i2; idx2 < vec_size2; idx2 += batch_size) {
                             auto xvec2 = batch_type(x_ptr2 + idx2), yvec2 = batch_type(y_ptr2 + idx2),
                                  zvec2 = batch_type(z_ptr2 + idx2), mvec2 = batch_type(m_ptr2 + idx2);
-                            batch_bs_3d(eps2_vec, res_x_vec, res_y_vec, res_z_vec, xvec1, yvec1, zvec1, xvec2, yvec2,
-                                        zvec2, mvec2);
+                            batch_batch_3d(res_x_vec, res_y_vec, res_z_vec, xvec1, yvec1, zvec1, xvec2, yvec2, zvec2,
+                                           mvec2, eps2_vec);
                             for (std::size_t j = 1; j < batch_size; ++j) {
                                 // Above we computed the element-wise accelerations of a source batch
                                 // onto a target batch. We need to rotate the source batch
@@ -1618,8 +1615,8 @@ private:
                                 yvec2 = rotate(yvec2);
                                 zvec2 = rotate(zvec2);
                                 mvec2 = rotate(mvec2);
-                                batch_bs_3d(eps2_vec, res_x_vec, res_y_vec, res_z_vec, xvec1, yvec1, zvec1, xvec2,
-                                            yvec2, zvec2, mvec2);
+                                batch_batch_3d(res_x_vec, res_y_vec, res_z_vec, xvec1, yvec1, zvec1, xvec2, yvec2,
+                                               zvec2, mvec2, eps2_vec);
                             }
                         }
                         // Store the updated accelerations in the temporary vectors.
@@ -1646,9 +1643,11 @@ private:
                          res_y_vec = batch_type1(res_y + i1, xsimd::aligned_mode{}),
                          res_z_vec = batch_type1(res_z + i1, xsimd::aligned_mode{});
                     for (auto idx2 = i2; idx2 < src_size; ++idx2) {
-                        // NOTE: here we are doing batch/scalar interactions.
-                        batch_bs_3d(eps2_vec, res_x_vec, res_y_vec, res_z_vec, xvec1, yvec1, zvec1, x_ptr2[idx2],
-                                    y_ptr2[idx2], z_ptr2[idx2], m_ptr2[idx2]);
+                        // NOTE: here we are doing batch/scalar interactions, with the scalars
+                        // splatted to vectors.
+                        batch_batch_3d(res_x_vec, res_y_vec, res_z_vec, xvec1, yvec1, zvec1, batch_type1(x_ptr2[idx2]),
+                                       batch_type1(y_ptr2[idx2]), batch_type1(z_ptr2[idx2]), batch_type1(m_ptr2[idx2]),
+                                       eps2_vec);
                     }
                     res_x_vec.store_aligned(res_x + i1);
                     res_y_vec.store_aligned(res_y + i1);
