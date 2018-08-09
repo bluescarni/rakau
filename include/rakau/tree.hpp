@@ -1996,20 +1996,20 @@ private:
         simple_timer st("vector accs computation");
         const auto theta2 = theta * theta, eps2 = eps * eps;
         // Input param check.
-        if (!std::isfinite(theta2)) {
-            throw std::domain_error("The square of the theta parameter must be finite, but it is "
+        if (!std::isfinite(theta2) || theta2 <= F(0)) {
+            throw std::domain_error("The square of the theta parameter must be finite and positive, but it is "
                                     + std::to_string(theta2) + " instead");
         }
         if (theta < F(0)) {
             throw std::domain_error("The theta parameter must be non-negative, but it is " + std::to_string(theta)
                                     + " instead");
         }
-        if (!std::isfinite(eps2)) {
-            throw std::domain_error("The square of the softening parameter must be finite, but it is "
+        if (!std::isfinite(eps2) || eps2 < F(0)) {
+            throw std::domain_error("The square of the softening length must be finite and non-negative, but it is "
                                     + std::to_string(eps2) + " instead");
         }
         if (eps < F(0)) {
-            throw std::domain_error("The softening parameter must be non-negative, but it is " + std::to_string(eps)
+            throw std::domain_error("The softening length must be non-negative, but it is " + std::to_string(eps)
                                     + " instead");
         }
         if constexpr (Ordered) {
