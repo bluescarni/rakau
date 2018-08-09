@@ -1347,19 +1347,32 @@ public:
         assert(std::unique(m_isort.begin(), m_isort.end()) == m_isort.end());
 #endif
     }
-    friend std::ostream &operator<<(std::ostream &os, const tree &t)
+    // Tree pretty printing. Will print up to max_nodes, or all the nodes if max_nodes is zero.
+    std::ostream &pprint(std::ostream &os, size_type max_nodes = 0) const
     {
+        // NOTE: sanity check for the use of UInt in std::bitset.
         static_assert(unsigned(std::numeric_limits<UInt>::digits) <= std::numeric_limits<std::size_t>::max());
-        os << "Box size                 : " << t.m_box_size << '\n';
-        os << "Total number of particles: " << t.m_codes.size() << '\n';
-        os << "Total number of nodes    : " << t.m_tree.size() << "\n\n";
-        os << "First few nodes:\n";
-        constexpr unsigned max_nodes = 20;
-        auto i = 0u;
-        for (const auto &tup : t.m_tree) {
-            if (i > max_nodes) {
-                break;
-            }
+        const auto n_nodes = m_tree.size();
+        os << "Box size                 : " << m_box_size << (m_size_deduced ? " (deduced)" : "") << '\n';
+        os << "Total number of particles: " << m_codes.size() << '\n';
+        os << "Total number of nodes    : " << n_nodes << "\n\n";
+        if (!n_nodes) {
+            // Exit early if there are no nodes.
+            return os;
+        }
+        if (max_nodes && max_nodes < n_nodes) {
+            // We have a limit and the limit is smaller than the number
+            // of nodes. We will be printing only some of the nodes.
+            os << "First " << max_nodes << " nodes:\n";
+        } else {
+            // Either we don't have a limit, or the limit is equal to or larger
+            // than the number of nodes. We will be printing all nodes.
+            os << "Nodes:\n";
+        }
+        // Init the number of nodes printed so far.
+        size_type n_printed = 0;
+        for (const auto &tup : m_tree) {
+            // Print the node.
             os << std::bitset<std::numeric_limits<UInt>::digits>(get<0>(tup)) << '|' << get<1>(tup)[0] << ','
                << get<1>(tup)[1] << ',' << get<1>(tup)[2] << "|" << get<2>(tup) << "|[";
             for (std::size_t j = 0; j < NDim; ++j) {
@@ -1369,12 +1382,23 @@ public:
                 }
             }
             os << "]\n";
-            ++i;
+            // Increase the printed nodes counter and check against max_nodes.
+            // NOTE: if max_nodes is zero, this condition will never be true, so we will end
+            // up printing all the nodes.
+            if (++n_printed == max_nodes) {
+                // We have a limit for the max number of printed nodes, and we hit it. Break out.
+                break;
+            }
         }
-        if (i > max_nodes) {
+        if (n_printed < n_nodes) {
+            // We have not printed all the nodes in the tree. Add an ellipsis.
             std::cout << "...\n";
         }
         return os;
+    }
+    friend std::ostream &operator<<(std::ostream &os, const tree &t)
+    {
+        return t.pprint(os, 20);
     }
 
 private:
@@ -1401,32 +1425,30 @@ private:
         return tmp_tgt;
     }
     // Compute the element-wise attraction on the batch of particles at xvec1, yvec1, zvec1 by the
-    // particle(s) at x2, y2, z2 with mass(es) mvec2, and add the result into res_x_vec, res_y_vec,
-    // res_z_vec. B must be an xsimd batch. BS must be either the same as B, or the scalar type of B.
-    template <typename B, typename BS>
-    static void batch_bs_3d(B &res_x_vec, B &res_y_vec, B &res_z_vec, B xvec1, B yvec1, B zvec1, BS x2, BS y2, BS z2,
-                            BS m2)
+    // particles at xvec2, yvec2, zvec2 with masses mvec2, and add the result into res_x_vec, res_y_vec,
+    // res_z_vec. eps2_vec is the square of the softening length.
+    template <typename B>
+    static void batch_batch_3d(B &res_x_vec, B &res_y_vec, B &res_z_vec, B xvec1, B yvec1, B zvec1, B xvec2, B yvec2,
+                               B zvec2, B mvec2, B eps2_vec)
     {
-        const B diff_x = x2 - xvec1;
-        const B diff_y = y2 - yvec1;
-        const B diff_z = z2 - zvec1;
-        const B dist2 = diff_x * diff_x + diff_y * diff_y + diff_z * diff_z;
+        const B diff_x = xvec2 - xvec1, diff_y = yvec2 - yvec1, diff_z = zvec2 - zvec1,
+                dist2 = diff_x * diff_x + diff_y * diff_y + xsimd::fma(diff_z, diff_z, eps2_vec);
         B m2_dist3;
         if constexpr (use_fast_inv_sqrt<B>) {
-            m2_dist3 = m2 * inv_sqrt_3(dist2);
+            m2_dist3 = mvec2 * inv_sqrt_3(dist2);
         } else {
             const B dist = xsimd::sqrt(dist2);
             const B dist3 = dist * dist2;
-            m2_dist3 = m2 / dist3;
+            m2_dist3 = mvec2 / dist3;
         }
         res_x_vec = xsimd::fma(diff_x, m2_dist3, res_x_vec);
         res_y_vec = xsimd::fma(diff_y, m2_dist3, res_y_vec);
         res_z_vec = xsimd::fma(diff_z, m2_dist3, res_z_vec);
     }
-    // Function to compute the self-interactions within a target node. tgt_size is the number of particles
-    // in the target node, p_ptrs pointers to the target particles' coordinates/masses, res_ptrs pointers to the
-    // output arrays.
-    void tree_accel_self_interactions(size_type tgt_size, const std::array<const F *, NDim + 1u> &p_ptrs,
+    // Function to compute the self-interactions within a target node. eps2 is the square of the softening length,
+    // tgt_size is the number of particles in the target node, p_ptrs pointers to the target particles'
+    // coordinates/masses, res_ptrs pointers to the output arrays.
+    void tree_accel_self_interactions(F eps2, size_type tgt_size, const std::array<const F *, NDim + 1u> &p_ptrs,
                                       const std::array<F *, NDim> &res_ptrs) const
     {
         // Pointer to the masses.
@@ -1440,6 +1462,8 @@ private:
             const auto x_ptr = p_ptrs[0], y_ptr = p_ptrs[1], z_ptr = p_ptrs[2];
             // Shortcuts to the result vectors.
             const auto res_x = res_ptrs[0], res_y = res_ptrs[1], res_z = res_ptrs[2];
+            // Softening length, vector version.
+            const batch_type eps2_vec(eps2);
             for (size_type i1 = 0; i1 < tgt_size; i1 += batch_size) {
                 // Load the first batch of particles.
                 const auto xvec1 = xsimd::load_aligned(x_ptr + i1), yvec1 = xsimd::load_aligned(y_ptr + i1),
@@ -1452,11 +1476,11 @@ private:
                     // Load the second batch of particles.
                     const auto xvec2 = xsimd::load_unaligned(x_ptr + i2), yvec2 = xsimd::load_unaligned(y_ptr + i2),
                                zvec2 = xsimd::load_unaligned(z_ptr + i2), mvec2 = xsimd::load_unaligned(m_ptr + i2);
-                    // NOTE: now we are going to do a slight repetition of batch_bs_3d(), with the goal
+                    // NOTE: now we are going to do a slight repetition of batch_batch_3d(), with the goal
                     // of avoiding doing extra needless computations.
                     // Compute the relative positions of 2 wrt 1, and the distance square.
                     const auto diff_x = xvec2 - xvec1, diff_y = yvec2 - yvec1, diff_z = zvec2 - zvec1,
-                               dist2 = diff_x * diff_x + diff_y * diff_y + diff_z * diff_z;
+                               dist2 = diff_x * diff_x + diff_y * diff_y + xsimd::fma(diff_z, diff_z, eps2_vec);
                     // Compute m1/dist3 and m2/dist3.
                     batch_type m1_dist3, m2_dist3;
                     if constexpr (use_fast_inv_sqrt<batch_type>) {
@@ -1498,7 +1522,7 @@ private:
                 std::array<F, NDim> a1{};
                 for (size_type i2 = i1 + 1u; i2 < tgt_size; ++i2) {
                     // Determine dist2, dist and dist3.
-                    F dist2(0);
+                    F dist2(eps2);
                     for (std::size_t j = 0; j < NDim; ++j) {
                         diffs[j] = p_ptrs[j][i2] - pos1[j];
                         dist2 = fma_wrap(diffs[j], diffs[j], dist2);
@@ -1522,11 +1546,11 @@ private:
             }
         }
     }
-    // Function to compute the acceleration on a target node by all the particles of a leaf source node.
-    // src_idx is the index, in the tree structure, of the leaf node, tgt_size the number of particles
-    // in the target node, p_ptrs pointers to the target particles' coordinates/masses, res_ptrs pointers to the output
-    // arrays.
-    void tree_accel_leaf(size_type src_idx, size_type tgt_size, const std::array<const F *, NDim + 1u> &p_ptrs,
+    // Function to compute the acceleration on a target node by all the particles of a leaf source node. eps2 is the
+    // square of the softening length, src_idx is the index, in the tree structure, of the leaf node, tgt_size the
+    // number of particles in the target node, p_ptrs pointers to the target particles' coordinates/masses, res_ptrs
+    // pointers to the output arrays.
+    void tree_accel_leaf(F eps2, size_type src_idx, size_type tgt_size, const std::array<const F *, NDim + 1u> &p_ptrs,
                          const std::array<F *, NDim> &res_ptrs) const
     {
         // Get a reference to the source node.
@@ -1590,6 +1614,7 @@ private:
                         // Exit early if the inner loop has no iterations.
                         return;
                     }
+                    const batch_type eps2_vec(eps2);
                     for (auto idx1 = i1; idx1 < vec_size1; idx1 += batch_size) {
                         // Load the current batch of target data.
                         const auto xvec1 = batch_type(x_ptr1 + idx1, xsimd::aligned_mode{}),
@@ -1603,8 +1628,8 @@ private:
                         for (auto idx2 = i2; idx2 < vec_size2; idx2 += batch_size) {
                             auto xvec2 = batch_type(x_ptr2 + idx2), yvec2 = batch_type(y_ptr2 + idx2),
                                  zvec2 = batch_type(z_ptr2 + idx2), mvec2 = batch_type(m_ptr2 + idx2);
-                            batch_bs_3d(res_x_vec, res_y_vec, res_z_vec, xvec1, yvec1, zvec1, xvec2, yvec2, zvec2,
-                                        mvec2);
+                            batch_batch_3d(res_x_vec, res_y_vec, res_z_vec, xvec1, yvec1, zvec1, xvec2, yvec2, zvec2,
+                                           mvec2, eps2_vec);
                             for (std::size_t j = 1; j < batch_size; ++j) {
                                 // Above we computed the element-wise accelerations of a source batch
                                 // onto a target batch. We need to rotate the source batch
@@ -1614,8 +1639,8 @@ private:
                                 yvec2 = rotate(yvec2);
                                 zvec2 = rotate(zvec2);
                                 mvec2 = rotate(mvec2);
-                                batch_bs_3d(res_x_vec, res_y_vec, res_z_vec, xvec1, yvec1, zvec1, xvec2, yvec2, zvec2,
-                                            mvec2);
+                                batch_batch_3d(res_x_vec, res_y_vec, res_z_vec, xvec1, yvec1, zvec1, xvec2, yvec2,
+                                               zvec2, mvec2, eps2_vec);
                             }
                         }
                         // Store the updated accelerations in the temporary vectors.
@@ -1633,6 +1658,7 @@ private:
                     i1 = vec_size1;
                     return;
                 }
+                const batch_type1 eps2_vec(eps2);
                 for (; i1 < vec_size1; i1 += batch_size1) {
                     const auto xvec1 = batch_type1(x_ptr1 + i1, xsimd::aligned_mode{}),
                                yvec1 = batch_type1(y_ptr1 + i1, xsimd::aligned_mode{}),
@@ -1641,9 +1667,11 @@ private:
                          res_y_vec = batch_type1(res_y + i1, xsimd::aligned_mode{}),
                          res_z_vec = batch_type1(res_z + i1, xsimd::aligned_mode{});
                     for (auto idx2 = i2; idx2 < src_size; ++idx2) {
-                        // NOTE: here we are doing batch/scalar interactions.
-                        batch_bs_3d(res_x_vec, res_y_vec, res_z_vec, xvec1, yvec1, zvec1, x_ptr2[idx2], y_ptr2[idx2],
-                                    z_ptr2[idx2], m_ptr2[idx2]);
+                        // NOTE: here we are doing batch/scalar interactions, with the scalars
+                        // splatted to vectors.
+                        batch_batch_3d(res_x_vec, res_y_vec, res_z_vec, xvec1, yvec1, zvec1, batch_type1(x_ptr2[idx2]),
+                                       batch_type1(y_ptr2[idx2]), batch_type1(z_ptr2[idx2]), batch_type1(m_ptr2[idx2]),
+                                       eps2_vec);
                     }
                     res_x_vec.store_aligned(res_x + i1);
                     res_y_vec.store_aligned(res_y + i1);
@@ -1668,8 +1696,8 @@ private:
                 for (size_type i2 = 0; i2 < src_size; ++i2) {
                     // NOTE: scalar/scalar interactions.
                     const auto diff_x = x_ptr2[i2] - x1, diff_y = y_ptr2[i2] - y1, diff_z = z_ptr2[i2] - z1,
-                               dist2 = diff_x * diff_x + diff_y * diff_y + diff_z * diff_z, dist = std::sqrt(dist2),
-                               dist3 = dist * dist2, m_dist3 = m_ptr2[i2] / dist3;
+                               dist2 = diff_x * diff_x + diff_y * diff_y + fma_wrap(diff_z, diff_z, eps2),
+                               dist = std::sqrt(dist2), dist3 = dist * dist2, m_dist3 = m_ptr2[i2] / dist3;
                     rx = fma_wrap(diff_x, m_dist3, rx);
                     ry = fma_wrap(diff_y, m_dist3, ry);
                     rz = fma_wrap(diff_z, m_dist3, rz);
@@ -1690,7 +1718,7 @@ private:
                 }
                 // Iterate over the particles in the src node.
                 for (size_type i2 = src_begin; i2 < src_end; ++i2) {
-                    F dist2(0);
+                    F dist2(eps2);
                     for (std::size_t j = 0; j < NDim; ++j) {
                         diffs[j] = m_parts[j][i2] - pos1[j];
                         dist2 = fma_wrap(diffs[j], diffs[j], dist2);
@@ -1703,10 +1731,10 @@ private:
             }
         }
     }
-    // Function to compute the acceleration due to the COM of a source node onto a target node. src_idx
-    // is the index, in the tree structure, of the source node, tgt_size the number of particles in the
-    // target node, tmp_ptrs are pointers to the temporary data filled in by the tree_accel_bh_check()
-    // function (which will be re-used by this function), res_ptrs pointers to the output arrays.
+    // Function to compute the acceleration due to the COM of a source node onto a target node. src_idx is the index, in
+    // the tree structure, of the source node, tgt_size the number of particles in the target node, tmp_ptrs are
+    // pointers to the temporary data filled in by the tree_accel_bh_check() function (which will be re-used by this
+    // function), res_ptrs pointers to the output arrays.
     void tree_accel_bh_com(size_type src_idx, size_type tgt_size, const std::array<F *, NDim + 1u> &tmp_ptrs,
                            const std::array<F *, NDim> &res_ptrs) const
     {
@@ -1745,13 +1773,12 @@ private:
             }
         }
     }
-    // Function to check if a source node satisfies the BH criterion and, possibly, to compute
-    // the accelerations due to that source node. src_idx is the index, in the tree structure, of the
-    // source node, theta2 the square of the opening angle, tgt_size the number
-    // of particles in the target node, p_ptrs pointers to the coordinates/masses of the particles
-    // in the target node, res_ptrs pointers to the output arrays. The return value is the index
-    // of the next source node in the tree traversal.
-    size_type tree_accel_bh_check(size_type src_idx, F theta2, size_type tgt_size,
+    // Function to check if a source node satisfies the BH criterion and, possibly, to compute the accelerations due to
+    // that source node. src_idx is the index, in the tree structure, of the source node, theta2 the square of the
+    // opening angle, eps2 the square of the softening length, tgt_size the number of particles in the target node,
+    // p_ptrs pointers to the coordinates/masses of the particles in the target node, res_ptrs pointers to the output
+    // arrays. The return value is the index of the next source node in the tree traversal.
+    size_type tree_accel_bh_check(size_type src_idx, F theta2, F eps2, size_type tgt_size,
                                   const std::array<const F *, NDim + 1u> &p_ptrs,
                                   const std::array<F *, NDim> &res_ptrs) const
     {
@@ -1782,13 +1809,13 @@ private:
                 constexpr auto batch_size = s.value;
                 using batch_type = xsimd::batch<F, batch_size>;
                 const auto tgt_vec_size = static_cast<size_type>(tgt_size - tgt_size % batch_size);
-                const batch_type src_dim2_vec(src_dim2), theta2_vec(theta2), x_com_vec(com_pos[0]),
+                const batch_type src_dim2_vec(src_dim2), theta2_vec(theta2), eps2_vec(eps2), x_com_vec(com_pos[0]),
                     y_com_vec(com_pos[1]), z_com_vec(com_pos[2]);
                 for (; i < tgt_vec_size; i += batch_size) {
                     const auto diff_x = x_com_vec - batch_type(x_ptr + i, xsimd::aligned_mode{}),
                                diff_y = y_com_vec - batch_type(y_ptr + i, xsimd::aligned_mode{}),
-                               diff_z = z_com_vec - batch_type(z_ptr + i, xsimd::aligned_mode{}),
-                               dist2 = diff_x * diff_x + diff_y * diff_y + diff_z * diff_z;
+                               diff_z = z_com_vec - batch_type(z_ptr + i, xsimd::aligned_mode{});
+                    auto dist2 = diff_x * diff_x + diff_y * diff_y + diff_z * diff_z;
                     if (xsimd::any(src_dim2_vec >= theta2_vec * dist2)) {
                         // At least one particle in the current batch fails the BH criterion
                         // check. Mark the bh_flag as false, and set i to tgt_size in order
@@ -1797,6 +1824,8 @@ private:
                         i = tgt_size;
                         break;
                     }
+                    // Add the softening length.
+                    dist2 += eps2_vec;
                     diff_x.store_aligned(tmp_x + i);
                     diff_y.store_aligned(tmp_y + i);
                     diff_z.store_aligned(tmp_z + i);
@@ -1824,6 +1853,8 @@ private:
                 bh_flag = false;
                 break;
             }
+            // Add the softening length.
+            dist2 += eps2;
             // Store dist3 for later use.
             // NOTE: in the scalar part, we always store dist3.
             tmp_ptrs[NDim][i] = std::sqrt(dist2) * dist2;
@@ -1839,15 +1870,16 @@ private:
         // node, in which case we need to compute all the pairwise interactions.
         if (!n_children_src) {
             // Leaf node.
-            tree_accel_leaf(src_idx, tgt_size, p_ptrs, res_ptrs);
+            tree_accel_leaf(eps2, src_idx, tgt_size, p_ptrs, res_ptrs);
         }
         // In any case, we keep traversing the tree moving to the next node in depth-first order.
         return static_cast<size_type>(src_idx + 1u);
     }
     // Tree traversal for the computation of the accelerations. theta2 is the square of the opening angle,
-    // tgt_size the number of particles in the target node, tgt_code its code, p_ptrs are pointers to the
-    // coordinates/masses of the particles in the target node, res_ptrs pointers to the output arrays.
-    void tree_accel(F theta2, size_type tgt_size, UInt tgt_code, const std::array<const F *, NDim + 1u> &p_ptrs,
+    // eps2 the square of the softening length, tgt_size the number of particles in the target node, tgt_code its code,
+    // p_ptrs are pointers to the coordinates/masses of the particles in the target node, res_ptrs pointers to the
+    // output arrays.
+    void tree_accel(F theta2, F eps2, size_type tgt_size, UInt tgt_code, const std::array<const F *, NDim + 1u> &p_ptrs,
                     const std::array<F *, NDim> &res_ptrs) const
     {
         assert(!m_tree.empty());
@@ -1871,7 +1903,7 @@ private:
             if (src_code == tgt_code) {
                 // If src_code == tgt_code, we are currently visiting the target node.
                 // Compute the self interactions and skip all the children of the target node.
-                tree_accel_self_interactions(tgt_size, p_ptrs, res_ptrs);
+                tree_accel_self_interactions(eps2, tgt_size, p_ptrs, res_ptrs);
                 src_idx += n_children_src + 1u;
                 continue;
             }
@@ -1894,16 +1926,16 @@ private:
             }
             // The source node is not an ancestor of the target. We need to run the BH criterion check.
             // The tree_accel_bh_check() function will return the index of the next node in the traversal.
-            src_idx = tree_accel_bh_check(src_idx, theta2, tgt_size, p_ptrs, res_ptrs);
+            src_idx = tree_accel_bh_check(src_idx, theta2, eps2, tgt_size, p_ptrs, res_ptrs);
         }
     }
     // Top level function for the computation of the accelerations.
     template <typename It>
-    void vec_accs_impl(std::array<It, NDim> &out, F theta2) const
+    void vec_accs_impl(std::array<It, NDim> &out, F theta2, F eps2) const
     {
         tbb::parallel_for(
             tbb::blocked_range<decltype(m_crit_nodes.size())>(0u, m_crit_nodes.size()),
-            [this, theta2, &out](const auto &range) {
+            [this, theta2, eps2, &out](const auto &range) {
                 // Get references to the local temporary data.
                 auto &tmp_res = vec_acc_tmp_res();
                 auto &tmp_tgt = tgt_tmp_data();
@@ -1971,7 +2003,7 @@ private:
                     }
                     p_ptrs[NDim] = tmp_tgt[NDim].data();
                     // Do the computation.
-                    tree_accel(theta2, tgt_size, tgt_code, p_ptrs, res_ptrs);
+                    tree_accel(theta2, eps2, tgt_size, tgt_code, p_ptrs, res_ptrs);
                     // Write out the result.
                     using it_diff_t = typename std::iterator_traits<It>::difference_type;
                     for (std::size_t j = 0; j < NDim; ++j) {
@@ -1981,21 +2013,35 @@ private:
                 }
             });
     }
+    // Small helper to check the value of the softening length and its square.
+    // Used more than once, hence factored out.
+    static void check_eps_eps2(F eps, F eps2)
+    {
+        if (!std::isfinite(eps2) || eps2 < F(0)) {
+            throw std::domain_error("The square of the softening length must be finite and non-negative, but it is "
+                                    + std::to_string(eps2) + " instead");
+        }
+        if (eps < F(0)) {
+            throw std::domain_error("The softening length must be non-negative, but it is " + std::to_string(eps)
+                                    + " instead");
+        }
+    }
     // Top level dispatcher for the accs functions. It will run a few checks and then invoke vec_accs_impl().
     template <bool Ordered, typename Output>
-    void accs_dispatch(Output &out, const F &theta) const
+    void accs_dispatch(Output &out, F theta, F eps) const
     {
         simple_timer st("vector accs computation");
-        const auto theta2 = theta * theta;
+        const auto theta2 = theta * theta, eps2 = eps * eps;
         // Input param check.
-        if (!std::isfinite(theta2)) {
-            throw std::domain_error("The value of the square of the theta parameter must be finite, but it is "
+        if (!std::isfinite(theta2) || theta2 <= F(0)) {
+            throw std::domain_error("The square of the theta parameter must be finite and positive, but it is "
                                     + std::to_string(theta2) + " instead");
         }
         if (theta < F(0)) {
-            throw std::domain_error("The value of the theta parameter must be non-negative, but it is "
-                                    + std::to_string(theta) + " instead");
+            throw std::domain_error("The theta parameter must be non-negative, but it is " + std::to_string(theta)
+                                    + " instead");
         }
+        check_eps_eps2(eps, eps2);
         if constexpr (Ordered) {
             // Make sure we don't run into overflows when doing a permutated iteration
             // over the iterators in out.
@@ -2012,78 +2058,82 @@ private:
             }
             // NOTE: we are checking in the vec_accs_impl function that we can index into
             // the permuted iterators without overflows (see the use of boost::numeric_cast()).
-            vec_accs_impl(out_pits, theta2);
+            vec_accs_impl(out_pits, theta2, eps2);
         } else {
-            vec_accs_impl(out, theta2);
+            vec_accs_impl(out, theta2, eps2);
         }
     }
     // Helper overload for an array of vectors. It will prepare the vectors and then
     // call the other overload.
     template <bool Ordered, typename Allocator>
-    void accs_dispatch(std::array<std::vector<F, Allocator>, NDim> &out, const F &theta) const
+    void accs_dispatch(std::array<std::vector<F, Allocator>, NDim> &out, F theta, F eps) const
     {
         std::array<F *, NDim> out_ptrs;
         for (std::size_t j = 0; j < NDim; ++j) {
             out[j].resize(boost::numeric_cast<decltype(out[j].size())>(m_parts[0].size()));
             out_ptrs[j] = out[j].data();
         }
-        accs_dispatch<Ordered>(out_ptrs, theta);
+        accs_dispatch<Ordered>(out_ptrs, theta, eps);
     }
 
 public:
     template <typename Allocator>
-    void accs_u(std::array<std::vector<F, Allocator>, NDim> &out, const F &theta) const
+    void accs_u(std::array<std::vector<F, Allocator>, NDim> &out, F theta, F eps = F(0)) const
     {
-        accs_dispatch<false>(out, theta);
+        accs_dispatch<false>(out, theta, eps);
     }
     template <typename It>
-    void accs_u(std::array<It, NDim> &out, const F &theta) const
+    void accs_u(std::array<It, NDim> &out, F theta, F eps = F(0)) const
     {
-        accs_dispatch<false>(out, theta);
+        accs_dispatch<false>(out, theta, eps);
     }
     template <typename Allocator>
-    void accs_o(std::array<std::vector<F, Allocator>, NDim> &out, const F &theta) const
+    void accs_o(std::array<std::vector<F, Allocator>, NDim> &out, F theta, F eps = F(0)) const
     {
-        accs_dispatch<true>(out, theta);
+        accs_dispatch<true>(out, theta, eps);
     }
     template <typename It>
-    void accs_o(std::array<It, NDim> &out, const F &theta) const
+    void accs_o(std::array<It, NDim> &out, F theta, F eps = F(0)) const
     {
-        accs_dispatch<true>(out, theta);
+        accs_dispatch<true>(out, theta, eps);
     }
 
 private:
     template <bool Ordered>
-    std::array<F, NDim> exact_acc_impl(size_type orig_idx) const
+    std::array<F, NDim> exact_acc_impl(size_type orig_idx, F eps) const
     {
         simple_timer st("exact acc computation");
+        const auto eps2 = eps * eps;
+        // Check eps.
+        check_eps_eps2(eps, eps2);
         const auto size = m_parts[0].size();
-        std::array<F, NDim> retval{};
+        std::array<F, NDim> retval{}, diffs;
         const auto idx = Ordered ? m_ord_ind[orig_idx] : orig_idx;
         for (size_type i = 0; i < size; ++i) {
             if (i == idx) {
                 continue;
             }
-            F dist2(0);
+            F dist2(eps2);
             for (std::size_t j = 0; j < NDim; ++j) {
-                dist2 += (m_parts[j][i] - m_parts[j][idx]) * (m_parts[j][i] - m_parts[j][idx]);
+                diffs[j] = m_parts[j][i] - m_parts[j][idx];
+                dist2 = fma_wrap(diffs[j], diffs[j], dist2);
             }
             const auto dist = std::sqrt(dist2), dist3 = dist * dist2, m_dist3 = m_parts[NDim][i] / dist3;
             for (std::size_t j = 0; j < NDim; ++j) {
-                retval[j] += (m_parts[j][i] - m_parts[j][idx]) * m_dist3;
+                retval[j] = fma_wrap(diffs[j], m_dist3, retval[j]);
             }
         }
         return retval;
     }
 
 public:
-    std::array<F, NDim> exact_acc_u(size_type idx) const
+    std::array<F, NDim> exact_acc_u(size_type idx, F eps = F(0)) const
     {
-        return exact_acc_impl<false>(idx);
+        return exact_acc_impl<false>(idx, eps);
     }
-    std::array<F, NDim> exact_acc_o(size_type idx) const
+    std::array<F, NDim> exact_acc_o(size_type idx, F eps = F(0)) const
     {
-        return exact_acc_impl<true>(idx);
+        return exact_acc_impl<true>(idx, eps);
     }
 
 private:
