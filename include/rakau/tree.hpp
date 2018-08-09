@@ -1997,6 +1997,19 @@ private:
                 }
             });
     }
+    // Small helper to check the value of the softening length and its square.
+    // Used more than once, hence factored out.
+    static void check_eps_eps2(F eps, F eps2)
+    {
+        if (!std::isfinite(eps2) || eps2 < F(0)) {
+            throw std::domain_error("The square of the softening length must be finite and non-negative, but it is "
+                                    + std::to_string(eps2) + " instead");
+        }
+        if (eps < F(0)) {
+            throw std::domain_error("The softening length must be non-negative, but it is " + std::to_string(eps)
+                                    + " instead");
+        }
+    }
     // Top level dispatcher for the accs functions. It will run a few checks and then invoke vec_accs_impl().
     template <bool Ordered, typename Output>
     void accs_dispatch(Output &out, F theta, F eps) const
@@ -2012,14 +2025,7 @@ private:
             throw std::domain_error("The theta parameter must be non-negative, but it is " + std::to_string(theta)
                                     + " instead");
         }
-        if (!std::isfinite(eps2) || eps2 < F(0)) {
-            throw std::domain_error("The square of the softening length must be finite and non-negative, but it is "
-                                    + std::to_string(eps2) + " instead");
-        }
-        if (eps < F(0)) {
-            throw std::domain_error("The softening length must be non-negative, but it is " + std::to_string(eps)
-                                    + " instead");
-        }
+        check_eps_eps2(eps, eps2);
         if constexpr (Ordered) {
             // Make sure we don't run into overflows when doing a permutated iteration
             // over the iterators in out.
@@ -2078,36 +2084,40 @@ public:
 
 private:
     template <bool Ordered>
-    std::array<F, NDim> exact_acc_impl(size_type orig_idx) const
+    std::array<F, NDim> exact_acc_impl(size_type orig_idx, F eps) const
     {
         simple_timer st("exact acc computation");
+        const auto eps2 = eps * eps;
+        // Check eps.
+        check_eps_eps2(eps, eps2);
         const auto size = m_parts[0].size();
-        std::array<F, NDim> retval{};
+        std::array<F, NDim> retval{}, diffs;
         const auto idx = Ordered ? m_ord_ind[orig_idx] : orig_idx;
         for (size_type i = 0; i < size; ++i) {
             if (i == idx) {
                 continue;
             }
-            F dist2(0);
+            F dist2(eps2);
             for (std::size_t j = 0; j < NDim; ++j) {
-                dist2 += (m_parts[j][i] - m_parts[j][idx]) * (m_parts[j][i] - m_parts[j][idx]);
+                diffs[j] = m_parts[j][i] - m_parts[j][idx];
+                dist2 = fma_wrap(diffs[j], diffs[j], dist2);
             }
             const auto dist = std::sqrt(dist2), dist3 = dist * dist2, m_dist3 = m_parts[NDim][i] / dist3;
             for (std::size_t j = 0; j < NDim; ++j) {
-                retval[j] += (m_parts[j][i] - m_parts[j][idx]) * m_dist3;
+                retval[j] = fma_wrap(diffs[j], m_dist3, retval[j]);
             }
         }
         return retval;
     }
 
 public:
-    std::array<F, NDim> exact_acc_u(size_type idx) const
+    std::array<F, NDim> exact_acc_u(size_type idx, F eps = F(0)) const
     {
-        return exact_acc_impl<false>(idx);
+        return exact_acc_impl<false>(idx, eps);
     }
-    std::array<F, NDim> exact_acc_o(size_type idx) const
+    std::array<F, NDim> exact_acc_o(size_type idx, F eps = F(0)) const
     {
-        return exact_acc_impl<true>(idx);
+        return exact_acc_impl<true>(idx, eps);
     }
 
 private:
