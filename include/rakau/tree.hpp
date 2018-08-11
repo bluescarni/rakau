@@ -1433,18 +1433,18 @@ private:
                                B zvec2, B mvec2, B eps2_vec)
     {
         const B diff_x = xvec2 - xvec1, diff_y = yvec2 - yvec1, diff_z = zvec2 - zvec1,
-                dist2 = diff_x * diff_x + diff_y * diff_y + xsimd::fma(diff_z, diff_z, eps2_vec);
+                dist2 = diff_x * diff_x + diff_y * diff_y + xsimd_fma(diff_z, diff_z, eps2_vec);
         B m2_dist3;
         if constexpr (use_fast_inv_sqrt<B>) {
             m2_dist3 = mvec2 * inv_sqrt_3(dist2);
         } else {
-            const B dist = xsimd::sqrt(dist2);
+            const B dist = xsimd_sqrt(dist2);
             const B dist3 = dist * dist2;
             m2_dist3 = mvec2 / dist3;
         }
-        res_x_vec = xsimd::fma(diff_x, m2_dist3, res_x_vec);
-        res_y_vec = xsimd::fma(diff_y, m2_dist3, res_y_vec);
-        res_z_vec = xsimd::fma(diff_z, m2_dist3, res_z_vec);
+        res_x_vec = xsimd_fma(diff_x, m2_dist3, res_x_vec);
+        res_y_vec = xsimd_fma(diff_y, m2_dist3, res_y_vec);
+        res_z_vec = xsimd_fma(diff_z, m2_dist3, res_z_vec);
     }
     // Function to compute the self-interactions within a target node. eps2 is the square of the softening length,
     // tgt_size is the number of particles in the target node, p_ptrs pointers to the target particles'
@@ -1481,7 +1481,7 @@ private:
                     // of avoiding doing extra needless computations.
                     // Compute the relative positions of 2 wrt 1, and the distance square.
                     const auto diff_x = xvec2 - xvec1, diff_y = yvec2 - yvec1, diff_z = zvec2 - zvec1,
-                               dist2 = diff_x * diff_x + diff_y * diff_y + xsimd::fma(diff_z, diff_z, eps2_vec);
+                               dist2 = diff_x * diff_x + diff_y * diff_y + xsimd_fma(diff_z, diff_z, eps2_vec);
                     // Compute m1/dist3 and m2/dist3.
                     batch_type m1_dist3, m2_dist3;
                     if constexpr (use_fast_inv_sqrt<batch_type>) {
@@ -1489,19 +1489,19 @@ private:
                         m1_dist3 = mvec1 * tmp;
                         m2_dist3 = mvec2 * tmp;
                     } else {
-                        const auto dist = xsimd::sqrt(dist2);
+                        const auto dist = xsimd_sqrt(dist2);
                         const auto dist3 = dist * dist2;
                         m1_dist3 = mvec1 / dist3;
                         m2_dist3 = mvec2 / dist3;
                     }
                     // Add to the accumulators for 1 the accelerations due to the batch 2.
-                    res_x_vec1 = xsimd::fma(diff_x, m2_dist3, res_x_vec1);
-                    res_y_vec1 = xsimd::fma(diff_y, m2_dist3, res_y_vec1);
-                    res_z_vec1 = xsimd::fma(diff_z, m2_dist3, res_z_vec1);
+                    res_x_vec1 = xsimd_fma(diff_x, m2_dist3, res_x_vec1);
+                    res_y_vec1 = xsimd_fma(diff_y, m2_dist3, res_y_vec1);
+                    res_z_vec1 = xsimd_fma(diff_z, m2_dist3, res_z_vec1);
                     // Add *directly into the result buffer* the acceleration on 2 due to 1.
-                    xsimd::fnma(diff_x, m1_dist3, xsimd::load_unaligned(res_x + i2)).store_unaligned(res_x + i2);
-                    xsimd::fnma(diff_y, m1_dist3, xsimd::load_unaligned(res_y + i2)).store_unaligned(res_y + i2);
-                    xsimd::fnma(diff_z, m1_dist3, xsimd::load_unaligned(res_z + i2)).store_unaligned(res_z + i2);
+                    xsimd_fnma(diff_x, m1_dist3, xsimd::load_unaligned(res_x + i2)).store_unaligned(res_x + i2);
+                    xsimd_fnma(diff_y, m1_dist3, xsimd::load_unaligned(res_y + i2)).store_unaligned(res_y + i2);
+                    xsimd_fnma(diff_z, m1_dist3, xsimd::load_unaligned(res_z + i2)).store_unaligned(res_z + i2);
                 }
                 // Add the accumulated acceleration on 1 to the values already in the result buffer.
                 (xsimd::load_aligned(res_x + i1) + res_x_vec1).store_aligned(res_x + i1);
@@ -1758,11 +1758,11 @@ private:
                                xdiff = batch_type(tmp_x + i, xsimd::aligned_mode{}),
                                ydiff = batch_type(tmp_y + i, xsimd::aligned_mode{}),
                                zdiff = batch_type(tmp_z + i, xsimd::aligned_mode{});
-                    xsimd::fma(xdiff, m_src_dist3_vec, batch_type(res_x + i, xsimd::aligned_mode{}))
+                    xsimd_fma(xdiff, m_src_dist3_vec, batch_type(res_x + i, xsimd::aligned_mode{}))
                         .store_aligned(res_x + i);
-                    xsimd::fma(ydiff, m_src_dist3_vec, batch_type(res_y + i, xsimd::aligned_mode{}))
+                    xsimd_fma(ydiff, m_src_dist3_vec, batch_type(res_y + i, xsimd::aligned_mode{}))
                         .store_aligned(res_y + i);
-                    xsimd::fma(zdiff, m_src_dist3_vec, batch_type(res_z + i, xsimd::aligned_mode{}))
+                    xsimd_fma(zdiff, m_src_dist3_vec, batch_type(res_z + i, xsimd::aligned_mode{}))
                         .store_aligned(res_z + i);
                 }
             });
@@ -1833,7 +1833,7 @@ private:
                     if constexpr (use_fast_inv_sqrt<batch_type>) {
                         inv_sqrt_3(dist2).store_aligned(tmp_dist3 + i);
                     } else {
-                        (xsimd::sqrt(dist2) * dist2).store_aligned(tmp_dist3 + i);
+                        (xsimd_sqrt(dist2) * dist2).store_aligned(tmp_dist3 + i);
                     }
                 }
             });

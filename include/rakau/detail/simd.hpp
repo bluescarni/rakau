@@ -10,6 +10,7 @@
 #define RAKAU_DETAIL_SIMD_HPP
 
 #include <algorithm>
+#include <atomic>
 #include <tuple>
 #include <type_traits>
 
@@ -26,6 +27,37 @@ namespace rakau
 
 inline namespace detail
 {
+
+inline std::atomic<unsigned long long> simd_fma_counter = ATOMIC_VAR_INIT(0);
+inline std::atomic<unsigned long long> simd_sqrt_counter = ATOMIC_VAR_INIT(0);
+inline std::atomic<unsigned long long> simd_rsqrt_counter = ATOMIC_VAR_INIT(0);
+
+template <typename B>
+inline auto xsimd_fma(B x, B y, B z)
+{
+#if defined(RAKAU_WITH_SIMD_COUNTERS)
+    ++simd_fma_counter;
+#endif
+    return xsimd::fma(x, y, z);
+}
+
+template <typename B>
+inline auto xsimd_fnma(B x, B y, B z)
+{
+#if defined(RAKAU_WITH_SIMD_COUNTERS)
+    ++simd_fma_counter;
+#endif
+    return xsimd::fnma(x, y, z);
+}
+
+template <typename B>
+inline auto xsimd_sqrt(B x)
+{
+#if defined(RAKAU_WITH_SIMD_COUNTERS)
+    ++simd_sqrt_counter;
+#endif
+    return xsimd::sqrt(x);
+}
 
 // Rotate left by 1 the input batch x. That is, if the input
 // contains the values [0, 1, 2, 3], the output will contain
@@ -142,7 +174,7 @@ inline xsimd::batch<F, N> inv_sqrt_newton_iter(xsimd::batch<F, N> y0, xsimd::bat
     const xsimd::batch<F, N> three(F(3));
     const xsimd::batch<F, N> xy0 = x * y0;
     const xsimd::batch<F, N> half_y0 = y0 * (F(1) / F(2));
-    const xsimd::batch<F, N> three_minus_muls = xsimd::fnma(xy0, y0, three);
+    const xsimd::batch<F, N> three_minus_muls = xsimd_fnma(xy0, y0, three);
     return half_y0 * three_minus_muls;
 }
 
@@ -153,6 +185,9 @@ inline xsimd::batch<float, 16> inv_sqrt_3(xsimd::batch<float, 16> x)
 {
     // NOTE: AVX512-ER has an intrinsic for 28-bit precision (rather than 14-bit)
     // rsqrt, but it does not seem to be widely available yet.
+#if defined(RAKAU_WITH_SIMD_COUNTERS)
+    ++simd_rsqrt_counter;
+#endif
     const auto tmp = inv_sqrt_newton_iter(xsimd::batch<float, 16>(_mm512_rsqrt14_ps(x)), x);
     return tmp * tmp * tmp;
 }
@@ -163,6 +198,9 @@ inline xsimd::batch<float, 16> inv_sqrt_3(xsimd::batch<float, 16> x)
 
 inline xsimd::batch<float, 8> inv_sqrt_3(xsimd::batch<float, 8> x)
 {
+#if defined(RAKAU_WITH_SIMD_COUNTERS)
+    ++simd_rsqrt_counter;
+#endif
     const auto tmp = inv_sqrt_newton_iter(xsimd::batch<float, 8>(_mm256_rsqrt_ps(x)), x);
     return tmp * tmp * tmp;
 }
