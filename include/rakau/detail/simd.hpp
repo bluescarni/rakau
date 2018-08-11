@@ -32,11 +32,15 @@ inline std::atomic<unsigned long long> simd_fma_counter = ATOMIC_VAR_INIT(0);
 inline std::atomic<unsigned long long> simd_sqrt_counter = ATOMIC_VAR_INIT(0);
 inline std::atomic<unsigned long long> simd_rsqrt_counter = ATOMIC_VAR_INIT(0);
 
+inline thread_local unsigned long long simd_fma_counter_tl = 0;
+inline thread_local unsigned long long simd_sqrt_counter_tl = 0;
+inline thread_local unsigned long long simd_rsqrt_counter_tl = 0;
+
 template <typename B>
 inline auto xsimd_fma(B x, B y, B z)
 {
 #if defined(RAKAU_WITH_SIMD_COUNTERS)
-    ++simd_fma_counter;
+    ++simd_fma_counter_tl;
 #endif
     return xsimd::fma(x, y, z);
 }
@@ -45,7 +49,7 @@ template <typename B>
 inline auto xsimd_fnma(B x, B y, B z)
 {
 #if defined(RAKAU_WITH_SIMD_COUNTERS)
-    ++simd_fma_counter;
+    ++simd_fma_counter_tl;
 #endif
     return xsimd::fnma(x, y, z);
 }
@@ -54,7 +58,7 @@ template <typename B>
 inline auto xsimd_sqrt(B x)
 {
 #if defined(RAKAU_WITH_SIMD_COUNTERS)
-    ++simd_sqrt_counter;
+    ++simd_sqrt_counter_tl;
 #endif
     return xsimd::sqrt(x);
 }
@@ -186,7 +190,7 @@ inline xsimd::batch<float, 16> inv_sqrt_3(xsimd::batch<float, 16> x)
     // NOTE: AVX512-ER has an intrinsic for 28-bit precision (rather than 14-bit)
     // rsqrt, but it does not seem to be widely available yet.
 #if defined(RAKAU_WITH_SIMD_COUNTERS)
-    ++simd_rsqrt_counter;
+    ++simd_rsqrt_counter_tl;
 #endif
     const auto tmp = inv_sqrt_newton_iter(xsimd::batch<float, 16>(_mm512_rsqrt14_ps(x)), x);
     return tmp * tmp * tmp;
@@ -199,7 +203,7 @@ inline xsimd::batch<float, 16> inv_sqrt_3(xsimd::batch<float, 16> x)
 inline xsimd::batch<float, 8> inv_sqrt_3(xsimd::batch<float, 8> x)
 {
 #if defined(RAKAU_WITH_SIMD_COUNTERS)
-    ++simd_rsqrt_counter;
+    ++simd_rsqrt_counter_tl;
 #endif
     const auto tmp = inv_sqrt_newton_iter(xsimd::batch<float, 8>(_mm256_rsqrt_ps(x)), x);
     return tmp * tmp * tmp;

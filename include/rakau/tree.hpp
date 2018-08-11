@@ -2012,6 +2012,16 @@ private:
                                   out[j] + boost::numeric_cast<it_diff_t>(tgt_begin));
                     }
                 }
+#if defined(RAKAU_WITH_SIMD_COUNTERS)
+                simd_fma_counter += simd_fma_counter_tl;
+                simd_fma_counter_tl = 0;
+
+                simd_sqrt_counter += simd_sqrt_counter_tl;
+                simd_sqrt_counter_tl = 0;
+
+                simd_rsqrt_counter += simd_rsqrt_counter_tl;
+                simd_rsqrt_counter_tl = 0;
+#endif
             });
     }
     // Small helper to check the value of the softening length and its square.
