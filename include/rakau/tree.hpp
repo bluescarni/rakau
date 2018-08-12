@@ -1559,6 +1559,41 @@ private:
         // Establish the range of the source node.
         const auto src_begin = get<1>(src_node)[0], src_end = get<1>(src_node)[1];
         if constexpr (simd_enabled && NDim == 3u) {
+            using batch_type = xsimd::simd_type<F>;
+            constexpr auto batch_size = batch_type::size;
+            // Pointers to the target node data.
+            const auto x_ptr1 = p_ptrs[0], y_ptr1 = p_ptrs[1], z_ptr1 = p_ptrs[2];
+            // Pointers to the source node data.
+            const auto x_ptr2 = m_parts[0].data() + src_begin, y_ptr2 = m_parts[1].data() + src_begin,
+                       z_ptr2 = m_parts[2].data() + src_begin, m_ptr2 = m_parts[3].data() + src_begin;
+            // Pointers to the result data.
+            const auto res_x = res_ptrs[0], res_y = res_ptrs[1], res_z = res_ptrs[2];
+            // The number of particles in the source node.
+            const auto src_size = static_cast<size_type>(src_end - src_begin);
+            const batch_type eps2_vec(eps2);
+            for (size_type i = 0; i < tgt_size; i += batch_size) {
+                // Load the current batch of target data.
+                const auto xvec1 = batch_type(x_ptr1 + i, xsimd::aligned_mode{}),
+                           yvec1 = batch_type(y_ptr1 + i, xsimd::aligned_mode{}),
+                           zvec1 = batch_type(z_ptr1 + i, xsimd::aligned_mode{});
+                // Init the batches for computing the accelerations, loading the
+                // accumulated acceleration for the current batch.
+                auto res_x_vec = batch_type(res_x + i, xsimd::aligned_mode{}),
+                     res_y_vec = batch_type(res_y + i, xsimd::aligned_mode{}),
+                     res_z_vec = batch_type(res_z + i, xsimd::aligned_mode{});
+                for (size_type j = 0; j < src_size; ++j) {
+                    // Load the current source particle.
+                    const auto x2 = x_ptr2[j], y2 = y_ptr2[j], z2 = z_ptr2[j], m2 = m_ptr2[j];
+                    // Compute the interaction.
+                    batch_batch_3d(res_x_vec, res_y_vec, res_z_vec, xvec1, yvec1, zvec1, batch_type(x2), batch_type(y2),
+                                   batch_type(z2), batch_type(m2), eps2_vec);
+                }
+                // Store the updated accelerations in the temporary vectors.
+                res_x_vec.store_aligned(res_x + i);
+                res_y_vec.store_aligned(res_y + i);
+                res_z_vec.store_aligned(res_z + i);
+            }
+#if 0
             // Pointers to the target node data.
             const auto x_ptr1 = p_ptrs[0], y_ptr1 = p_ptrs[1], z_ptr1 = p_ptrs[2];
             // Pointers to the source node data.
@@ -1708,6 +1743,7 @@ private:
                 res_y[i1] = ry;
                 res_z[i1] = rz;
             }
+#endif
         } else {
             // Local variables for the scalar computation.
             std::array<F, NDim> pos1, diffs;
