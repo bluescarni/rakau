@@ -1741,17 +1741,35 @@ private:
     {
         // Load locally the mass of the COM of the source node.
         const auto m_src = get<2>(m_tree[src_idx]);
-        size_type i = 0;
         if constexpr (simd_enabled && NDim == 3u) {
             // The SIMD-accelerated part.
+            using batch_type = xsimd::simd_type<F>;
+            constexpr auto batch_size = batch_type::size;
+            const batch_type m_src_vec(m_src);
             const auto tmp_x = tmp_ptrs[0], tmp_y = tmp_ptrs[1], tmp_z = tmp_ptrs[2], tmp_dist3 = tmp_ptrs[3],
                        res_x = res_ptrs[0], res_y = res_ptrs[1], res_z = res_ptrs[2];
+            for (size_type i = 0; i < tgt_size; i += batch_size) {
+                const auto m_src_dist3_vec = use_fast_inv_sqrt<batch_type>
+                                                 ? m_src_vec * batch_type(tmp_dist3 + i, xsimd::aligned_mode{})
+                                                 : m_src_vec / batch_type(tmp_dist3 + i, xsimd::aligned_mode{}),
+                           xdiff = batch_type(tmp_x + i, xsimd::aligned_mode{}),
+                           ydiff = batch_type(tmp_y + i, xsimd::aligned_mode{}),
+                           zdiff = batch_type(tmp_z + i, xsimd::aligned_mode{});
+                xsimd_fma(xdiff, m_src_dist3_vec, batch_type(res_x + i, xsimd::aligned_mode{}))
+                    .store_aligned(res_x + i);
+                xsimd_fma(ydiff, m_src_dist3_vec, batch_type(res_y + i, xsimd::aligned_mode{}))
+                    .store_aligned(res_y + i);
+                xsimd_fma(zdiff, m_src_dist3_vec, batch_type(res_z + i, xsimd::aligned_mode{}))
+                    .store_aligned(res_z + i);
+            }
+
+#if 0
             tuple_for_each(simd_sizes<F>, [&](auto s) {
                 constexpr auto batch_size = s.value;
                 using batch_type = xsimd::batch<F, batch_size>;
                 const batch_type m_src_vec(m_src);
                 const auto tgt_vec_size = static_cast<size_type>(tgt_size - tgt_size % batch_size);
-                for (; i < tgt_vec_size; i += batch_size) {
+                for (size_type i = 0; i < tgt_vec_size; i += batch_size) {
                     const auto m_src_dist3_vec = use_fast_inv_sqrt<batch_type>
                                                      ? m_src_vec * batch_type(tmp_dist3 + i, xsimd::aligned_mode{})
                                                      : m_src_vec / batch_type(tmp_dist3 + i, xsimd::aligned_mode{}),
@@ -1766,13 +1784,16 @@ private:
                         .store_aligned(res_z + i);
                 }
             });
+#endif
         }
+#if 0
         for (; i < tgt_size; ++i) {
             const auto m_src_dist3 = m_src / tmp_ptrs[NDim][i];
             for (std::size_t j = 0; j < NDim; ++j) {
                 res_ptrs[j][i] = fma_wrap(tmp_ptrs[j][i], m_src_dist3, res_ptrs[j][i]);
             }
         }
+#endif
     }
     // Function to check if a source node satisfies the BH criterion and, possibly, to compute the accelerations due to
     // that source node. src_idx is the index, in the tree structure, of the source node, theta2 the square of the
@@ -1787,8 +1808,9 @@ private:
         // We will re-use this data later in tree_accel_bh_com().
         auto &tmp_vecs = vec_acc_tmp_vecs();
         std::array<F *, NDim + 1u> tmp_ptrs;
+        const auto pdata_size = tgt_tmp_data()[0].size();
         for (std::size_t j = 0; j < NDim + 1u; ++j) {
-            tmp_vecs[j].resize(tgt_size);
+            tmp_vecs[j].resize(pdata_size);
             tmp_ptrs[j] = tmp_vecs[j].data();
         }
         // Local cache.
@@ -1799,13 +1821,39 @@ private:
         const auto com_pos = get<3>(src_node);
         // Copy locally the dim2 of the source node.
         const auto src_dim2 = get<5>(src_node);
-        // Iteration variables.
-        size_type i = 0;
         bool bh_flag = true;
         if constexpr (simd_enabled && NDim == 3u) {
             // The SIMD-accelerated part.
+            using batch_type = xsimd::simd_type<F>;
+            constexpr auto batch_size = batch_type::size;
             const auto x_ptr = p_ptrs[0], y_ptr = p_ptrs[1], z_ptr = p_ptrs[2];
             const auto tmp_x = tmp_ptrs[0], tmp_y = tmp_ptrs[1], tmp_z = tmp_ptrs[2], tmp_dist3 = tmp_ptrs[3];
+            const batch_type src_dim2_vec(src_dim2), theta2_vec(theta2), eps2_vec(eps2), x_com_vec(com_pos[0]),
+                y_com_vec(com_pos[1]), z_com_vec(com_pos[2]);
+            for (size_type i = 0; i < tgt_size; i += batch_size) {
+                const auto diff_x = x_com_vec - batch_type(x_ptr + i, xsimd::aligned_mode{}),
+                           diff_y = y_com_vec - batch_type(y_ptr + i, xsimd::aligned_mode{}),
+                           diff_z = z_com_vec - batch_type(z_ptr + i, xsimd::aligned_mode{});
+                auto dist2 = diff_x * diff_x + diff_y * diff_y + diff_z * diff_z;
+                if (xsimd::any(src_dim2_vec >= theta2_vec * dist2)) {
+                    // At least one particle in the current batch fails the BH criterion
+                    // check. Mark the bh_flag as false, and set i to tgt_size in order
+                    // to skip the next calculations. Then break out.
+                    bh_flag = false;
+                    break;
+                }
+                // Add the softening length.
+                dist2 += eps2_vec;
+                diff_x.store_aligned(tmp_x + i);
+                diff_y.store_aligned(tmp_y + i);
+                diff_z.store_aligned(tmp_z + i);
+                if constexpr (use_fast_inv_sqrt<batch_type>) {
+                    inv_sqrt_3(dist2).store_aligned(tmp_dist3 + i);
+                } else {
+                    (xsimd_sqrt(dist2) * dist2).store_aligned(tmp_dist3 + i);
+                }
+            }
+#if 0
             tuple_for_each(simd_sizes<F>, [&](auto s) {
                 constexpr auto batch_size = s.value;
                 using batch_type = xsimd::batch<F, batch_size>;
@@ -1837,7 +1885,9 @@ private:
                     }
                 }
             });
+#endif
         }
+#if 0
         // The scalar part.
         for (; i < tgt_size; ++i) {
             F dist2(0);
@@ -1860,6 +1910,7 @@ private:
             // NOTE: in the scalar part, we always store dist3.
             tmp_ptrs[NDim][i] = std::sqrt(dist2) * dist2;
         }
+#endif
         if (bh_flag) {
             // The source node satisfies the BH criterion for all the particles of the target node. Add the
             // acceleration due to the com of the source node.
@@ -1986,7 +2037,7 @@ private:
                         // the padding data in the self interaction function, we don't run into
                         // singularities (as all the particles in the domain are contained within
                         // [-m_box_size/2, m_box_size/2)).
-                        std::fill(tmp_tgt[j].data() + tgt_size, tmp_tgt[j].data() + pdata_size, m_box_size);
+                        std::fill(tmp_tgt[j].data() + tgt_size, tmp_tgt[j].data() + pdata_size, m_box_size * 10);
                     }
                     // For the padding data, we set the masses to zero. This ensures that the padding data
                     // does not pollute the real accelerations (accelerations from the padding data will
