@@ -2013,6 +2013,8 @@ private:
                     }
                 }
 #if defined(RAKAU_WITH_SIMD_COUNTERS)
+                // For the current thread, add the thread local counters
+                // to the global atomic ones, then reset them.
                 simd_fma_counter += simd_fma_counter_tl;
                 simd_fma_counter_tl = 0;
 

@@ -28,14 +28,20 @@ namespace rakau
 inline namespace detail
 {
 
+// Global atomic counters for certain simd operations.
+// NOTE: ATOMIC_VAR_INIT can be used with variables with static storage duration,
+// and inline variables do have static storage duration.
 inline std::atomic<unsigned long long> simd_fma_counter = ATOMIC_VAR_INIT(0);
 inline std::atomic<unsigned long long> simd_sqrt_counter = ATOMIC_VAR_INIT(0);
 inline std::atomic<unsigned long long> simd_rsqrt_counter = ATOMIC_VAR_INIT(0);
 
+// The corresponding thread-local counters.
 inline thread_local unsigned long long simd_fma_counter_tl = 0;
 inline thread_local unsigned long long simd_sqrt_counter_tl = 0;
 inline thread_local unsigned long long simd_rsqrt_counter_tl = 0;
 
+// Wrappers around some xsimd function. They will increase the corresponding
+// thread-local counters if compiled with RAKAU_WITH_SIMD_COUNTERS.
 template <typename B>
 inline auto xsimd_fma(B x, B y, B z)
 {
@@ -190,6 +196,9 @@ inline xsimd::batch<float, 16> inv_sqrt_3(xsimd::batch<float, 16> x)
     // NOTE: AVX512-ER has an intrinsic for 28-bit precision (rather than 14-bit)
     // rsqrt, but it does not seem to be widely available yet.
 #if defined(RAKAU_WITH_SIMD_COUNTERS)
+    // Increase the corresponding TL counter, if requested.
+    // NOTE: these inv_sqrt_3 functions are the only places where
+    // we use the rsqrt intrinsics.
     ++simd_rsqrt_counter_tl;
 #endif
     const auto tmp = inv_sqrt_newton_iter(xsimd::batch<float, 16>(_mm512_rsqrt14_ps(x)), x);
