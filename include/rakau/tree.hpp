@@ -1143,6 +1143,26 @@ public:
             m_box_size = determine_box_size(cm_it, N);
         }
         {
+            // Move the external data into the data members.
+            simple_timer st_m("data movement");
+            auto data_mover = [N, this, &cm_it](std::size_t j) {
+                tbb::parallel_for(tbb::blocked_range<size_type>(0u, N), [this, &cm_it, j](const auto &range) {
+                    for (auto i = range.begin(); i != range.end(); ++i) {
+                        this->m_parts[j][i] = *(cm_it[j] + static_cast<it_diff_t>(i));
+                    }
+                });
+            };
+            for (std::size_t j = 0; j < NDim + 1u; ++j) {
+                data_mover(j);
+            }
+            // Compute the iota into m_sort.
+            tbb::parallel_for(tbb::blocked_range<size_type>(0u, N), [this](const auto &range) {
+                for (auto i = range.begin(); i != range.end(); ++i) {
+                    m_isort[i] = i;
+                }
+            });
+        }
+        {
             // Do the Morton encoding.
             simple_timer st_m("morton encoding");
             tbb::parallel_for(tbb::blocked_range<size_type>(0u, N), [this, &cm_it](const auto &range) {
@@ -1152,17 +1172,9 @@ public:
                 morton_encoder<NDim, UInt> me;
                 // Determine the particles' codes, and fill in the particles' data.
                 for (auto i = range.begin(); i != range.end(); ++i) {
-                    // Write the coords in the temp structure and in the data members.
-                    for (std::size_t j = 0; j < NDim; ++j) {
-                        m_parts[j][i] = *(cm_it[j] + static_cast<it_diff_t>(i));
-                    }
-                    // Store the mass.
-                    m_parts[NDim][i] = *(cm_it[NDim] + static_cast<it_diff_t>(i));
                     // Compute and store the code.
                     disc_coords(tmp_dcoord, i);
                     m_codes[i] = me(tmp_dcoord.data());
-                    // Store the index for indirect sorting (this is just a iota).
-                    m_isort[i] = i;
                 }
             });
         }
