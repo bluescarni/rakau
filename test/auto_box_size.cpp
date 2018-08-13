@@ -15,7 +15,10 @@
 #include <initializer_list>
 #include <tuple>
 
+#include "test_utils.hpp"
+
 using namespace rakau;
+using namespace rakau_test;
 
 using fp_types = std::tuple<float, double>;
 
