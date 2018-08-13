@@ -13,6 +13,8 @@
 #include <cstddef>
 #include <iterator>
 #include <random>
+#include <tuple>
+#include <utility>
 #include <vector>
 
 #include <boost/numeric/conversion/cast.hpp>
@@ -41,6 +43,44 @@ inline std::vector<F> get_uniform_particles(std::size_t n, F size, Rng &rng)
         retval.end(), [&rdist, &rng]() { return rdist(rng); });
     return retval;
 }
+
+// Silence spurious GCC warning in tuple_for_each().
+#if !defined(__clang__) && defined(__GNUC__)
+
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wnoexcept"
+
+#endif
+
+// Tuple for_each(). It will apply the input functor f to each element of
+// the input tuple tup, sequentially.
+template <typename Tuple, typename F>
+inline void tuple_for_each(Tuple &&tup, F &&f)
+{
+    std::apply(
+        [&f](auto &&... items) {
+            // NOTE: here we are converting to void the results of the invocations
+            // of f. This ensures that we are folding using the builtin comma
+            // operator, which implies sequencing:
+            // """
+            //  Every value computation and side effect of the first (left) argument of the built-in comma operator is
+            //  sequenced before every value computation and side effect of the second (right) argument.
+            // """"
+            // NOTE: we are writing this as a right fold, i.e., it will expand as:
+            //
+            // f(tup[0]), (f(tup[1]), (f(tup[2])...
+            //
+            // A left fold would also work guaranteeing the same sequencing.
+            (void(std::forward<F>(f)(std::forward<decltype(items)>(items))), ...);
+        },
+        std::forward<Tuple>(tup));
+}
+
+#if !defined(__clang__) && defined(__GNUC__)
+
+#pragma GCC diagnostic pop
+
+#endif
 
 } // namespace rakau_test
 
