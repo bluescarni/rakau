@@ -1145,6 +1145,16 @@ public:
         {
             // Move the external data into the data members.
             simple_timer st_m("data movement");
+            tbb::task_group tg;
+            for (std::size_t j = 0; j < NDim + 1u; ++j) {
+                tg.run([this, j, N, &cm_it]() {
+                    std::copy(cm_it[j], cm_it[j] + static_cast<it_diff_t>(N), this->m_parts[j].begin());
+                });
+            }
+            tg.run([this]() { std::iota(m_isort.begin(), m_isort.end(), size_type(0)); });
+            tg.wait();
+
+#if 0
             auto data_mover = [N, this, &cm_it](std::size_t j) {
                 tbb::parallel_for(tbb::blocked_range<size_type>(0u, N), [this, &cm_it, j](const auto &range) {
                     for (auto i = range.begin(); i != range.end(); ++i) {
@@ -1161,6 +1171,7 @@ public:
                     m_isort[i] = i;
                 }
             });
+#endif
         }
         {
             // Do the Morton encoding.
