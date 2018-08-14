@@ -82,6 +82,7 @@
 
 #include <rakau/config.hpp>
 #include <rakau/detail/libmorton/morton.h>
+#include <rakau/detail/taskflow.hpp>
 
 #if defined(__clang__) || defined(__GNUC__)
 
@@ -1145,14 +1146,14 @@ public:
         {
             // Move the external data into the data members.
             simple_timer st_m("data movement");
-            tbb::task_group tg;
+            tf::Taskflow tf(std::thread::hardware_concurrency());
             for (std::size_t j = 0; j < NDim + 1u; ++j) {
-                tg.run([this, j, N, &cm_it]() {
+                tf.silent_emplace([this, j, N, &cm_it]() {
                     std::copy(cm_it[j], cm_it[j] + static_cast<it_diff_t>(N), this->m_parts[j].begin());
                 });
             }
-            tg.run([this]() { std::iota(m_isort.begin(), m_isort.end(), size_type(0)); });
-            tg.wait();
+            tf.silent_emplace([this]() { std::iota(m_isort.begin(), m_isort.end(), size_type(0)); });
+            tf.wait_for_all();
 
 #if 0
             auto data_mover = [N, this, &cm_it](std::size_t j) {
