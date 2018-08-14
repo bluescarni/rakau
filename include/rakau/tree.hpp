@@ -1193,7 +1193,7 @@ public:
 
 private:
     template <typename It>
-    static auto ilist_to_array(std::initializer_list<It> ilist)
+    static auto ctor_ilist_to_array(std::initializer_list<It> ilist)
     {
         if (ilist.size() != NDim + 1u) {
             throw std::invalid_argument("An initializer list containing " + std::to_string(ilist.size())
@@ -1209,11 +1209,11 @@ private:
 
 public:
     // NOTE: as in the other ctor, It must be a ra iterator. This ensures also we can def-construct it in the
-    // ilist_to_array() helper.
+    // ctor_ilist_to_array() helper.
     template <typename It>
     explicit tree(const F &box_size, std::initializer_list<It> cm_it, const size_type &N, const size_type &max_leaf_n,
                   const size_type &ncrit)
-        : tree(box_size, ilist_to_array(cm_it), N, max_leaf_n, ncrit)
+        : tree(box_size, ctor_ilist_to_array(cm_it), N, max_leaf_n, ncrit)
     {
     }
     tree(const tree &) = default;
@@ -1777,7 +1777,7 @@ private:
     }
     // Top level function for the computation of the accelerations.
     template <typename It>
-    void vec_accs_impl(std::array<It, NDim> &out, F theta2, F eps2) const
+    void vec_accs_impl(const std::array<It, NDim> &out, F theta2, F eps2) const
     {
         // NOTE: we will be adding padding to the target node data when SIMD is active,
         // in order to be able to use SIMD instructions on all the particles of the node.
@@ -1908,7 +1908,7 @@ private:
     }
     // Top level dispatcher for the accs functions. It will run a few checks and then invoke vec_accs_impl().
     template <bool Ordered, typename Output>
-    void accs_dispatch(Output &out, F theta, F eps) const
+    void accs_dispatch(const Output &out, F theta, F eps) const
     {
         simple_timer st("vector accs computation");
         const auto theta2 = theta * theta, eps2 = eps * eps;
@@ -1925,7 +1925,7 @@ private:
         if constexpr (Ordered) {
             // Make sure we don't run into overflows when doing a permutated iteration
             // over the iterators in out.
-            using diff_t = typename std::iterator_traits<std::remove_reference_t<decltype(out[0])>>::difference_type;
+            using diff_t = typename std::iterator_traits<typename Output::value_type>::difference_type;
             if (m_parts[0].size() > static_cast<std::make_unsigned_t<diff_t>>(std::numeric_limits<diff_t>::max())) {
                 throw std::overflow_error(
                     "The number of particles (" + std::to_string(m_parts[0].size())
@@ -1955,6 +1955,22 @@ private:
         }
         accs_dispatch<Ordered>(out_ptrs, theta, eps);
     }
+    // Small helper to turn an init list into an array, in the functions for the computation
+    // of the accelerations.
+    template <typename It>
+    static auto accs_ilist_to_array(std::initializer_list<It> ilist)
+    {
+        if (ilist.size() != NDim) {
+            throw std::invalid_argument(
+                "An initializer list containing " + std::to_string(ilist.size())
+                + " iterators was used as the output for the computation of the accelerations in a "
+                + std::to_string(NDim) + "-dimensional tree, but a list with " + std::to_string(NDim)
+                + " iterators is required instead (the number of iterators must be equal to the number of dimensions)");
+        }
+        std::array<It, NDim> retval;
+        std::copy(ilist.begin(), ilist.end(), retval.begin());
+        return retval;
+    }
 
 public:
     template <typename Allocator>
@@ -1963,9 +1979,14 @@ public:
         accs_dispatch<false>(out, theta, eps);
     }
     template <typename It>
-    void accs_u(std::array<It, NDim> &out, F theta, F eps = F(0)) const
+    void accs_u(const std::array<It, NDim> &out, F theta, F eps = F(0)) const
     {
         accs_dispatch<false>(out, theta, eps);
+    }
+    template <typename It>
+    void accs_u(std::initializer_list<It> out, F theta, F eps = F(0)) const
+    {
+        accs_u(accs_ilist_to_array(out), theta, eps);
     }
     template <typename Allocator>
     void accs_o(std::array<std::vector<F, Allocator>, NDim> &out, F theta, F eps = F(0)) const
@@ -1973,9 +1994,14 @@ public:
         accs_dispatch<true>(out, theta, eps);
     }
     template <typename It>
-    void accs_o(std::array<It, NDim> &out, F theta, F eps = F(0)) const
+    void accs_o(const std::array<It, NDim> &out, F theta, F eps = F(0)) const
     {
         accs_dispatch<true>(out, theta, eps);
+    }
+    template <typename It>
+    void accs_o(std::initializer_list<It> out, F theta, F eps = F(0)) const
+    {
+        accs_o(accs_ilist_to_array(out), theta, eps);
     }
 
 private:

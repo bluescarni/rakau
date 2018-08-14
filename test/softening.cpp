@@ -114,7 +114,8 @@ TEST_CASE("softening")
                                                  new_parts.begin() + 3u * s, new_parts.begin()},
                                                 s, max_leaf_n, ncrit);
                             // Compute the accelerations.
-                            t.accs_u(accs, theta, eps);
+                            // Try with the init list overload as well.
+                            t.accs_u({accs[0].data(), accs[1].data(), accs[2].data()}, theta, eps);
                             // Verify all values are finite.
                             REQUIRE(
                                 std::all_of(accs[0].begin(), accs[0].end(), [](auto c) { return std::isfinite(c); }));
