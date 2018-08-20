@@ -1777,7 +1777,7 @@ private:
     }
     // Top level function for the computation of the accelerations.
     template <typename It>
-    void vec_accs_impl(const std::array<It, NDim> &out, F theta2, F eps2) const
+    void vec_accs_impl(const std::array<It, NDim> &out, F theta2, F G, F eps2) const
     {
         // NOTE: we will be adding padding to the target node data when SIMD is active,
         // in order to be able to use SIMD instructions on all the particles of the node.
@@ -1811,7 +1811,7 @@ private:
         }
         tbb::parallel_for(
             tbb::blocked_range<decltype(m_crit_nodes.size())>(0u, m_crit_nodes.size()),
-            [this, theta2, eps2, pad_coord, &out](const auto &range) {
+            [this, theta2, G, eps2, pad_coord, &out](const auto &range) {
                 // Get references to the local temporary data.
                 auto &tmp_res = vec_acc_tmp_res();
                 auto &tmp_tgt = tgt_tmp_data();
@@ -1871,6 +1871,24 @@ private:
                     p_ptrs[NDim] = tmp_tgt[NDim].data();
                     // Do the computation.
                     tree_accel(theta2, eps2, tgt_size, tgt_code, p_ptrs, res_ptrs);
+                    // Multiply by G, if needed.
+                    if (G != F(1)) {
+                        for (std::size_t j = 0; j < NDim; ++j) {
+                            auto r_ptr = res_ptrs[j];
+                            if constexpr (simd_enabled) {
+                                using batch_type = xsimd::simd_type<F>;
+                                constexpr auto batch_size = batch_type::size;
+                                const batch_type Gvec(G);
+                                for (size_type i = 0; i < tgt_size; i += batch_size) {
+                                    (xsimd::load_aligned(r_ptr + i) * Gvec).store_aligned(r_ptr + i);
+                                }
+                            } else {
+                                for (size_type i = 0; i < tgt_size; ++i) {
+                                    *(r_ptr + i) *= G;
+                                }
+                            }
+                        }
+                    }
                     // Write out the result.
                     for (std::size_t j = 0; j < NDim; ++j) {
                         std::copy(
@@ -1906,9 +1924,17 @@ private:
                                     + " instead");
         }
     }
+    // Small helper to check the value of the gravitational constant.
+    static void check_G_const(F G)
+    {
+        if (!std::isfinite(G)) {
+            throw std::domain_error("The value of the gravitational constant G must be finite, but it is "
+                                    + std::to_string(G) + " instead");
+        }
+    }
     // Top level dispatcher for the accs functions. It will run a few checks and then invoke vec_accs_impl().
     template <bool Ordered, typename Output>
-    void accs_dispatch(const Output &out, F theta, F eps) const
+    void accs_dispatch(const Output &out, F theta, F G, F eps) const
     {
         simple_timer st("vector accs computation");
         const auto theta2 = theta * theta, eps2 = eps * eps;
@@ -1922,6 +1948,7 @@ private:
                                     + " instead");
         }
         check_eps_eps2(eps, eps2);
+        check_G_const(G);
         if constexpr (Ordered) {
             // Make sure we don't run into overflows when doing a permutated iteration
             // over the iterators in out.
@@ -1938,22 +1965,22 @@ private:
             }
             // NOTE: we are checking in the vec_accs_impl function that we can index into
             // the permuted iterators without overflows (see the use of boost::numeric_cast()).
-            vec_accs_impl(out_pits, theta2, eps2);
+            vec_accs_impl(out_pits, theta2, G, eps2);
         } else {
-            vec_accs_impl(out, theta2, eps2);
+            vec_accs_impl(out, theta2, G, eps2);
         }
     }
     // Helper overload for an array of vectors. It will prepare the vectors and then
     // call the other overload.
     template <bool Ordered, typename Allocator>
-    void accs_dispatch(std::array<std::vector<F, Allocator>, NDim> &out, F theta, F eps) const
+    void accs_dispatch(std::array<std::vector<F, Allocator>, NDim> &out, F theta, F G, F eps) const
     {
         std::array<F *, NDim> out_ptrs;
         for (std::size_t j = 0; j < NDim; ++j) {
             out[j].resize(boost::numeric_cast<decltype(out[j].size())>(m_parts[0].size()));
             out_ptrs[j] = out[j].data();
         }
-        accs_dispatch<Ordered>(out_ptrs, theta, eps);
+        accs_dispatch<Ordered>(out_ptrs, theta, G, eps);
     }
     // Small helper to turn an init list into an array, in the functions for the computation
     // of the accelerations.
@@ -1974,44 +2001,46 @@ private:
 
 public:
     template <typename Allocator>
-    void accs_u(std::array<std::vector<F, Allocator>, NDim> &out, F theta, F eps = F(0)) const
+    void accs_u(std::array<std::vector<F, Allocator>, NDim> &out, F theta, F G = F(1), F eps = F(0)) const
     {
-        accs_dispatch<false>(out, theta, eps);
+        accs_dispatch<false>(out, theta, G, eps);
     }
     template <typename It>
-    void accs_u(const std::array<It, NDim> &out, F theta, F eps = F(0)) const
+    void accs_u(const std::array<It, NDim> &out, F theta, F G = F(1), F eps = F(0)) const
     {
-        accs_dispatch<false>(out, theta, eps);
+        accs_dispatch<false>(out, theta, G, eps);
     }
     template <typename It>
-    void accs_u(std::initializer_list<It> out, F theta, F eps = F(0)) const
+    void accs_u(std::initializer_list<It> out, F theta, F G = F(1), F eps = F(0)) const
     {
-        accs_u(accs_ilist_to_array(out), theta, eps);
+        accs_u(accs_ilist_to_array(out), theta, G, eps);
     }
     template <typename Allocator>
-    void accs_o(std::array<std::vector<F, Allocator>, NDim> &out, F theta, F eps = F(0)) const
+    void accs_o(std::array<std::vector<F, Allocator>, NDim> &out, F theta, F G = F(1), F eps = F(0)) const
     {
-        accs_dispatch<true>(out, theta, eps);
+        accs_dispatch<true>(out, theta, G, eps);
     }
     template <typename It>
-    void accs_o(const std::array<It, NDim> &out, F theta, F eps = F(0)) const
+    void accs_o(const std::array<It, NDim> &out, F theta, F G = F(1), F eps = F(0)) const
     {
-        accs_dispatch<true>(out, theta, eps);
+        accs_dispatch<true>(out, theta, G, eps);
     }
     template <typename It>
-    void accs_o(std::initializer_list<It> out, F theta, F eps = F(0)) const
+    void accs_o(std::initializer_list<It> out, F theta, F G = F(1), F eps = F(0)) const
     {
-        accs_o(accs_ilist_to_array(out), theta, eps);
+        accs_o(accs_ilist_to_array(out), theta, G, eps);
     }
 
 private:
     template <bool Ordered>
-    std::array<F, NDim> exact_acc_impl(size_type orig_idx, F eps) const
+    std::array<F, NDim> exact_acc_impl(size_type orig_idx, F G, F eps) const
     {
         simple_timer st("exact acc computation");
         const auto eps2 = eps * eps;
         // Check eps.
         check_eps_eps2(eps, eps2);
+        // Check G.
+        check_G_const(G);
         const auto size = m_parts[0].size();
         std::array<F, NDim> retval{}, diffs;
         const auto idx = Ordered ? m_ord_ind[orig_idx] : orig_idx;
@@ -2024,22 +2053,22 @@ private:
                 diffs[j] = m_parts[j][i] - m_parts[j][idx];
                 dist2 = fma_wrap(diffs[j], diffs[j], dist2);
             }
-            const auto dist = std::sqrt(dist2), dist3 = dist * dist2, m_dist3 = m_parts[NDim][i] / dist3;
+            const auto dist = std::sqrt(dist2), dist3 = dist * dist2, mG_dist3 = G * m_parts[NDim][i] / dist3;
             for (std::size_t j = 0; j < NDim; ++j) {
-                retval[j] = fma_wrap(diffs[j], m_dist3, retval[j]);
+                retval[j] = fma_wrap(diffs[j], mG_dist3, retval[j]);
             }
         }
         return retval;
     }
 
 public:
-    std::array<F, NDim> exact_acc_u(size_type idx, F eps = F(0)) const
+    std::array<F, NDim> exact_acc_u(size_type idx, F G = F(1), F eps = F(0)) const
     {
-        return exact_acc_impl<false>(idx, eps);
+        return exact_acc_impl<false>(idx, G, eps);
     }
-    std::array<F, NDim> exact_acc_o(size_type idx, F eps = F(0)) const
+    std::array<F, NDim> exact_acc_o(size_type idx, F G = F(1), F eps = F(0)) const
     {
-        return exact_acc_impl<true>(idx, eps);
+        return exact_acc_impl<true>(idx, G, eps);
     }
 
 private:
