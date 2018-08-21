@@ -66,13 +66,13 @@ TEST_CASE("softening")
                         octree<fp_type> t(
                             bsize, {parts.begin() + s, parts.begin() + 2u * s, parts.begin() + 3u * s, parts.begin()},
                             s, max_leaf_n, ncrit);
-                        t.accs_o(accs, theta, eps);
+                        t.accs_o(accs, theta, fp_type(1), eps);
                         // Check that all accelerations are finite.
                         REQUIRE(std::all_of(accs[0].begin(), accs[0].end(), [](auto c) { return std::isfinite(c); }));
                         REQUIRE(std::all_of(accs[1].begin(), accs[1].end(), [](auto c) { return std::isfinite(c); }));
                         REQUIRE(std::all_of(accs[2].begin(), accs[2].end(), [](auto c) { return std::isfinite(c); }));
                         for (auto i = 0u; i < s; ++i) {
-                            auto eacc = t.exact_acc_o(i, eps);
+                            auto eacc = t.exact_acc_o(i, fp_type(1), eps);
                             x_diff.emplace_back(std::abs((eacc[0] - accs[0][i]) / eacc[0]));
                             y_diff.emplace_back(std::abs((eacc[1] - accs[1][i]) / eacc[1]));
                             z_diff.emplace_back(std::abs((eacc[2] - accs[2][i]) / eacc[2]));
@@ -115,7 +115,7 @@ TEST_CASE("softening")
                                                 s, max_leaf_n, ncrit);
                             // Compute the accelerations.
                             // Try with the init list overload as well.
-                            t.accs_u({accs[0].data(), accs[1].data(), accs[2].data()}, theta, eps);
+                            t.accs_u({accs[0].data(), accs[1].data(), accs[2].data()}, theta, fp_type(1), eps);
                             // Verify all values are finite.
                             REQUIRE(
                                 std::all_of(accs[0].begin(), accs[0].end(), [](auto c) { return std::isfinite(c); }));
