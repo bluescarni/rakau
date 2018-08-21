@@ -105,7 +105,8 @@ TEST_CASE("accelerations ordering")
                 r[2][i] = r0 * std::cos(th0);
             }
         });
-        t.accs_o(t_accs, theta);
+        // Try the init list overload as well.
+        t.accs_o({t_accs[0].begin(), t_accs[1].begin(), t_accs[2].begin()}, theta);
         for (size_type i = 0; i < track_idx.size(); ++i) {
             const auto eacc = std::sqrt(exact_accs[i][0] * exact_accs[i][0] + exact_accs[i][1] * exact_accs[i][1]
                                         + exact_accs[i][2] * exact_accs[i][2]);
