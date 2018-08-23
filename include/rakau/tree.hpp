@@ -1491,7 +1491,7 @@ private:
             } else if constexpr (Q == 1u) {
                 // Q == 1, potentials only.
                 //
-                // Shortcuts to the result vectors.
+                // Shortcut to the result vector.
                 const auto res = res_ptrs[0];
                 for (size_type i1 = 0; i1 < tgt_size; i1 += batch_size) {
                     // Load the first batch of particles.
@@ -1511,31 +1511,18 @@ private:
                         // Compute the relative positions of 2 wrt 1, and the distance square.
                         const auto diff_x = xvec2 - xvec1, diff_y = yvec2 - yvec1, diff_z = zvec2 - zvec1,
                                    dist2 = diff_x * diff_x + diff_y * diff_y + xsimd_fma(diff_z, diff_z, eps2_vec);
-                        // Compute m1/dist3 and m2/dist3.
-                        batch_type m1_dist3, m2_dist3;
-                        if constexpr (use_fast_inv_sqrt<batch_type>) {
-                            const auto tmp = inv_sqrt_3(dist2);
-                            m1_dist3 = mvec1 * tmp;
-                            m2_dist3 = mvec2 * tmp;
-                        } else {
-                            const auto dist = xsimd_sqrt(dist2);
-                            const auto dist3 = dist * dist2;
-                            m1_dist3 = mvec1 / dist3;
-                            m2_dist3 = mvec2 / dist3;
-                        }
-                        // Add to the accumulators for 1 the accelerations due to the batch 2.
-                        res_x_vec1 = xsimd_fma(diff_x, m2_dist3, res_x_vec1);
-                        res_y_vec1 = xsimd_fma(diff_y, m2_dist3, res_y_vec1);
-                        res_z_vec1 = xsimd_fma(diff_z, m2_dist3, res_z_vec1);
-                        // Add *directly into the result buffer* the acceleration on 2 due to 1.
-                        xsimd_fnma(diff_x, m1_dist3, xsimd::load_unaligned(res_x + i2)).store_unaligned(res_x + i2);
-                        xsimd_fnma(diff_y, m1_dist3, xsimd::load_unaligned(res_y + i2)).store_unaligned(res_y + i2);
-                        xsimd_fnma(diff_z, m1_dist3, xsimd::load_unaligned(res_z + i2)).store_unaligned(res_z + i2);
+                        // Compute m1 / dist.
+                        const batch_type m1_dist
+                            = use_fast_inv_sqrt<batch_type> ? mvec1 * inv_sqrt(dist2) : mvec1 / xsimd_sqrt(dist2);
+                        // Compute the mutual (negated) potential between 1 and 2.
+                        const auto mut_pot = m1_dist * mvec2;
+                        // Subtract it from the acccumulator for 1.
+                        res_vec -= mut_pot;
+                        // Subtract *directly from the result buffer* the mutual potential for 2.
+                        (xsimd::load_unaligned(res + i2) - mut_pot).store_unaligned(res + i2);
                     }
-                    // Add the accumulated acceleration on 1 to the values already in the result buffer.
-                    (xsimd::load_aligned(res_x + i1) + res_x_vec1).store_aligned(res_x + i1);
-                    (xsimd::load_aligned(res_y + i1) + res_y_vec1).store_aligned(res_y + i1);
-                    (xsimd::load_aligned(res_z + i1) + res_z_vec1).store_aligned(res_z + i1);
+                    // Subtract the accumulated potentials on 1 from the values already in the result buffer.
+                    (xsimd::load_aligned(res + i1) - res_vec).store_aligned(res + i1);
                 }
             }
         } else {
