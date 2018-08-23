@@ -1424,7 +1424,8 @@ private:
     }
     // Function to compute the self-interactions within a target node. eps2 is the square of the softening length,
     // tgt_size is the number of particles in the target node, p_ptrs pointers to the target particles'
-    // coordinates/masses, res_ptrs pointers to the output arrays.
+    // coordinates/masses, res_ptrs pointers to the output arrays. Q indicates which quantities will be computed
+    // (accs, potentials, or both).
     // TODO remove default value
     template <unsigned Q = 0>
     void tree_accel_self_interactions(F eps2, size_type tgt_size, const std::array<const F *, NDim + 1u> &p_ptrs,
@@ -1529,6 +1530,7 @@ private:
                     (xsimd::load_aligned(res + i1) - res_vec).store_aligned(res + i1);
                 }
             } else {
+                static_assert(Q == 2u);
                 // Q == 2, accelerations and potentials.
                 //
                 // Shortcuts to the result vectors.
