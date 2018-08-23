@@ -1422,6 +1422,43 @@ private:
         res_y_vec = xsimd_fma(diff_y, m2_dist3, res_y_vec);
         res_z_vec = xsimd_fma(diff_z, m2_dist3, res_z_vec);
     }
+    // Compute the element-wise (negated) mutual potential for 2 sets of particles at the specified coordinates and
+    // with the specified masses. eps2_vec is the square of the softening length. The return value
+    // is the negated mutual potential.
+    template <typename B>
+    static B batch_batch_3d_pots(B xvec1, B yvec1, B zvec1, B mvec1, B xvec2, B yvec2, B zvec2, B mvec2, B eps2_vec)
+    {
+        const B diff_x = xvec2 - xvec1, diff_y = yvec2 - yvec1, diff_z = zvec2 - zvec1,
+                dist2 = diff_x * diff_x + diff_y * diff_y + xsimd_fma(diff_z, diff_z, eps2_vec);
+        const B m1_dist = use_fast_inv_sqrt<B> ? mvec1 * inv_sqrt(dist2) : mvec1 / xsimd_sqrt(dist2);
+        return m1_dist * mvec2;
+    }
+    // A combination of the 2 functions above, computing both accelerations and potentials between 2 batches.
+    template <typename B>
+    static void batch_batch_3d_accs_pots(B &res_x_vec, B &res_y_vec, B &res_z_vec, B &res_pot_vec, B xvec1, B yvec1,
+                                         B zvec1, B mvec1, B xvec2, B yvec2, B zvec2, B mvec2, B eps2_vec)
+    {
+        const B diff_x = xvec2 - xvec1, diff_y = yvec2 - yvec1, diff_z = zvec2 - zvec1,
+                dist2 = diff_x * diff_x + diff_y * diff_y + xsimd_fma(diff_z, diff_z, eps2_vec);
+        B m2_dist, m2_dist3;
+        if constexpr (use_fast_inv_sqrt<B>) {
+            const auto tmp = inv_sqrt(dist2), tmp3 = tmp * tmp * tmp;
+            m2_dist = mvec2 * tmp;
+            m2_dist3 = mvec2 * tmp3;
+        } else {
+            // NOTE: as in the self interaction function and in the leaf-target interaction function,
+            // we should check if it is worthwhile to reduce the number of divisions here.
+            const auto dist = xsimd_sqrt(dist2), dist3 = dist2 * dist;
+            m2_dist = mvec2 / dist;
+            m2_dist3 = mvec2 / dist3;
+        }
+        // Write out the results.
+        res_x_vec = xsimd_fma(diff_x, m2_dist3, res_x_vec);
+        res_y_vec = xsimd_fma(diff_y, m2_dist3, res_y_vec);
+        res_z_vec = xsimd_fma(diff_z, m2_dist3, res_z_vec);
+        // NOTE: for the potential, we need a negated FMA.
+        res_pot_vec = xsimd_fnma(mvec1, m2_dist, res_pot_vec);
+    }
     // Function to compute the self-interactions within a target node. eps2 is the square of the softening length,
     // tgt_size is the number of particles in the target node, p_ptrs pointers to the target particles'
     // coordinates/masses, res_ptrs pointers to the output arrays. Q indicates which quantities will be computed
@@ -1655,9 +1692,11 @@ private:
     // Function to compute the acceleration on a target node by all the particles of a leaf source node. eps2 is the
     // square of the softening length, src_idx is the index, in the tree structure, of the leaf node, tgt_size the
     // number of particles in the target node, p_ptrs pointers to the target particles' coordinates/masses, res_ptrs
-    // pointers to the output arrays.
+    // pointers to the output arrays. Q indicates which quantities will be computed (accs, potentials, or both).
+    // TODO remove default value
+    template <unsigned Q = 0>
     void tree_accel_leaf(F eps2, size_type src_idx, size_type tgt_size, const std::array<const F *, NDim + 1u> &p_ptrs,
-                         const std::array<F *, NDim> &res_ptrs) const
+                         const std::array<F *, nvecs_res<Q>> &res_ptrs) const
     {
         // Get a reference to the source node.
         const auto &src_node = m_tree[src_idx];
@@ -1667,36 +1706,100 @@ private:
             // The SIMD-accelerated version.
             using batch_type = xsimd::simd_type<F>;
             constexpr auto batch_size = batch_type::size;
+            // The number of particles in the source node.
+            const auto src_size = static_cast<size_type>(src_end - src_begin);
+            // Vector version of eps2.
+            const batch_type eps2_vec(eps2);
             // Pointers to the target node data.
             const auto x_ptr1 = p_ptrs[0], y_ptr1 = p_ptrs[1], z_ptr1 = p_ptrs[2];
             // Pointers to the source node data.
             const auto x_ptr2 = m_parts[0].data() + src_begin, y_ptr2 = m_parts[1].data() + src_begin,
                        z_ptr2 = m_parts[2].data() + src_begin, m_ptr2 = m_parts[3].data() + src_begin;
-            // Pointers to the result data.
-            const auto res_x = res_ptrs[0], res_y = res_ptrs[1], res_z = res_ptrs[2];
-            // The number of particles in the source node.
-            const auto src_size = static_cast<size_type>(src_end - src_begin);
-            // Vector version of eps2.
-            const batch_type eps2_vec(eps2);
-            for (size_type i = 0; i < tgt_size; i += batch_size) {
-                // Load the current batch of target data.
-                const auto xvec1 = batch_type(x_ptr1 + i, xsimd::aligned_mode{}),
-                           yvec1 = batch_type(y_ptr1 + i, xsimd::aligned_mode{}),
-                           zvec1 = batch_type(z_ptr1 + i, xsimd::aligned_mode{});
-                // Init the batches for computing the accelerations, loading the
-                // accumulated acceleration for the current batch.
-                auto res_x_vec = batch_type(res_x + i, xsimd::aligned_mode{}),
-                     res_y_vec = batch_type(res_y + i, xsimd::aligned_mode{}),
-                     res_z_vec = batch_type(res_z + i, xsimd::aligned_mode{});
-                for (size_type j = 0; j < src_size; ++j) {
-                    // Compute the interaction with the source particle.
-                    batch_batch_3d_accs(res_x_vec, res_y_vec, res_z_vec, xvec1, yvec1, zvec1, batch_type(x_ptr2[j]),
-                                        batch_type(y_ptr2[j]), batch_type(z_ptr2[j]), batch_type(m_ptr2[j]), eps2_vec);
+            if constexpr (Q == 0u) {
+                // Q == 0, accelerations only.
+                //
+                // Pointers to the result data.
+                const auto res_x = res_ptrs[0], res_y = res_ptrs[1], res_z = res_ptrs[2];
+                for (size_type i = 0; i < tgt_size; i += batch_size) {
+                    // Load the current batch of target data.
+                    const auto xvec1 = batch_type(x_ptr1 + i, xsimd::aligned_mode{}),
+                               yvec1 = batch_type(y_ptr1 + i, xsimd::aligned_mode{}),
+                               zvec1 = batch_type(z_ptr1 + i, xsimd::aligned_mode{});
+                    // Init the batches for computing the accelerations, loading the
+                    // accumulated acceleration for the current batch.
+                    auto res_x_vec = batch_type(res_x + i, xsimd::aligned_mode{}),
+                         res_y_vec = batch_type(res_y + i, xsimd::aligned_mode{}),
+                         res_z_vec = batch_type(res_z + i, xsimd::aligned_mode{});
+                    for (size_type j = 0; j < src_size; ++j) {
+                        // Compute the interaction with the source particle.
+                        batch_batch_3d_accs(res_x_vec, res_y_vec, res_z_vec, xvec1, yvec1, zvec1, batch_type(x_ptr2[j]),
+                                            batch_type(y_ptr2[j]), batch_type(z_ptr2[j]), batch_type(m_ptr2[j]),
+                                            eps2_vec);
+                    }
+                    // Store the updated accelerations in the temporary vectors.
+                    res_x_vec.store_aligned(res_x + i);
+                    res_y_vec.store_aligned(res_y + i);
+                    res_z_vec.store_aligned(res_z + i);
                 }
-                // Store the updated accelerations in the temporary vectors.
-                res_x_vec.store_aligned(res_x + i);
-                res_y_vec.store_aligned(res_y + i);
-                res_z_vec.store_aligned(res_z + i);
+            } else if constexpr (Q == 1u) {
+                // Q == 1, potentials only.
+                //
+                // Pointer to the result data.
+                const auto res = res_ptrs[0];
+                // Pointer to the target masses.
+                const auto m_ptr1 = p_ptrs[3];
+                for (size_type i = 0; i < tgt_size; i += batch_size) {
+                    // Load the current batch of target data.
+                    const auto xvec1 = batch_type(x_ptr1 + i, xsimd::aligned_mode{}),
+                               yvec1 = batch_type(y_ptr1 + i, xsimd::aligned_mode{}),
+                               zvec1 = batch_type(z_ptr1 + i, xsimd::aligned_mode{}),
+                               mvec1 = batch_type(m_ptr1 + i, xsimd::aligned_mode{});
+                    // Init the batch for computing the potentials, loading the
+                    // accumulated potentials for the current batch.
+                    auto res_vec = batch_type(res + i, xsimd::aligned_mode{});
+                    for (size_type j = 0; j < src_size; ++j) {
+                        // Compute the interaction with the source particle,
+                        // and subtract the obtained potentials from the current
+                        // accumulated value.
+                        res_vec -= batch_batch_3d_pots(xvec1, yvec1, zvec1, mvec1, batch_type(x_ptr2[j]),
+                                                       batch_type(y_ptr2[j]), batch_type(z_ptr2[j]),
+                                                       batch_type(m_ptr2[j]), eps2_vec);
+                    }
+                    // Store the updated potentials in the temporary vector.
+                    res_vec.store_aligned(res + i);
+                }
+            } else {
+                static_assert(Q == 2u);
+                // Q == 2, accelerations and potentials.
+                //
+                // Pointers to the result data.
+                const auto res_x = res_ptrs[0], res_y = res_ptrs[1], res_z = res_ptrs[2], res_pot = res_ptrs[3];
+                // Pointer to the target masses.
+                const auto m_ptr1 = p_ptrs[3];
+                for (size_type i = 0; i < tgt_size; i += batch_size) {
+                    // Load the current batch of target data.
+                    const auto xvec1 = batch_type(x_ptr1 + i, xsimd::aligned_mode{}),
+                               yvec1 = batch_type(y_ptr1 + i, xsimd::aligned_mode{}),
+                               zvec1 = batch_type(z_ptr1 + i, xsimd::aligned_mode{}),
+                               mvec1 = batch_type(m_ptr1 + i, xsimd::aligned_mode{});
+                    // Init the batches for computing the accelerations and the potentials, loading the
+                    // accumulated values for the current batch.
+                    auto res_x_vec = batch_type(res_x + i, xsimd::aligned_mode{}),
+                         res_y_vec = batch_type(res_y + i, xsimd::aligned_mode{}),
+                         res_z_vec = batch_type(res_z + i, xsimd::aligned_mode{}),
+                         res_pot_vec = batch_type(res_pot + i, xsimd::aligned_mode{});
+                    for (size_type j = 0; j < src_size; ++j) {
+                        // Compute the interaction with the source particle.
+                        batch_batch_3d_accs_pots(res_x_vec, res_y_vec, res_z_vec, res_pot_vec, xvec1, yvec1, zvec1,
+                                                 mvec1, batch_type(x_ptr2[j]), batch_type(y_ptr2[j]),
+                                                 batch_type(z_ptr2[j]), batch_type(m_ptr2[j]), eps2_vec);
+                    }
+                    // Store the updated accelerations/potentials in the temporary vectors.
+                    res_x_vec.store_aligned(res_x + i);
+                    res_y_vec.store_aligned(res_y + i);
+                    res_z_vec.store_aligned(res_z + i);
+                    res_pot_vec.store_aligned(res_pot + i);
+                }
             }
         } else {
             // Local variables for the scalar computation.
