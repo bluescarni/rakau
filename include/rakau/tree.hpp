@@ -1560,6 +1560,8 @@ private:
                             m1_dist3 = mvec1 * tmp3;
                             m2_dist3 = mvec2 * tmp3;
                         } else {
+                            // NOTE: as hinted above in the Q == 0 case, perhaps we can avoid
+                            // some of these divisions.
                             const auto dist = xsimd_sqrt(dist2);
                             m1_dist = mvec1 / dist;
                             const auto dist3 = dist * dist2;
@@ -1599,9 +1601,9 @@ private:
                 }
                 // Load the mass of the current particle.
                 const auto m1 = m_ptr[i1];
-                // The acceleration vector on the current particle
+                // The acceleration/potential vector for the current particle
                 // (inited to zero).
-                std::array<F, NDim> a1{};
+                std::array<F, nvecs_res<Q>> a1{};
                 for (size_type i2 = i1 + 1u; i2 < tgt_size; ++i2) {
                     // Determine dist2, dist and dist3.
                     F dist2(eps2);
@@ -1609,21 +1611,41 @@ private:
                         diffs[j] = p_ptrs[j][i2] - pos1[j];
                         dist2 = fma_wrap(diffs[j], diffs[j], dist2);
                     }
-                    const auto dist = std::sqrt(dist2), dist3 = dist2 * dist, m2_dist3 = m_ptr[i2] / dist3,
-                               m1_dist3 = m1 / dist3;
-                    // Accumulate the accelerations, both in the local
-                    // accumulator for the current particle and in the global
-                    // acc vector for the opposite acceleration.
-                    for (std::size_t j = 0; j < NDim; ++j) {
-                        a1[j] = fma_wrap(m2_dist3, diffs[j], a1[j]);
-                        // NOTE: this is a fused negated multiply-add.
-                        res_ptrs[j][i2] = fma_wrap(m1_dist3, -diffs[j], res_ptrs[j][i2]);
+                    const auto dist = std::sqrt(dist2), m2 = m_ptr[i2];
+                    if constexpr (Q == 0u || Q == 2u) {
+                        // Q == 0 or 2: accelerations are requested.
+                        const auto dist3 = dist2 * dist, m2_dist3 = m2 / dist3, m1_dist3 = m1 / dist3;
+                        // Accumulate the accelerations, both in the local
+                        // accumulator for the current particle and in the global
+                        // acc vector for the opposite acceleration.
+                        for (std::size_t j = 0; j < NDim; ++j) {
+                            a1[j] = fma_wrap(m2_dist3, diffs[j], a1[j]);
+                            // NOTE: this is a fused negated multiply-add.
+                            res_ptrs[j][i2] = fma_wrap(m1_dist3, -diffs[j], res_ptrs[j][i2]);
+                        }
+                    }
+                    if constexpr (Q == 1u || Q == 2u) {
+                        // Q == 1 or 2: potentials are requested.
+                        // Establish the index of the potential in the result array:
+                        // 0 if only the potentials are requested, NDim otherwise.
+                        constexpr auto pot_idx = static_cast<std::size_t>(Q == 1u ? 0 : NDim);
+                        const auto mut_pot = m1 / dist * m2;
+                        // Subtract mut_pot from the accumulator for the current particle and from
+                        // the total potential of particle i2.
+                        a1[pot_idx] -= mut_pot;
+                        res_ptrs[pot_idx][i2] -= mut_pot;
                     }
                 }
-                // Update the acceleration on the first particle
+                // Update the acceleration/potential on the first particle
                 // in the temporary storage.
-                for (std::size_t j = 0; j < NDim; ++j) {
-                    res_ptrs[j][i1] += a1[j];
+                if constexpr (Q == 0u || Q == 2u) {
+                    for (std::size_t j = 0; j < NDim; ++j) {
+                        res_ptrs[j][i1] += a1[j];
+                    }
+                }
+                if constexpr (Q == 1u || Q == 2u) {
+                    constexpr auto pot_idx = static_cast<std::size_t>(Q == 1u ? 0 : NDim);
+                    res_ptrs[pot_idx][i1] -= a1[pot_idx];
                 }
             }
         }
