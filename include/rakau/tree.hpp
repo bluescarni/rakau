@@ -1425,6 +1425,7 @@ private:
     // Function to compute the self-interactions within a target node. eps2 is the square of the softening length,
     // tgt_size is the number of particles in the target node, p_ptrs pointers to the target particles'
     // coordinates/masses, res_ptrs pointers to the output arrays.
+    // TODO remove default value
     template <unsigned Q = 0>
     void tree_accel_self_interactions(F eps2, size_type tgt_size, const std::array<const F *, NDim + 1u> &p_ptrs,
                                       const std::array<F *, nvecs_res<Q>> &res_ptrs) const
@@ -1511,7 +1512,7 @@ private:
                         // Compute the relative positions of 2 wrt 1, and the distance square.
                         const auto diff_x = xvec2 - xvec1, diff_y = yvec2 - yvec1, diff_z = zvec2 - zvec1,
                                    dist2 = diff_x * diff_x + diff_y * diff_y + xsimd_fma(diff_z, diff_z, eps2_vec);
-                        // Compute m1 / dist.
+                        // Compute m1/dist.
                         const batch_type m1_dist
                             = use_fast_inv_sqrt<batch_type> ? mvec1 * inv_sqrt(dist2) : mvec1 / xsimd_sqrt(dist2);
                         // Compute the mutual (negated) potential between 1 and 2.
@@ -1523,6 +1524,66 @@ private:
                     }
                     // Subtract the accumulated potentials on 1 from the values already in the result buffer.
                     (xsimd::load_aligned(res + i1) - res_vec).store_aligned(res + i1);
+                }
+            } else {
+                // Q == 2, accelerations and potentials.
+                //
+                // Shortcuts to the result vectors.
+                const auto res_x = res_ptrs[0], res_y = res_ptrs[1], res_z = res_ptrs[2], res_pot = res_ptrs[3];
+                for (size_type i1 = 0; i1 < tgt_size; i1 += batch_size) {
+                    // Load the first batch of particles.
+                    const auto xvec1 = xsimd::load_aligned(x_ptr + i1), yvec1 = xsimd::load_aligned(y_ptr + i1),
+                               zvec1 = xsimd::load_aligned(z_ptr + i1), mvec1 = xsimd::load_aligned(m_ptr + i1);
+                    // Init the accumulators for the accelerations/potentials on the first batch of particles.
+                    batch_type res_x_vec1(F(0)), res_y_vec1(F(0)), res_z_vec1(F(0)), res_pot_vec(F(0));
+                    // Now we iterate over the node particles starting 1 position past i1 (to avoid self interactions).
+                    // This is the classical n body inner loop.
+                    for (size_type i2 = i1 + 1u; i2 < tgt_size; ++i2) {
+                        // Load the second batch of particles.
+                        const auto xvec2 = xsimd::load_unaligned(x_ptr + i2), yvec2 = xsimd::load_unaligned(y_ptr + i2),
+                                   zvec2 = xsimd::load_unaligned(z_ptr + i2), mvec2 = xsimd::load_unaligned(m_ptr + i2);
+                        // TODO fix comment.
+                        // NOTE: now we are going to do a slight repetition of batch_batch_3d_accs(), with the goal
+                        // of avoiding doing extra needless computations.
+                        // Compute the relative positions of 2 wrt 1, and the distance square.
+                        const auto diff_x = xvec2 - xvec1, diff_y = yvec2 - yvec1, diff_z = zvec2 - zvec1,
+                                   dist2 = diff_x * diff_x + diff_y * diff_y + xsimd_fma(diff_z, diff_z, eps2_vec);
+                        // Compute m1/dist, m1/dist3 and m2/dist3.
+                        batch_type m1_dist, m1_dist3, m2_dist3;
+                        if constexpr (use_fast_inv_sqrt<batch_type>) {
+                            const auto tmp = inv_sqrt(dist2);
+                            m1_dist = mvec1 * tmp;
+                            const auto tmp3 = tmp * tmp * tmp;
+                            m1_dist3 = mvec1 * tmp3;
+                            m2_dist3 = mvec2 * tmp3;
+                        } else {
+                            const auto dist = xsimd_sqrt(dist2);
+                            m1_dist = mvec1 / dist;
+                            const auto dist3 = dist * dist2;
+                            m1_dist3 = mvec1 / dist3;
+                            m2_dist3 = mvec2 / dist3;
+                        }
+                        // Compute the mutual (negated) potential between 1 and 2.
+                        const auto mut_pot = m1_dist * mvec2;
+                        // Add to the accumulators for 1 the accelerations due to the batch 2,
+                        // and subtract the mutual potential from the acccumulator for 1.
+                        res_x_vec1 = xsimd_fma(diff_x, m2_dist3, res_x_vec1);
+                        res_y_vec1 = xsimd_fma(diff_y, m2_dist3, res_y_vec1);
+                        res_z_vec1 = xsimd_fma(diff_z, m2_dist3, res_z_vec1);
+                        res_pot_vec -= mut_pot;
+                        // Add *directly into the result buffer* the acceleration on 2 due to 1,
+                        // and subtract the potential.
+                        xsimd_fnma(diff_x, m1_dist3, xsimd::load_unaligned(res_x + i2)).store_unaligned(res_x + i2);
+                        xsimd_fnma(diff_y, m1_dist3, xsimd::load_unaligned(res_y + i2)).store_unaligned(res_y + i2);
+                        xsimd_fnma(diff_z, m1_dist3, xsimd::load_unaligned(res_z + i2)).store_unaligned(res_z + i2);
+                        (xsimd::load_unaligned(res_pot + i2) - mut_pot).store_unaligned(res_pot + i2);
+                    }
+                    // Add the accumulated acceleration on 1 to the values already in the result buffer,
+                    // and subtract the accumulated potentials on 1.
+                    (xsimd::load_aligned(res_x + i1) + res_x_vec1).store_aligned(res_x + i1);
+                    (xsimd::load_aligned(res_y + i1) + res_y_vec1).store_aligned(res_y + i1);
+                    (xsimd::load_aligned(res_z + i1) + res_z_vec1).store_aligned(res_z + i1);
+                    (xsimd::load_aligned(res_pot + i1) - res_pot_vec).store_aligned(res_pot + i1);
                 }
             }
         } else {
