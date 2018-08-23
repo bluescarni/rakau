@@ -1372,13 +1372,27 @@ private:
         static thread_local std::array<fp_vector, NDim + 1u> tmp_vecs;
         return tmp_vecs;
     }
-    // Temporary storage to accumulate the accelerations induced on the
+    // Helpers to compute how many vectors we will need to store the results
+    // of the computation of the accelerations/potentials.
+    // Q == 0 -> accelerations only, NDim vectors
+    // Q == 1 -> potentials only, 1 vector
+    // Q == 2 -> accs + pots, NDim + 1 vectors
+    template <unsigned Q>
+    static constexpr std::size_t compute_nvecs_res()
+    {
+        static_assert(Q <= 2u);
+        return static_cast<std::size_t>(Q == 0u ? NDim : (Q == 1u ? 1u : NDim + 1u));
+    }
+    template <unsigned Q>
+    static constexpr std::size_t nvecs_res = compute_nvecs_res<Q>();
+    // Temporary storage to accumulate the accelerations/potentials induced on the
     // particles of a critical node. Data in here will be copied to
-    // the output array after the accelerations from all the other
+    // the output arrays after the accelerations/potentials from all the other
     // particles/nodes in the domain have been computed.
+    template <unsigned Q = 0>
     static auto &vec_acc_tmp_res()
     {
-        static thread_local std::array<fp_vector, NDim> tmp_res;
+        static thread_local std::array<fp_vector, nvecs_res<Q>> tmp_res;
         return tmp_res;
     }
     // Temporary vectors to store the data of a target node during traversal.
@@ -1387,12 +1401,12 @@ private:
         static thread_local std::array<fp_vector, NDim + 1u> tmp_tgt;
         return tmp_tgt;
     }
-    // Compute the element-wise attraction on the batch of particles at xvec1, yvec1, zvec1 by the
+    // Compute the element-wise accelerations on the batch of particles at xvec1, yvec1, zvec1 by the
     // particles at xvec2, yvec2, zvec2 with masses mvec2, and add the result into res_x_vec, res_y_vec,
     // res_z_vec. eps2_vec is the square of the softening length.
     template <typename B>
-    static void batch_batch_3d(B &res_x_vec, B &res_y_vec, B &res_z_vec, B xvec1, B yvec1, B zvec1, B xvec2, B yvec2,
-                               B zvec2, B mvec2, B eps2_vec)
+    static void batch_batch_3d_accs(B &res_x_vec, B &res_y_vec, B &res_z_vec, B xvec1, B yvec1, B zvec1, B xvec2,
+                                    B yvec2, B zvec2, B mvec2, B eps2_vec)
     {
         const B diff_x = xvec2 - xvec1, diff_y = yvec2 - yvec1, diff_z = zvec2 - zvec1,
                 dist2 = diff_x * diff_x + diff_y * diff_y + xsimd_fma(diff_z, diff_z, eps2_vec);
@@ -1411,8 +1425,9 @@ private:
     // Function to compute the self-interactions within a target node. eps2 is the square of the softening length,
     // tgt_size is the number of particles in the target node, p_ptrs pointers to the target particles'
     // coordinates/masses, res_ptrs pointers to the output arrays.
+    template <unsigned Q = 0>
     void tree_accel_self_interactions(F eps2, size_type tgt_size, const std::array<const F *, NDim + 1u> &p_ptrs,
-                                      const std::array<F *, NDim> &res_ptrs) const
+                                      const std::array<F *, nvecs_res<Q>> &res_ptrs) const
     {
         // Pointer to the masses.
         const auto m_ptr = p_ptrs[NDim];
@@ -1423,52 +1438,105 @@ private:
             constexpr auto batch_size = batch_type::size;
             // Shortcuts to the node coordinates.
             const auto x_ptr = p_ptrs[0], y_ptr = p_ptrs[1], z_ptr = p_ptrs[2];
-            // Shortcuts to the result vectors.
-            const auto res_x = res_ptrs[0], res_y = res_ptrs[1], res_z = res_ptrs[2];
             // Softening length, vector version.
             const batch_type eps2_vec(eps2);
-            for (size_type i1 = 0; i1 < tgt_size; i1 += batch_size) {
-                // Load the first batch of particles.
-                const auto xvec1 = xsimd::load_aligned(x_ptr + i1), yvec1 = xsimd::load_aligned(y_ptr + i1),
-                           zvec1 = xsimd::load_aligned(z_ptr + i1), mvec1 = xsimd::load_aligned(m_ptr + i1);
-                // Init the accumulators for the accelerations on the first batch of particles.
-                batch_type res_x_vec1(F(0)), res_y_vec1(F(0)), res_z_vec1(F(0));
-                // Now we iterate over the node particles starting 1 position past i1 (to avoid self interactions).
-                // This is the classical n body inner loop.
-                for (size_type i2 = i1 + 1u; i2 < tgt_size; ++i2) {
-                    // Load the second batch of particles.
-                    const auto xvec2 = xsimd::load_unaligned(x_ptr + i2), yvec2 = xsimd::load_unaligned(y_ptr + i2),
-                               zvec2 = xsimd::load_unaligned(z_ptr + i2), mvec2 = xsimd::load_unaligned(m_ptr + i2);
-                    // NOTE: now we are going to do a slight repetition of batch_batch_3d(), with the goal
-                    // of avoiding doing extra needless computations.
-                    // Compute the relative positions of 2 wrt 1, and the distance square.
-                    const auto diff_x = xvec2 - xvec1, diff_y = yvec2 - yvec1, diff_z = zvec2 - zvec1,
-                               dist2 = diff_x * diff_x + diff_y * diff_y + xsimd_fma(diff_z, diff_z, eps2_vec);
-                    // Compute m1/dist3 and m2/dist3.
-                    batch_type m1_dist3, m2_dist3;
-                    if constexpr (use_fast_inv_sqrt<batch_type>) {
-                        const auto tmp = inv_sqrt_3(dist2);
-                        m1_dist3 = mvec1 * tmp;
-                        m2_dist3 = mvec2 * tmp;
-                    } else {
-                        const auto dist = xsimd_sqrt(dist2);
-                        const auto dist3 = dist * dist2;
-                        m1_dist3 = mvec1 / dist3;
-                        m2_dist3 = mvec2 / dist3;
+            if constexpr (Q == 0u) {
+                // Q == 0, accelerations only.
+                //
+                // Shortcuts to the result vectors.
+                const auto res_x = res_ptrs[0], res_y = res_ptrs[1], res_z = res_ptrs[2];
+                for (size_type i1 = 0; i1 < tgt_size; i1 += batch_size) {
+                    // Load the first batch of particles.
+                    const auto xvec1 = xsimd::load_aligned(x_ptr + i1), yvec1 = xsimd::load_aligned(y_ptr + i1),
+                               zvec1 = xsimd::load_aligned(z_ptr + i1), mvec1 = xsimd::load_aligned(m_ptr + i1);
+                    // Init the accumulators for the accelerations on the first batch of particles.
+                    batch_type res_x_vec1(F(0)), res_y_vec1(F(0)), res_z_vec1(F(0));
+                    // Now we iterate over the node particles starting 1 position past i1 (to avoid self interactions).
+                    // This is the classical n body inner loop.
+                    for (size_type i2 = i1 + 1u; i2 < tgt_size; ++i2) {
+                        // Load the second batch of particles.
+                        const auto xvec2 = xsimd::load_unaligned(x_ptr + i2), yvec2 = xsimd::load_unaligned(y_ptr + i2),
+                                   zvec2 = xsimd::load_unaligned(z_ptr + i2), mvec2 = xsimd::load_unaligned(m_ptr + i2);
+                        // NOTE: now we are going to do a slight repetition of batch_batch_3d_accs(), with the goal
+                        // of avoiding doing extra needless computations.
+                        // Compute the relative positions of 2 wrt 1, and the distance square.
+                        const auto diff_x = xvec2 - xvec1, diff_y = yvec2 - yvec1, diff_z = zvec2 - zvec1,
+                                   dist2 = diff_x * diff_x + diff_y * diff_y + xsimd_fma(diff_z, diff_z, eps2_vec);
+                        // Compute m1/dist3 and m2/dist3.
+                        batch_type m1_dist3, m2_dist3;
+                        if constexpr (use_fast_inv_sqrt<batch_type>) {
+                            const auto tmp = inv_sqrt_3(dist2);
+                            m1_dist3 = mvec1 * tmp;
+                            m2_dist3 = mvec2 * tmp;
+                        } else {
+                            const auto dist = xsimd_sqrt(dist2);
+                            const auto dist3 = dist * dist2;
+                            m1_dist3 = mvec1 / dist3;
+                            m2_dist3 = mvec2 / dist3;
+                        }
+                        // Add to the accumulators for 1 the accelerations due to the batch 2.
+                        res_x_vec1 = xsimd_fma(diff_x, m2_dist3, res_x_vec1);
+                        res_y_vec1 = xsimd_fma(diff_y, m2_dist3, res_y_vec1);
+                        res_z_vec1 = xsimd_fma(diff_z, m2_dist3, res_z_vec1);
+                        // Add *directly into the result buffer* the acceleration on 2 due to 1.
+                        xsimd_fnma(diff_x, m1_dist3, xsimd::load_unaligned(res_x + i2)).store_unaligned(res_x + i2);
+                        xsimd_fnma(diff_y, m1_dist3, xsimd::load_unaligned(res_y + i2)).store_unaligned(res_y + i2);
+                        xsimd_fnma(diff_z, m1_dist3, xsimd::load_unaligned(res_z + i2)).store_unaligned(res_z + i2);
                     }
-                    // Add to the accumulators for 1 the accelerations due to the batch 2.
-                    res_x_vec1 = xsimd_fma(diff_x, m2_dist3, res_x_vec1);
-                    res_y_vec1 = xsimd_fma(diff_y, m2_dist3, res_y_vec1);
-                    res_z_vec1 = xsimd_fma(diff_z, m2_dist3, res_z_vec1);
-                    // Add *directly into the result buffer* the acceleration on 2 due to 1.
-                    xsimd_fnma(diff_x, m1_dist3, xsimd::load_unaligned(res_x + i2)).store_unaligned(res_x + i2);
-                    xsimd_fnma(diff_y, m1_dist3, xsimd::load_unaligned(res_y + i2)).store_unaligned(res_y + i2);
-                    xsimd_fnma(diff_z, m1_dist3, xsimd::load_unaligned(res_z + i2)).store_unaligned(res_z + i2);
+                    // Add the accumulated acceleration on 1 to the values already in the result buffer.
+                    (xsimd::load_aligned(res_x + i1) + res_x_vec1).store_aligned(res_x + i1);
+                    (xsimd::load_aligned(res_y + i1) + res_y_vec1).store_aligned(res_y + i1);
+                    (xsimd::load_aligned(res_z + i1) + res_z_vec1).store_aligned(res_z + i1);
                 }
-                // Add the accumulated acceleration on 1 to the values already in the result buffer.
-                (xsimd::load_aligned(res_x + i1) + res_x_vec1).store_aligned(res_x + i1);
-                (xsimd::load_aligned(res_y + i1) + res_y_vec1).store_aligned(res_y + i1);
-                (xsimd::load_aligned(res_z + i1) + res_z_vec1).store_aligned(res_z + i1);
+            } else if constexpr (Q == 1u) {
+                // Q == 1, potentials only.
+                //
+                // Shortcuts to the result vectors.
+                const auto res = res_ptrs[0];
+                for (size_type i1 = 0; i1 < tgt_size; i1 += batch_size) {
+                    // Load the first batch of particles.
+                    const auto xvec1 = xsimd::load_aligned(x_ptr + i1), yvec1 = xsimd::load_aligned(y_ptr + i1),
+                               zvec1 = xsimd::load_aligned(z_ptr + i1), mvec1 = xsimd::load_aligned(m_ptr + i1);
+                    // Init the accumulator for the potential on the first batch of particles.
+                    batch_type res_vec(F(0));
+                    // Now we iterate over the node particles starting 1 position past i1 (to avoid self interactions).
+                    // This is the classical n body inner loop.
+                    for (size_type i2 = i1 + 1u; i2 < tgt_size; ++i2) {
+                        // Load the second batch of particles.
+                        const auto xvec2 = xsimd::load_unaligned(x_ptr + i2), yvec2 = xsimd::load_unaligned(y_ptr + i2),
+                                   zvec2 = xsimd::load_unaligned(z_ptr + i2), mvec2 = xsimd::load_unaligned(m_ptr + i2);
+                        // TODO fix comment.
+                        // NOTE: now we are going to do a slight repetition of batch_batch_3d_accs(), with the goal
+                        // of avoiding doing extra needless computations.
+                        // Compute the relative positions of 2 wrt 1, and the distance square.
+                        const auto diff_x = xvec2 - xvec1, diff_y = yvec2 - yvec1, diff_z = zvec2 - zvec1,
+                                   dist2 = diff_x * diff_x + diff_y * diff_y + xsimd_fma(diff_z, diff_z, eps2_vec);
+                        // Compute m1/dist3 and m2/dist3.
+                        batch_type m1_dist3, m2_dist3;
+                        if constexpr (use_fast_inv_sqrt<batch_type>) {
+                            const auto tmp = inv_sqrt_3(dist2);
+                            m1_dist3 = mvec1 * tmp;
+                            m2_dist3 = mvec2 * tmp;
+                        } else {
+                            const auto dist = xsimd_sqrt(dist2);
+                            const auto dist3 = dist * dist2;
+                            m1_dist3 = mvec1 / dist3;
+                            m2_dist3 = mvec2 / dist3;
+                        }
+                        // Add to the accumulators for 1 the accelerations due to the batch 2.
+                        res_x_vec1 = xsimd_fma(diff_x, m2_dist3, res_x_vec1);
+                        res_y_vec1 = xsimd_fma(diff_y, m2_dist3, res_y_vec1);
+                        res_z_vec1 = xsimd_fma(diff_z, m2_dist3, res_z_vec1);
+                        // Add *directly into the result buffer* the acceleration on 2 due to 1.
+                        xsimd_fnma(diff_x, m1_dist3, xsimd::load_unaligned(res_x + i2)).store_unaligned(res_x + i2);
+                        xsimd_fnma(diff_y, m1_dist3, xsimd::load_unaligned(res_y + i2)).store_unaligned(res_y + i2);
+                        xsimd_fnma(diff_z, m1_dist3, xsimd::load_unaligned(res_z + i2)).store_unaligned(res_z + i2);
+                    }
+                    // Add the accumulated acceleration on 1 to the values already in the result buffer.
+                    (xsimd::load_aligned(res_x + i1) + res_x_vec1).store_aligned(res_x + i1);
+                    (xsimd::load_aligned(res_y + i1) + res_y_vec1).store_aligned(res_y + i1);
+                    (xsimd::load_aligned(res_z + i1) + res_z_vec1).store_aligned(res_z + i1);
+                }
             }
         } else {
             // Temporary vectors to be used in the loops below.
@@ -1547,8 +1615,8 @@ private:
                      res_z_vec = batch_type(res_z + i, xsimd::aligned_mode{});
                 for (size_type j = 0; j < src_size; ++j) {
                     // Compute the interaction with the source particle.
-                    batch_batch_3d(res_x_vec, res_y_vec, res_z_vec, xvec1, yvec1, zvec1, batch_type(x_ptr2[j]),
-                                   batch_type(y_ptr2[j]), batch_type(z_ptr2[j]), batch_type(m_ptr2[j]), eps2_vec);
+                    batch_batch_3d_accs(res_x_vec, res_y_vec, res_z_vec, xvec1, yvec1, zvec1, batch_type(x_ptr2[j]),
+                                        batch_type(y_ptr2[j]), batch_type(z_ptr2[j]), batch_type(m_ptr2[j]), eps2_vec);
                 }
                 // Store the updated accelerations in the temporary vectors.
                 res_x_vec.store_aligned(res_x + i);
