@@ -1567,7 +1567,6 @@ private:
                     (xsimd::load_aligned(res + i1) - res_vec).store_aligned(res + i1);
                 }
             } else {
-                static_assert(Q == 2u);
                 // Q == 2, accelerations and potentials.
                 //
                 // Shortcuts to the result vectors.
@@ -1769,7 +1768,6 @@ private:
                     res_vec.store_aligned(res + i);
                 }
             } else {
-                static_assert(Q == 2u);
                 // Q == 2, accelerations and potentials.
                 //
                 // Pointers to the result data.
@@ -1810,6 +1808,12 @@ private:
                 for (std::size_t j = 0; j < NDim; ++j) {
                     pos1[j] = p_ptrs[j][i1];
                 }
+                // Load the target mass, but only if we are interested in the potentials.
+                F m1;
+                (void)m1;
+                if constexpr (Q == 1u || Q == 2u) {
+                    m1 = p_ptrs[NDim][i1];
+                }
                 // Iterate over the particles in the src node.
                 for (size_type i2 = src_begin; i2 < src_end; ++i2) {
                     F dist2(eps2);
@@ -1817,9 +1821,20 @@ private:
                         diffs[j] = m_parts[j][i2] - pos1[j];
                         dist2 = fma_wrap(diffs[j], diffs[j], dist2);
                     }
-                    const auto dist = std::sqrt(dist2), dist3 = dist * dist2, m_dist3 = m_parts[NDim][i2] / dist3;
-                    for (std::size_t j = 0; j < NDim; ++j) {
-                        res_ptrs[j][i1] = fma_wrap(diffs[j], m_dist3, res_ptrs[j][i1]);
+                    const auto dist = std::sqrt(dist2), m2 = m_parts[NDim][i2];
+                    if constexpr (Q == 0u || Q == 2u) {
+                        // Q == 0 or 2: accelerations are requested.
+                        const auto dist3 = dist * dist2, m_dist3 = m2 / dist3;
+                        for (std::size_t j = 0; j < NDim; ++j) {
+                            res_ptrs[j][i1] = fma_wrap(diffs[j], m_dist3, res_ptrs[j][i1]);
+                        }
+                    }
+                    if constexpr (Q == 1u || Q == 2u) {
+                        // Q == 1 or 2: potentials are requested.
+                        // Establish the index of the potential in the result array:
+                        // 0 if only the potentials are requested, NDim otherwise.
+                        constexpr auto pot_idx = static_cast<std::size_t>(Q == 1u ? 0 : NDim);
+                        res_ptrs[pot_idx][i1] = fma_wrap(-m1, m2 / dist, res_ptrs[pot_idx][i1]);
                     }
                 }
             }
