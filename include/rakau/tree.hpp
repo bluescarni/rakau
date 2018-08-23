@@ -1470,6 +1470,9 @@ private:
                             m1_dist3 = mvec1 * tmp;
                             m2_dist3 = mvec2 * tmp;
                         } else {
+                            // NOTE: here it might be beneficial to compute 1/sqrt()
+                            // and get rid of a division, paying instead a couple of extra
+                            // multiplications. To be benchmarked.
                             const auto dist = xsimd_sqrt(dist2);
                             const auto dist3 = dist * dist2;
                             m1_dist3 = mvec1 / dist3;
