@@ -10,3 +10,4 @@ function(ADD_RAKAU_BENCHMARK arg1)
 endfunction()
 
 ADD_RAKAU_BENCHMARK(benchmark_00)
+ADD_RAKAU_BENCHMARK(benchmark_accs_pots_float)

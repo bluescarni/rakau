@@ -2471,6 +2471,21 @@ public:
         accs_u(acc_pot_ilist_to_array<0>(out), theta, G, eps);
     }
     template <typename Allocator>
+    void accs_pots_u(std::array<std::vector<F, Allocator>, NDim + 1u> &out, F theta, F G = F(1), F eps = F(0)) const
+    {
+        acc_pot_dispatch<false, 2>(out, theta, G, eps);
+    }
+    template <typename It>
+    void accs_pots_u(const std::array<It, NDim + 1u> &out, F theta, F G = F(1), F eps = F(0)) const
+    {
+        acc_pot_dispatch<false, 2>(out, theta, G, eps);
+    }
+    template <typename It>
+    void accs_pots_u(std::initializer_list<It> out, F theta, F G = F(1), F eps = F(0)) const
+    {
+        accs_pots_u(acc_pot_ilist_to_array<2>(out), theta, G, eps);
+    }
+    template <typename Allocator>
     void accs_o(std::array<std::vector<F, Allocator>, NDim> &out, F theta, F G = F(1), F eps = F(0)) const
     {
         acc_pot_dispatch<true, 0>(out, theta, G, eps);
