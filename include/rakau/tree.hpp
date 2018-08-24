@@ -1438,9 +1438,9 @@ private:
         res_y_vec = xsimd_fma(diff_y, m2_dist3, res_y_vec);
         res_z_vec = xsimd_fma(diff_z, m2_dist3, res_z_vec);
     }
-    // Compute the element-wise (negated) mutual potential for 2 sets of particles at the specified coordinates and
+    // Compute the element-wise mutual potential for 2 sets of particles at the specified coordinates and
     // with the specified masses. eps2_vec is the square of the softening length. The return value
-    // is the negated mutual potential.
+    // is the negated mutual potential (that is, m1 * m2 / dist).
     template <typename B>
     static B batch_batch_3d_pots(B xvec1, B yvec1, B zvec1, B mvec1, B xvec2, B yvec2, B zvec2, B mvec2, B eps2_vec)
     {
@@ -1450,6 +1450,7 @@ private:
         return m1_dist * mvec2;
     }
     // A combination of the 2 functions above, computing both accelerations and potentials between 2 batches.
+    // For both the accs and pots, the results are accumulated into the return values.
     template <typename B>
     static void batch_batch_3d_accs_pots(B &res_x_vec, B &res_y_vec, B &res_z_vec, B &res_pot_vec, B xvec1, B yvec1,
                                          B zvec1, B mvec1, B xvec2, B yvec2, B zvec2, B mvec2, B eps2_vec)
@@ -1472,7 +1473,7 @@ private:
         res_x_vec = xsimd_fma(diff_x, m2_dist3, res_x_vec);
         res_y_vec = xsimd_fma(diff_y, m2_dist3, res_y_vec);
         res_z_vec = xsimd_fma(diff_z, m2_dist3, res_z_vec);
-        // NOTE: for the potential, we need a negated FMA.
+        // NOTE: need a negated FMA for the potential.
         res_pot_vec = xsimd_fnma(mvec1, m2_dist, res_pot_vec);
     }
     // Function to compute the self-interactions within a target node. eps2 is the square of the softening length,
@@ -1574,11 +1575,13 @@ private:
                         const auto mut_pot = m1_dist * mvec2;
                         // Subtract it from the acccumulator for 1.
                         res_vec -= mut_pot;
-                        // Subtract *directly from the result buffer* the mutual potential for 2.
+                        // Subtract *directly from the result buffer* the mutual negated potential for 2.
                         (xsimd::load_unaligned(res + i2) - mut_pot).store_unaligned(res + i2);
                     }
-                    // Subtract the accumulated potentials on 1 from the values already in the result buffer.
-                    (xsimd::load_aligned(res + i1) - res_vec).store_aligned(res + i1);
+                    // Add the accumulated potentials on 1 from the values already in the result buffer.
+                    // NOTE: we are doing an add here because we already built res_vec with repeated
+                    // subtractions, thus generating a negative value.
+                    (xsimd::load_aligned(res + i1) + res_vec).store_aligned(res + i1);
                 }
             } else {
                 // Q == 2, accelerations and potentials.
@@ -1622,24 +1625,24 @@ private:
                         // Compute the mutual (negated) potential between 1 and 2.
                         const auto mut_pot = m1_dist * mvec2;
                         // Add to the accumulators for 1 the accelerations due to the batch 2,
-                        // and subtract the mutual potential from the acccumulator for 1.
+                        // and subtract the mutual negated potential from the acccumulator for 1.
                         res_x_vec1 = xsimd_fma(diff_x, m2_dist3, res_x_vec1);
                         res_y_vec1 = xsimd_fma(diff_y, m2_dist3, res_y_vec1);
                         res_z_vec1 = xsimd_fma(diff_z, m2_dist3, res_z_vec1);
                         res_pot_vec -= mut_pot;
                         // Add *directly into the result buffer* the acceleration on 2 due to 1,
-                        // and subtract the potential.
+                        // and subtract the negated potential.
                         xsimd_fnma(diff_x, m1_dist3, xsimd::load_unaligned(res_x + i2)).store_unaligned(res_x + i2);
                         xsimd_fnma(diff_y, m1_dist3, xsimd::load_unaligned(res_y + i2)).store_unaligned(res_y + i2);
                         xsimd_fnma(diff_z, m1_dist3, xsimd::load_unaligned(res_z + i2)).store_unaligned(res_z + i2);
                         (xsimd::load_unaligned(res_pot + i2) - mut_pot).store_unaligned(res_pot + i2);
                     }
-                    // Add the accumulated acceleration on 1 to the values already in the result buffer,
-                    // and subtract the accumulated potentials on 1.
+                    // Add the accumulated accelerations/potentials on 1 to the values already in the result buffer.
                     (xsimd::load_aligned(res_x + i1) + res_x_vec1).store_aligned(res_x + i1);
                     (xsimd::load_aligned(res_y + i1) + res_y_vec1).store_aligned(res_y + i1);
                     (xsimd::load_aligned(res_z + i1) + res_z_vec1).store_aligned(res_z + i1);
-                    (xsimd::load_aligned(res_pot + i1) - res_pot_vec).store_aligned(res_pot + i1);
+                    // NOTE: the accumulated potential is added because it was constructed as a negative quantity.
+                    (xsimd::load_aligned(res_pot + i1) + res_pot_vec).store_aligned(res_pot + i1);
                 }
             }
         } else {
@@ -1680,6 +1683,7 @@ private:
                         // Establish the index of the potential in the result array:
                         // 0 if only the potentials are requested, NDim otherwise.
                         constexpr auto pot_idx = static_cast<std::size_t>(Q == 1u ? 0 : NDim);
+                        // Compute the negated mutual potential.
                         const auto mut_pot = m1 / dist * m2;
                         // Subtract mut_pot from the accumulator for the current particle and from
                         // the total potential of particle i2.
@@ -1696,7 +1700,9 @@ private:
                 }
                 if constexpr (Q == 1u || Q == 2u) {
                     constexpr auto pot_idx = static_cast<std::size_t>(Q == 1u ? 0 : NDim);
-                    res_ptrs[pot_idx][i1] -= a1[pot_idx];
+                    // NOTE: addition, because the value in a1[pot_idx] was already built
+                    // as a negative quantity.
+                    res_ptrs[pot_idx][i1] += a1[pot_idx];
                 }
             }
         }
@@ -1774,6 +1780,8 @@ private:
                         // Compute the interaction with the source particle,
                         // and subtract the obtained potentials from the current
                         // accumulated value.
+                        // NOTE: need a subtraction because batch_batch_3d_pots() returns
+                        // the negated potential.
                         res_vec -= batch_batch_3d_pots(xvec1, yvec1, zvec1, mvec1, batch_type(x_ptr2[j]),
                                                        batch_type(y_ptr2[j]), batch_type(z_ptr2[j]),
                                                        batch_type(m_ptr2[j]), eps2_vec);
