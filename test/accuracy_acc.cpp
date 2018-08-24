@@ -34,7 +34,7 @@ using fp_types = std::tuple<float, double>;
 
 static std::mt19937 rng;
 
-TEST_CASE("accuracy")
+TEST_CASE("acceleration accuracy")
 {
     tuple_for_each(fp_types{}, [](auto x) {
         using fp_type = decltype(x);
