@@ -506,8 +506,10 @@ class tree
 {
     // Need at least 1 dimension.
     static_assert(NDim);
-    // We often need to compute NDim + 1.
-    static_assert(NDim < std::numeric_limits<std::size_t>::max());
+    // We need to compute NDim + N safely. Currently, N is up to 2
+    // (NDim + 2 vectors are needed in the temporary storage when both
+    // accelerations and potentials are requested).
+    static_assert(NDim <= std::numeric_limits<std::size_t>::max() - 2u);
     // Only C++ FP types are supported at the moment.
     static_assert(std::is_floating_point_v<F>);
     // UInt must be an unsigned integral.
@@ -1112,7 +1114,7 @@ public:
         // Check the ncrit param.
         if (!ncrit) {
             throw std::invalid_argument("The critical number of particles for the vectorised computation of the "
-                                        "accelerations must be nonzero");
+                                        "potentials/accelerations must be nonzero");
         }
         // Get out soon if there's nothing to do.
         // NOTE: if the size is deduced, we'll end up with a box size of zero.
@@ -1365,11 +1367,25 @@ public:
     }
 
 private:
-    // Temporary storage used to store the distances between the particles
-    // of a node and the COM of another node while traversing the tree.
-    static auto &vec_acc_tmp_vecs()
+    // Helpers to compute how many vectors we will need to store temporary
+    // data during the BH check.
+    // Q == 0 -> accelerations only, NDim + 1 vectors (temporary diffs + 1/dist3)
+    // Q == 1 -> potentials only, 1 vector (1/dist)
+    // Q == 2 -> accs + pots, NDim + 2u vectors (temporary diffs + 1/dist3 + 1/dist)
+    template <unsigned Q>
+    static constexpr std::size_t compute_nvecs_tmp()
     {
-        static thread_local std::array<fp_vector, NDim + 1u> tmp_vecs;
+        static_assert(Q <= 2u);
+        return static_cast<std::size_t>(Q == 0u ? NDim + 1u : (Q == 1u ? 1u : NDim + 2u));
+    }
+    template <unsigned Q>
+    static constexpr std::size_t nvecs_tmp = compute_nvecs_tmp<Q>();
+    // Storage for temporary data computed during the BH check (which will be re-used
+    // by another function).
+    template <unsigned Q>
+    static auto &acc_pot_tmp_vecs()
+    {
+        static thread_local std::array<fp_vector, nvecs_tmp<Q>> tmp_vecs;
         return tmp_vecs;
     }
     // Helpers to compute how many vectors we will need to store the results
@@ -1389,8 +1405,9 @@ private:
     // particles of a critical node. Data in here will be copied to
     // the output arrays after the accelerations/potentials from all the other
     // particles/nodes in the domain have been computed.
+    // TODO remove default value.
     template <unsigned Q = 0>
-    static auto &vec_acc_tmp_res()
+    static auto &acc_pot_tmp_res()
     {
         static thread_local std::array<fp_vector, nvecs_res<Q>> tmp_res;
         return tmp_res;
@@ -1463,10 +1480,9 @@ private:
     // tgt_size is the number of particles in the target node, p_ptrs pointers to the target particles'
     // coordinates/masses, res_ptrs pointers to the output arrays. Q indicates which quantities will be computed
     // (accs, potentials, or both).
-    // TODO remove default value
-    template <unsigned Q = 0>
-    void tree_accel_self_interactions(F eps2, size_type tgt_size, const std::array<const F *, NDim + 1u> &p_ptrs,
-                                      const std::array<F *, nvecs_res<Q>> &res_ptrs) const
+    template <unsigned Q>
+    void tree_self_interactions(F eps2, size_type tgt_size, const std::array<const F *, NDim + 1u> &p_ptrs,
+                                const std::array<F *, nvecs_res<Q>> &res_ptrs) const
     {
         // Pointer to the masses.
         const auto m_ptr = p_ptrs[NDim];
@@ -1688,14 +1704,15 @@ private:
             }
         }
     }
-    // Function to compute the acceleration on a target node by all the particles of a leaf source node. eps2 is the
-    // square of the softening length, src_idx is the index, in the tree structure, of the leaf node, tgt_size the
-    // number of particles in the target node, p_ptrs pointers to the target particles' coordinates/masses, res_ptrs
-    // pointers to the output arrays. Q indicates which quantities will be computed (accs, potentials, or both).
-    // TODO remove default value
-    template <unsigned Q = 0>
-    void tree_accel_leaf(F eps2, size_type src_idx, size_type tgt_size, const std::array<const F *, NDim + 1u> &p_ptrs,
-                         const std::array<F *, nvecs_res<Q>> &res_ptrs) const
+    // Function to compute the accelerations/potentials on a target node by all the particles of a leaf source node.
+    // eps2 is the square of the softening length, src_idx is the index, in the tree structure, of the leaf node,
+    // tgt_size the number of particles in the target node, p_ptrs pointers to the target particles' coordinates/masses,
+    // res_ptrs pointers to the output arrays. Q indicates which quantities will be computed (accs, potentials, or
+    // both).
+    template <unsigned Q>
+    void tree_acc_pot_leaf(F eps2, size_type src_idx, size_type tgt_size,
+                           const std::array<const F *, NDim + 1u> &p_ptrs,
+                           const std::array<F *, nvecs_res<Q>> &res_ptrs) const
     {
         // Get a reference to the source node.
         const auto &src_node = m_tree[src_idx];
@@ -1840,64 +1857,163 @@ private:
             }
         }
     }
-    // Function to compute the acceleration due to the COM of a source node onto a target node. src_idx is the index, in
-    // the tree structure, of the source node, tgt_size the number of particles in the target node, tmp_ptrs are
-    // pointers to the temporary data filled in by the tree_accel_bh_check() function (which will be re-used by this
-    // function), res_ptrs pointers to the output arrays.
-    void tree_accel_bh_com(size_type src_idx, size_type tgt_size, const std::array<F *, NDim + 1u> &tmp_ptrs,
-                           const std::array<F *, NDim> &res_ptrs) const
+    // Function to compute the accelerations/potentials due to the COM of a source node onto a target node. src_idx is
+    // the index, in the tree structure, of the source node, tgt_size the number of particles in the target node,
+    // p_ptrs pointers to the target particles' coordinates/masses, tmp_ptrs are pointers to the temporary data filled
+    // in by the tree_acc_pot_bh_check() function (which will be re-used by this function), res_ptrs pointers to the
+    // output arrays. Q indicates which quantities will be computed (accs, potentials, or both).
+    template <unsigned Q>
+    void tree_acc_pot_bh_com(size_type src_idx, size_type tgt_size, const std::array<const F *, NDim + 1u> &p_ptrs,
+                             const std::array<F *, nvecs_tmp<Q>> &tmp_ptrs,
+                             const std::array<F *, nvecs_res<Q>> &res_ptrs) const
     {
-        // Load locally the mass of the COM of the source node.
+        // Load locally the mass of the source node.
         const auto m_src = get<2>(m_tree[src_idx]);
         if constexpr (simd_enabled && NDim == 3u) {
             using batch_type = xsimd::simd_type<F>;
             constexpr auto batch_size = batch_type::size;
+            // Vector version of the source node mass.
             const batch_type m_src_vec(m_src);
-            const auto tmp_x = tmp_ptrs[0], tmp_y = tmp_ptrs[1], tmp_z = tmp_ptrs[2], tmp_dist3 = tmp_ptrs[3],
-                       res_x = res_ptrs[0], res_y = res_ptrs[1], res_z = res_ptrs[2];
-            for (size_type i = 0; i < tgt_size; i += batch_size) {
-                const auto m_src_dist3_vec = use_fast_inv_sqrt<batch_type>
-                                                 ? m_src_vec * batch_type(tmp_dist3 + i, xsimd::aligned_mode{})
-                                                 : m_src_vec / batch_type(tmp_dist3 + i, xsimd::aligned_mode{}),
-                           xdiff = batch_type(tmp_x + i, xsimd::aligned_mode{}),
-                           ydiff = batch_type(tmp_y + i, xsimd::aligned_mode{}),
-                           zdiff = batch_type(tmp_z + i, xsimd::aligned_mode{});
-                xsimd_fma(xdiff, m_src_dist3_vec, batch_type(res_x + i, xsimd::aligned_mode{}))
-                    .store_aligned(res_x + i);
-                xsimd_fma(ydiff, m_src_dist3_vec, batch_type(res_y + i, xsimd::aligned_mode{}))
-                    .store_aligned(res_y + i);
-                xsimd_fma(zdiff, m_src_dist3_vec, batch_type(res_z + i, xsimd::aligned_mode{}))
-                    .store_aligned(res_z + i);
+            if constexpr (Q == 0u) {
+                (void)p_ptrs;
+                // Q == 0, accelerations only.
+                //
+                // Pointers to the temporary coordinate diffs and 1/dist3 values computed in the BH check.
+                const auto tmp_x = tmp_ptrs[0], tmp_y = tmp_ptrs[1], tmp_z = tmp_ptrs[2], tmp_dist3 = tmp_ptrs[3];
+                // Pointers to the result arrays.
+                const auto res_x = res_ptrs[0], res_y = res_ptrs[1], res_z = res_ptrs[2];
+                for (size_type i = 0; i < tgt_size; i += batch_size) {
+                    // Compute m_src/dist**3 and load the differences.
+                    const auto m_src_dist3_vec = use_fast_inv_sqrt<batch_type>
+                                                     ? m_src_vec * batch_type(tmp_dist3 + i, xsimd::aligned_mode{})
+                                                     : m_src_vec / batch_type(tmp_dist3 + i, xsimd::aligned_mode{}),
+                               xdiff = batch_type(tmp_x + i, xsimd::aligned_mode{}),
+                               ydiff = batch_type(tmp_y + i, xsimd::aligned_mode{}),
+                               zdiff = batch_type(tmp_z + i, xsimd::aligned_mode{});
+                    // Compute and accumulate the accelerations.
+                    xsimd_fma(xdiff, m_src_dist3_vec, batch_type(res_x + i, xsimd::aligned_mode{}))
+                        .store_aligned(res_x + i);
+                    xsimd_fma(ydiff, m_src_dist3_vec, batch_type(res_y + i, xsimd::aligned_mode{}))
+                        .store_aligned(res_y + i);
+                    xsimd_fma(zdiff, m_src_dist3_vec, batch_type(res_z + i, xsimd::aligned_mode{}))
+                        .store_aligned(res_z + i);
+                }
+            } else if constexpr (Q == 1u) {
+                // Q == 1, potentials only.
+                //
+                // Pointer to the temporary 1/dist values computed in the BH check.
+                const auto tmp_dist = tmp_ptrs[0];
+                // Pointer to the target masses.
+                const auto m_ptr = p_ptrs[3];
+                // Pointer to the result array.
+                const auto res = res_ptrs[0];
+                for (size_type i = 0; i < tgt_size; i += batch_size) {
+                    // Compute m_src/dist.
+                    const auto m_src_dist_vec = use_fast_inv_sqrt<batch_type>
+                                                    ? m_src_vec * batch_type(tmp_dist + i, xsimd::aligned_mode{})
+                                                    : m_src_vec / batch_type(tmp_dist + i, xsimd::aligned_mode{});
+                    // Compute and accumulate the potential.
+                    xsimd_fnma(batch_type(m_ptr + i, xsimd::aligned_mode{}), m_src_dist_vec,
+                               batch_type(res + i, xsimd::aligned_mode{}))
+                        .store_aligned(res + i);
+                }
+            } else {
+                // Q == 2, accelerations and potentials.
+                //
+                // Pointers to the temporary coordinate diffs, 1/dist3 and 1/dist values computed in the BH check.
+                const auto tmp_x = tmp_ptrs[0], tmp_y = tmp_ptrs[1], tmp_z = tmp_ptrs[2], tmp_dist3 = tmp_ptrs[3],
+                           tmp_dist = tmp_ptrs[4];
+                // Pointer to the target masses.
+                const auto m_ptr = p_ptrs[3];
+                // Pointers to the result arrays.
+                const auto res_x = res_ptrs[0], res_y = res_ptrs[1], res_z = res_ptrs[2], res_pot = res_ptrs[3];
+                for (size_type i = 0; i < tgt_size; i += batch_size) {
+                    // Compute m_src/dist**3, m_src/dist and load the differences.
+                    const auto m_src_dist3_vec = use_fast_inv_sqrt<batch_type>
+                                                     ? m_src_vec * batch_type(tmp_dist3 + i, xsimd::aligned_mode{})
+                                                     : m_src_vec / batch_type(tmp_dist3 + i, xsimd::aligned_mode{}),
+                               m_src_dist_vec = use_fast_inv_sqrt<batch_type>
+                                                    ? m_src_vec * batch_type(tmp_dist + i, xsimd::aligned_mode{})
+                                                    : m_src_vec / batch_type(tmp_dist + i, xsimd::aligned_mode{}),
+                               xdiff = batch_type(tmp_x + i, xsimd::aligned_mode{}),
+                               ydiff = batch_type(tmp_y + i, xsimd::aligned_mode{}),
+                               zdiff = batch_type(tmp_z + i, xsimd::aligned_mode{});
+                    // Compute and accumulate the accelerations.
+                    xsimd_fma(xdiff, m_src_dist3_vec, batch_type(res_x + i, xsimd::aligned_mode{}))
+                        .store_aligned(res_x + i);
+                    xsimd_fma(ydiff, m_src_dist3_vec, batch_type(res_y + i, xsimd::aligned_mode{}))
+                        .store_aligned(res_y + i);
+                    xsimd_fma(zdiff, m_src_dist3_vec, batch_type(res_z + i, xsimd::aligned_mode{}))
+                        .store_aligned(res_z + i);
+                    // Compute and accumulate the potential.
+                    xsimd_fnma(batch_type(m_ptr + i, xsimd::aligned_mode{}), m_src_dist_vec,
+                               batch_type(res_pot + i, xsimd::aligned_mode{}))
+                        .store_aligned(res_pot + i);
+                }
             }
         } else {
+            // Init the pointer to the target masses, but only if potentials are requested.
+            const F *m_ptr;
+            (void)m_ptr;
+            if constexpr (Q == 1u || Q == 2u) {
+                m_ptr = p_ptrs[3];
+            }
             for (size_type i = 0; i < tgt_size; ++i) {
-                const auto m_src_dist3 = m_src / tmp_ptrs[NDim][i];
-                for (std::size_t j = 0; j < NDim; ++j) {
-                    res_ptrs[j][i] = fma_wrap(tmp_ptrs[j][i], m_src_dist3, res_ptrs[j][i]);
+                if constexpr (Q == 0u || Q == 2u) {
+                    // Q == 0 or 2: accelerations are requested.
+                    const auto m_src_dist3 = m_src / tmp_ptrs[NDim][i];
+                    for (std::size_t j = 0; j < NDim; ++j) {
+                        res_ptrs[j][i] = fma_wrap(tmp_ptrs[j][i], m_src_dist3, res_ptrs[j][i]);
+                    }
+                }
+                if constexpr (Q == 1u || Q == 2u) {
+                    // Q == 1 or 2: potentials are requested.
+                    // Establish the index of the potential in the result array:
+                    // 0 if only the potentials are requested, NDim otherwise.
+                    constexpr auto pot_idx = static_cast<std::size_t>(Q == 1u ? 0 : NDim);
+                    // Establish the index of the dist values in the temp data:
+                    // 0 if only the potentials are requested, NDim + 1 otherwise.
+                    constexpr auto dist_idx = static_cast<std::size_t>(Q == 1u ? 0 : NDim + 1u);
+                    res_ptrs[pot_idx][i] = fma_wrap(-m_ptr[i], m_src / tmp_ptrs[dist_idx][i], res_ptrs[pot_idx][i]);
                 }
             }
         }
     }
-    // Function to check if a source node satisfies the BH criterion and, possibly, to compute the accelerations due to
-    // that source node. src_idx is the index, in the tree structure, of the source node, theta2 the square of the
-    // opening angle, eps2 the square of the softening length, tgt_size the number of particles in the target node,
-    // p_ptrs pointers to the coordinates/masses of the particles in the target node, res_ptrs pointers to the output
-    // arrays. The return value is the index of the next source node in the tree traversal.
-    size_type tree_accel_bh_check(size_type src_idx, F theta2, F eps2, size_type tgt_size,
-                                  const std::array<const F *, NDim + 1u> &p_ptrs,
-                                  const std::array<F *, NDim> &res_ptrs) const
+    // Function to check if a source node satisfies the BH criterion and, possibly, to compute the
+    // accelerations/potentials due to that source node. src_idx is the index, in the tree structure, of the source
+    // node, theta2 the square of the opening angle, eps2 the square of the softening length, tgt_size the number of
+    // particles in the target node, p_ptrs pointers to the coordinates/masses of the particles in the target node,
+    // res_ptrs pointers to the output arrays. The return value is the index of the next source node in the tree
+    // traversal. Q indicates which quantities will be computed (accs, potentials, or both).
+    template <unsigned Q>
+    size_type tree_acc_pot_bh_check(size_type src_idx, F theta2, F eps2, size_type tgt_size,
+                                    const std::array<const F *, NDim + 1u> &p_ptrs,
+                                    const std::array<F *, nvecs_res<Q>> &res_ptrs) const
     {
         // Temporary vectors to store the data computed during the BH criterion check.
-        // We will re-use this data later in tree_accel_bh_com().
-        auto &tmp_vecs = vec_acc_tmp_vecs();
-        std::array<F *, NDim + 1u> tmp_ptrs;
+        // We will re-use this data later in tree_acc_pot_bh_com().
+        auto &tmp_vecs = acc_pot_tmp_vecs<Q>();
+        static_assert(nvecs_tmp<Q> == std::tuple_size_v<std::remove_reference_t<decltype(tmp_vecs)>>);
+        std::array<F *, nvecs_tmp<Q>> tmp_ptrs;
         // NOTE: the size of the vectors in tgt_tmp_data() might be
         // greater than tgt_size, due to SIMD padding. Fetch the
         // actual size.
         const auto pdata_size = tgt_tmp_data()[0].size();
-        for (std::size_t j = 0; j < NDim + 1u; ++j) {
-            tmp_vecs[j].resize(pdata_size);
-            tmp_ptrs[j] = tmp_vecs[j].data();
+        // Prepare the temporary data.
+        if constexpr (Q == 0u || Q == 2u) {
+            // Q == 0 or 2: accelerations are requested.
+            for (std::size_t j = 0; j < NDim + 1u; ++j) {
+                tmp_vecs[j].resize(pdata_size);
+                tmp_ptrs[j] = tmp_vecs[j].data();
+            }
+        }
+        if constexpr (Q == 1u || Q == 2u) {
+            // Q == 1 or 2: potentials are requested.
+            // Establish the index of the dist values in the temp data:
+            // 0 if only the potentials are requested, NDim + 1 otherwise.
+            constexpr auto dist_idx = static_cast<std::size_t>(Q == 1u ? 0 : NDim + 1u);
+            tmp_vecs[dist_idx].resize(pdata_size);
+            tmp_ptrs[dist_idx] = tmp_vecs[dist_idx].data();
         }
         // Local cache.
         const auto &src_node = m_tree[src_idx];
@@ -1915,31 +2031,93 @@ private:
             // The SIMD-accelerated version.
             using batch_type = xsimd::simd_type<F>;
             constexpr auto batch_size = batch_type::size;
-            const auto x_ptr = p_ptrs[0], y_ptr = p_ptrs[1], z_ptr = p_ptrs[2];
-            const auto tmp_x = tmp_ptrs[0], tmp_y = tmp_ptrs[1], tmp_z = tmp_ptrs[2], tmp_dist3 = tmp_ptrs[3];
             // Splatted vector versions of the scalar variables.
             const batch_type src_dim2_vec(src_dim2), theta2_vec(theta2), eps2_vec(eps2), x_com_vec(com_pos[0]),
                 y_com_vec(com_pos[1]), z_com_vec(com_pos[2]);
-            for (size_type i = 0; i < tgt_size; i += batch_size) {
-                const auto diff_x = x_com_vec - batch_type(x_ptr + i, xsimd::aligned_mode{}),
-                           diff_y = y_com_vec - batch_type(y_ptr + i, xsimd::aligned_mode{}),
-                           diff_z = z_com_vec - batch_type(z_ptr + i, xsimd::aligned_mode{});
-                auto dist2 = diff_x * diff_x + diff_y * diff_y + diff_z * diff_z;
-                if (xsimd::any(src_dim2_vec >= theta2_vec * dist2)) {
-                    // At least one particle in the current batch fails the BH criterion
-                    // check. Mark the bh_flag as false, then break out.
-                    bh_flag = false;
-                    break;
+            // Pointers to the coordinates.
+            const auto x_ptr = p_ptrs[0], y_ptr = p_ptrs[1], z_ptr = p_ptrs[2];
+            if constexpr (Q == 0u) {
+                // Q == 0, accelerations only.
+                //
+                // Pointers to the temporary data.
+                const auto tmp_x = tmp_ptrs[0], tmp_y = tmp_ptrs[1], tmp_z = tmp_ptrs[2], tmp_dist3 = tmp_ptrs[3];
+                for (size_type i = 0; i < tgt_size; i += batch_size) {
+                    const auto diff_x = x_com_vec - batch_type(x_ptr + i, xsimd::aligned_mode{}),
+                               diff_y = y_com_vec - batch_type(y_ptr + i, xsimd::aligned_mode{}),
+                               diff_z = z_com_vec - batch_type(z_ptr + i, xsimd::aligned_mode{});
+                    auto dist2 = diff_x * diff_x + diff_y * diff_y + diff_z * diff_z;
+                    if (xsimd::any(src_dim2_vec >= theta2_vec * dist2)) {
+                        // At least one particle in the current batch fails the BH criterion
+                        // check. Mark the bh_flag as false, then break out.
+                        bh_flag = false;
+                        break;
+                    }
+                    // Add the softening length.
+                    dist2 += eps2_vec;
+                    diff_x.store_aligned(tmp_x + i);
+                    diff_y.store_aligned(tmp_y + i);
+                    diff_z.store_aligned(tmp_z + i);
+                    if constexpr (use_fast_inv_sqrt<batch_type>) {
+                        inv_sqrt_3(dist2).store_aligned(tmp_dist3 + i);
+                    } else {
+                        (xsimd_sqrt(dist2) * dist2).store_aligned(tmp_dist3 + i);
+                    }
                 }
-                // Add the softening length.
-                dist2 += eps2_vec;
-                diff_x.store_aligned(tmp_x + i);
-                diff_y.store_aligned(tmp_y + i);
-                diff_z.store_aligned(tmp_z + i);
-                if constexpr (use_fast_inv_sqrt<batch_type>) {
-                    inv_sqrt_3(dist2).store_aligned(tmp_dist3 + i);
-                } else {
-                    (xsimd_sqrt(dist2) * dist2).store_aligned(tmp_dist3 + i);
+            } else if constexpr (Q == 1u) {
+                // Q == 1, potentials only.
+                //
+                // Pointer to the temporary data.
+                const auto tmp = tmp_ptrs[0];
+                for (size_type i = 0; i < tgt_size; i += batch_size) {
+                    const auto diff_x = x_com_vec - batch_type(x_ptr + i, xsimd::aligned_mode{}),
+                               diff_y = y_com_vec - batch_type(y_ptr + i, xsimd::aligned_mode{}),
+                               diff_z = z_com_vec - batch_type(z_ptr + i, xsimd::aligned_mode{});
+                    auto dist2 = diff_x * diff_x + diff_y * diff_y + diff_z * diff_z;
+                    if (xsimd::any(src_dim2_vec >= theta2_vec * dist2)) {
+                        // At least one particle in the current batch fails the BH criterion
+                        // check. Mark the bh_flag as false, then break out.
+                        bh_flag = false;
+                        break;
+                    }
+                    // Add the softening length.
+                    dist2 += eps2_vec;
+                    if constexpr (use_fast_inv_sqrt<batch_type>) {
+                        inv_sqrt(dist2).store_aligned(tmp + i);
+                    } else {
+                        xsimd_sqrt(dist2).store_aligned(tmp + i);
+                    }
+                }
+            } else {
+                // Q == 2, accelerations and potentials.
+                //
+                // Pointers to the temporary data.
+                const auto tmp_x = tmp_ptrs[0], tmp_y = tmp_ptrs[1], tmp_z = tmp_ptrs[2], tmp_dist3 = tmp_ptrs[3],
+                           tmp_dist = tmp_ptrs[4];
+                for (size_type i = 0; i < tgt_size; i += batch_size) {
+                    const auto diff_x = x_com_vec - batch_type(x_ptr + i, xsimd::aligned_mode{}),
+                               diff_y = y_com_vec - batch_type(y_ptr + i, xsimd::aligned_mode{}),
+                               diff_z = z_com_vec - batch_type(z_ptr + i, xsimd::aligned_mode{});
+                    auto dist2 = diff_x * diff_x + diff_y * diff_y + diff_z * diff_z;
+                    if (xsimd::any(src_dim2_vec >= theta2_vec * dist2)) {
+                        // At least one particle in the current batch fails the BH criterion
+                        // check. Mark the bh_flag as false, then break out.
+                        bh_flag = false;
+                        break;
+                    }
+                    // Add the softening length.
+                    dist2 += eps2_vec;
+                    diff_x.store_aligned(tmp_x + i);
+                    diff_y.store_aligned(tmp_y + i);
+                    diff_z.store_aligned(tmp_z + i);
+                    if constexpr (use_fast_inv_sqrt<batch_type>) {
+                        const auto inv_dist = inv_sqrt(dist2);
+                        (inv_dist * inv_dist * inv_dist).store_aligned(tmp_dist3 + i);
+                        inv_dist.store_aligned(tmp_dist + i);
+                    } else {
+                        const auto dist = xsimd_sqrt(dist2);
+                        (dist2 * dist).store_aligned(tmp_dist3 + i);
+                        dist.store_aligned(tmp_dist + i);
+                    }
                 }
             }
         } else {
@@ -1959,17 +2137,28 @@ private:
                     bh_flag = false;
                     break;
                 }
-                // Add the softening length.
+                // Add the softening length and compute the distance.
                 dist2 += eps2;
-                // Store dist3 for later use.
-                // NOTE: in the scalar part, we always store dist3.
-                tmp_ptrs[NDim][i] = std::sqrt(dist2) * dist2;
+                const auto dist = std::sqrt(dist2);
+                if constexpr (Q == 0u || Q == 2u) {
+                    // Q == 0 or 2: accelerations are requested, store dist3.
+                    // NOTE: in the scalar part, we always store dist3.
+                    tmp_ptrs[NDim][i] = dist * dist2;
+                }
+                if constexpr (Q == 1u || Q == 2u) {
+                    // Q == 1 or 2: potentials are requested.
+                    // Establish the index of the dist values in the temp data:
+                    // 0 if only the potentials are requested, NDim + 1 otherwise.
+                    constexpr auto dist_idx = static_cast<std::size_t>(Q == 1u ? 0 : NDim + 1u);
+                    // NOTE: in the scalar part, we always store dist.
+                    tmp_ptrs[dist_idx][i] = dist;
+                }
             }
         }
         if (bh_flag) {
             // The source node satisfies the BH criterion for all the particles of the target node. Add the
             // acceleration due to the com of the source node.
-            tree_accel_bh_com(src_idx, tgt_size, tmp_ptrs, res_ptrs);
+            tree_acc_pot_bh_com<Q>(src_idx, tgt_size, p_ptrs, tmp_ptrs, res_ptrs);
             // We can now skip all the children of the source node.
             return static_cast<size_type>(src_idx + n_children_src + 1u);
         }
@@ -1977,17 +2166,20 @@ private:
         // node, in which case we need to compute all the pairwise interactions.
         if (!n_children_src) {
             // Leaf node.
-            tree_accel_leaf(eps2, src_idx, tgt_size, p_ptrs, res_ptrs);
+            tree_acc_pot_leaf<Q>(eps2, src_idx, tgt_size, p_ptrs, res_ptrs);
         }
         // In any case, we keep traversing the tree moving to the next node in depth-first order.
         return static_cast<size_type>(src_idx + 1u);
     }
-    // Tree traversal for the computation of the accelerations. theta2 is the square of the opening angle,
+    // Tree traversal for the computation of the accelerations/potentials. theta2 is the square of the opening angle,
     // eps2 the square of the softening length, tgt_size the number of particles in the target node, tgt_code its code,
     // p_ptrs are pointers to the coordinates/masses of the particles in the target node, res_ptrs pointers to the
-    // output arrays.
-    void tree_accel(F theta2, F eps2, size_type tgt_size, UInt tgt_code, const std::array<const F *, NDim + 1u> &p_ptrs,
-                    const std::array<F *, NDim> &res_ptrs) const
+    // output arrays. Q indicates which quantities will be computed (accs, potentials, or both).
+    // TODO remove the default value.
+    template <unsigned Q = 0>
+    void tree_acc_pot(F theta2, F eps2, size_type tgt_size, UInt tgt_code,
+                      const std::array<const F *, NDim + 1u> &p_ptrs,
+                      const std::array<F *, nvecs_res<Q>> &res_ptrs) const
     {
         assert(!m_tree.empty());
         // Tree level of the target node.
@@ -2010,7 +2202,7 @@ private:
             if (src_code == tgt_code) {
                 // If src_code == tgt_code, we are currently visiting the target node.
                 // Compute the self interactions and skip all the children of the target node.
-                tree_accel_self_interactions(eps2, tgt_size, p_ptrs, res_ptrs);
+                tree_self_interactions<Q>(eps2, tgt_size, p_ptrs, res_ptrs);
                 src_idx += n_children_src + 1u;
                 continue;
             }
@@ -2032,20 +2224,21 @@ private:
                 continue;
             }
             // The source node is not an ancestor of the target. We need to run the BH criterion check.
-            // The tree_accel_bh_check() function will return the index of the next node in the traversal.
-            src_idx = tree_accel_bh_check(src_idx, theta2, eps2, tgt_size, p_ptrs, res_ptrs);
+            // The tree_acc_pot_bh_check() function will return the index of the next node in the traversal.
+            src_idx = tree_acc_pot_bh_check<Q>(src_idx, theta2, eps2, tgt_size, p_ptrs, res_ptrs);
         }
     }
-    // Top level function for the computation of the accelerations.
-    template <typename It>
-    void vec_accs_impl(const std::array<It, NDim> &out, F theta2, F G, F eps2) const
+    // Top level function for the computation of the accelerations/potentials.
+    // TODO: remove default value.
+    template <typename It, unsigned Q = 0>
+    void acc_pot_impl(const std::array<It, NDim> &out, F theta2, F G, F eps2) const
     {
         // NOTE: we will be adding padding to the target node data when SIMD is active,
         // in order to be able to use SIMD instructions on all the particles of the node.
         // The padding data must be crafted so that it does not interfere with the useful
         // calculations. This means that:
         // - we will set the masses to zero so that, when computing the self interactions
-        //   in a target node, the extra accelerations due to the padding data will be zero,
+        //   in a target node, the extra accelerations/potentials due to the padding data will be zero,
         // - for the positions, we must ensure 2 things:
         //   - they must not overlap with any other real particle, in order to avoid singularities
         //     when computing self-interactions in the target node, hence they must be outside the box,
@@ -2074,14 +2267,14 @@ private:
             tbb::blocked_range<decltype(m_crit_nodes.size())>(0u, m_crit_nodes.size()),
             [this, theta2, G, eps2, pad_coord, &out](const auto &range) {
                 // Get references to the local temporary data.
-                auto &tmp_res = vec_acc_tmp_res();
+                auto &tmp_res = acc_pot_tmp_res();
                 auto &tmp_tgt = tgt_tmp_data();
                 for (auto i = range.begin(); i != range.end(); ++i) {
                     const auto tgt_code = get<0>(m_crit_nodes[i]);
                     const auto tgt_begin = get<1>(m_crit_nodes[i]);
                     const auto tgt_size = static_cast<size_type>(get<2>(m_crit_nodes[i]) - tgt_begin);
                     // Size of the temporary vectors that will be used to store the target node
-                    // data and the total accelerations on its particles. If simd is not enabled, this
+                    // data and the total accelerations/potentials on its particles. If simd is not enabled, this
                     // value will be tgt_size. Otherwise, we add extra padding at the end based on the
                     // simd vector size.
                     const auto pdata_size = [tgt_size]() {
@@ -2131,7 +2324,7 @@ private:
                     }
                     p_ptrs[NDim] = tmp_tgt[NDim].data();
                     // Do the computation.
-                    tree_accel(theta2, eps2, tgt_size, tgt_code, p_ptrs, res_ptrs);
+                    tree_acc_pot<Q>(theta2, eps2, tgt_size, tgt_code, p_ptrs, res_ptrs);
                     // Multiply by G, if needed.
                     if (G != F(1)) {
                         for (std::size_t j = 0; j < NDim; ++j) {
@@ -2193,11 +2386,11 @@ private:
                                     + std::to_string(G) + " instead");
         }
     }
-    // Top level dispatcher for the accs functions. It will run a few checks and then invoke vec_accs_impl().
+    // Top level dispatcher for the accs/pots functions. It will run a few checks and then invoke acc_pot_impl().
     template <bool Ordered, typename Output>
-    void accs_dispatch(const Output &out, F theta, F G, F eps) const
+    void acc_pot_dispatch(const Output &out, F theta, F G, F eps) const
     {
-        simple_timer st("vector accs computation");
+        simple_timer st("vector accs/pots computation");
         const auto theta2 = theta * theta, eps2 = eps * eps;
         // Input param check.
         if (!std::isfinite(theta2) || theta2 <= F(0)) {
@@ -2215,43 +2408,43 @@ private:
             // over the iterators in out.
             using diff_t = typename std::iterator_traits<typename Output::value_type>::difference_type;
             if (m_parts[0].size() > static_cast<std::make_unsigned_t<diff_t>>(std::numeric_limits<diff_t>::max())) {
-                throw std::overflow_error(
-                    "The number of particles (" + std::to_string(m_parts[0].size())
-                    + ") is too large, and it results in an overflow condition when computing the accelerations");
+                throw std::overflow_error("The number of particles (" + std::to_string(m_parts[0].size())
+                                          + ") is too large, and it results in an overflow condition when computing "
+                                            "the accelerations/potentials");
             }
             using it_t = decltype(boost::make_permutation_iterator(out[0], m_isort.begin()));
             std::array<it_t, NDim> out_pits;
             for (std::size_t j = 0; j < NDim; ++j) {
                 out_pits[j] = boost::make_permutation_iterator(out[j], m_isort.begin());
             }
-            // NOTE: we are checking in the vec_accs_impl function that we can index into
+            // NOTE: we are checking in the acc_pot_impl() function that we can index into
             // the permuted iterators without overflows (see the use of boost::numeric_cast()).
-            vec_accs_impl(out_pits, theta2, G, eps2);
+            acc_pot_impl(out_pits, theta2, G, eps2);
         } else {
-            vec_accs_impl(out, theta2, G, eps2);
+            acc_pot_impl(out, theta2, G, eps2);
         }
     }
     // Helper overload for an array of vectors. It will prepare the vectors and then
     // call the other overload.
     template <bool Ordered, typename Allocator>
-    void accs_dispatch(std::array<std::vector<F, Allocator>, NDim> &out, F theta, F G, F eps) const
+    void acc_pot_dispatch(std::array<std::vector<F, Allocator>, NDim> &out, F theta, F G, F eps) const
     {
         std::array<F *, NDim> out_ptrs;
         for (std::size_t j = 0; j < NDim; ++j) {
             out[j].resize(boost::numeric_cast<decltype(out[j].size())>(m_parts[0].size()));
             out_ptrs[j] = out[j].data();
         }
-        accs_dispatch<Ordered>(out_ptrs, theta, G, eps);
+        acc_pot_dispatch<Ordered>(out_ptrs, theta, G, eps);
     }
     // Small helper to turn an init list into an array, in the functions for the computation
-    // of the accelerations.
+    // of the accelerations/potentials.
     template <typename It>
-    static auto accs_ilist_to_array(std::initializer_list<It> ilist)
+    static auto acc_pot_ilist_to_array(std::initializer_list<It> ilist)
     {
         if (ilist.size() != NDim) {
             throw std::invalid_argument(
                 "An initializer list containing " + std::to_string(ilist.size())
-                + " iterators was used as the output for the computation of the accelerations in a "
+                + " iterators was used as the output for the computation of the accelerations/potentials in a "
                 + std::to_string(NDim) + "-dimensional tree, but a list with " + std::to_string(NDim)
                 + " iterators is required instead (the number of iterators must be equal to the number of dimensions)");
         }
@@ -2264,39 +2457,39 @@ public:
     template <typename Allocator>
     void accs_u(std::array<std::vector<F, Allocator>, NDim> &out, F theta, F G = F(1), F eps = F(0)) const
     {
-        accs_dispatch<false>(out, theta, G, eps);
+        acc_pot_dispatch<false>(out, theta, G, eps);
     }
     template <typename It>
     void accs_u(const std::array<It, NDim> &out, F theta, F G = F(1), F eps = F(0)) const
     {
-        accs_dispatch<false>(out, theta, G, eps);
+        acc_pot_dispatch<false>(out, theta, G, eps);
     }
     template <typename It>
     void accs_u(std::initializer_list<It> out, F theta, F G = F(1), F eps = F(0)) const
     {
-        accs_u(accs_ilist_to_array(out), theta, G, eps);
+        accs_u(acc_pot_ilist_to_array(out), theta, G, eps);
     }
     template <typename Allocator>
     void accs_o(std::array<std::vector<F, Allocator>, NDim> &out, F theta, F G = F(1), F eps = F(0)) const
     {
-        accs_dispatch<true>(out, theta, G, eps);
+        acc_pot_dispatch<true>(out, theta, G, eps);
     }
     template <typename It>
     void accs_o(const std::array<It, NDim> &out, F theta, F G = F(1), F eps = F(0)) const
     {
-        accs_dispatch<true>(out, theta, G, eps);
+        acc_pot_dispatch<true>(out, theta, G, eps);
     }
     template <typename It>
     void accs_o(std::initializer_list<It> out, F theta, F G = F(1), F eps = F(0)) const
     {
-        accs_o(accs_ilist_to_array(out), theta, G, eps);
+        accs_o(acc_pot_ilist_to_array(out), theta, G, eps);
     }
 
 private:
     template <bool Ordered>
-    std::array<F, NDim> exact_acc_impl(size_type orig_idx, F G, F eps) const
+    std::array<F, NDim> exact_acc_pot_impl(size_type orig_idx, F G, F eps) const
     {
-        simple_timer st("exact acc computation");
+        simple_timer st("exact acc/pot computation");
         const auto eps2 = eps * eps;
         // Check eps.
         check_eps_eps2(eps, eps2);
@@ -2325,11 +2518,11 @@ private:
 public:
     std::array<F, NDim> exact_acc_u(size_type idx, F G = F(1), F eps = F(0)) const
     {
-        return exact_acc_impl<false>(idx, G, eps);
+        return exact_acc_pot_impl<false>(idx, G, eps);
     }
     std::array<F, NDim> exact_acc_o(size_type idx, F G = F(1), F eps = F(0)) const
     {
-        return exact_acc_impl<true>(idx, G, eps);
+        return exact_acc_pot_impl<true>(idx, G, eps);
     }
 
 private:
@@ -2494,7 +2687,7 @@ private:
     // The maximum number of particles in a leaf node.
     size_type m_max_leaf_n;
     // Number of particles in a critical node: if the number of particles in
-    // a node is ncrit or less, then we will compute the accelerations on the
+    // a node is ncrit or less, then we will compute the accelerations/potentials on the
     // particles in that node in a vectorised fashion.
     size_type m_ncrit;
     // The particles: NDim coordinates plus masses.
