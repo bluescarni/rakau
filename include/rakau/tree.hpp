@@ -2387,8 +2387,7 @@ private:
     // Top level dispatcher for the accs/pots functions. It will run a few checks and then invoke acc_pot_impl().
     // out is the array of output iterators, theta the opening angle, G the grav const, eps the softening length.
     // Q indicates which quantities will be computed (accs, potentials, or both).
-    // TODO remove default value.
-    template <bool Ordered, typename It, unsigned Q = 0>
+    template <bool Ordered, unsigned Q, typename It>
     void acc_pot_dispatch(const std::array<It, nvecs_res<Q>> &out, F theta, F G, F eps) const
     {
         simple_timer st("vector accs/pots computation");
@@ -2427,8 +2426,7 @@ private:
     }
     // Helper overload for an array of vectors. It will prepare the vectors and then
     // call the other overload.
-    // TODO remove default value.
-    template <bool Ordered, typename Allocator, unsigned Q = 0>
+    template <bool Ordered, unsigned Q, typename Allocator>
     void acc_pot_dispatch(std::array<std::vector<F, Allocator>, nvecs_res<Q>> &out, F theta, F G, F eps) const
     {
         std::array<F *, nvecs_res<Q>> out_ptrs;
@@ -2436,22 +2434,22 @@ private:
             out[j].resize(boost::numeric_cast<decltype(out[j].size())>(m_parts[0].size()));
             out_ptrs[j] = out[j].data();
         }
-        // TODO careful about the order of the Q parameter here, after we remove the defaults.
-        acc_pot_dispatch<Ordered>(out_ptrs, theta, G, eps);
+        acc_pot_dispatch<Ordered, Q>(out_ptrs, theta, G, eps);
     }
     // Small helper to turn an init list into an array, in the functions for the computation
-    // of the accelerations/potentials.
-    template <typename It>
+    // of the accelerations/potentials. Q indicates which quantities will be computed (accs,
+    // potentials, or both).
+    template <unsigned Q, typename It>
     static auto acc_pot_ilist_to_array(std::initializer_list<It> ilist)
     {
-        if (ilist.size() != NDim) {
+        if (ilist.size() != nvecs_res<Q>) {
             throw std::invalid_argument(
                 "An initializer list containing " + std::to_string(ilist.size())
                 + " iterators was used as the output for the computation of the accelerations/potentials in a "
-                + std::to_string(NDim) + "-dimensional tree, but a list with " + std::to_string(NDim)
-                + " iterators is required instead (the number of iterators must be equal to the number of dimensions)");
+                + std::to_string(NDim) + "-dimensional tree, but a list with " + std::to_string(nvecs_res<Q>)
+                + " iterators is required instead");
         }
-        std::array<It, NDim> retval;
+        std::array<It, nvecs_res<Q>> retval;
         std::copy(ilist.begin(), ilist.end(), retval.begin());
         return retval;
     }
@@ -2460,32 +2458,32 @@ public:
     template <typename Allocator>
     void accs_u(std::array<std::vector<F, Allocator>, NDim> &out, F theta, F G = F(1), F eps = F(0)) const
     {
-        acc_pot_dispatch<false>(out, theta, G, eps);
+        acc_pot_dispatch<false, 0>(out, theta, G, eps);
     }
     template <typename It>
     void accs_u(const std::array<It, NDim> &out, F theta, F G = F(1), F eps = F(0)) const
     {
-        acc_pot_dispatch<false>(out, theta, G, eps);
+        acc_pot_dispatch<false, 0>(out, theta, G, eps);
     }
     template <typename It>
     void accs_u(std::initializer_list<It> out, F theta, F G = F(1), F eps = F(0)) const
     {
-        accs_u(acc_pot_ilist_to_array(out), theta, G, eps);
+        accs_u(acc_pot_ilist_to_array<0>(out), theta, G, eps);
     }
     template <typename Allocator>
     void accs_o(std::array<std::vector<F, Allocator>, NDim> &out, F theta, F G = F(1), F eps = F(0)) const
     {
-        acc_pot_dispatch<true>(out, theta, G, eps);
+        acc_pot_dispatch<true, 0>(out, theta, G, eps);
     }
     template <typename It>
     void accs_o(const std::array<It, NDim> &out, F theta, F G = F(1), F eps = F(0)) const
     {
-        acc_pot_dispatch<true>(out, theta, G, eps);
+        acc_pot_dispatch<true, 0>(out, theta, G, eps);
     }
     template <typename It>
     void accs_o(std::initializer_list<It> out, F theta, F G = F(1), F eps = F(0)) const
     {
-        accs_o(acc_pot_ilist_to_array(out), theta, G, eps);
+        accs_o(acc_pot_ilist_to_array<0>(out), theta, G, eps);
     }
 
 private:
