@@ -1446,7 +1446,12 @@ private:
     {
         const B diff_x = xvec2 - xvec1, diff_y = yvec2 - yvec1, diff_z = zvec2 - zvec1,
                 dist2 = diff_x * diff_x + diff_y * diff_y + xsimd_fma(diff_z, diff_z, eps2_vec);
-        const B m1_dist = use_fast_inv_sqrt<B> ? mvec1 * inv_sqrt(dist2) : mvec1 / xsimd_sqrt(dist2);
+        B m1_dist;
+        if constexpr (use_fast_inv_sqrt<B>) {
+            m1_dist = mvec1 * inv_sqrt(dist2);
+        } else {
+            m1_dist = mvec1 / xsimd_sqrt(dist2);
+        }
         return m1_dist * mvec2;
     }
     // A combination of the 2 functions above, computing both accelerations and potentials between 2 batches.
@@ -1569,8 +1574,12 @@ private:
                         const auto diff_x = xvec2 - xvec1, diff_y = yvec2 - yvec1, diff_z = zvec2 - zvec1,
                                    dist2 = diff_x * diff_x + diff_y * diff_y + xsimd_fma(diff_z, diff_z, eps2_vec);
                         // Compute m1/dist.
-                        const batch_type m1_dist
-                            = use_fast_inv_sqrt<batch_type> ? mvec1 * inv_sqrt(dist2) : mvec1 / xsimd_sqrt(dist2);
+                        batch_type m1_dist;
+                        if constexpr (use_fast_inv_sqrt<batch_type>) {
+                            m1_dist = mvec1 * inv_sqrt(dist2);
+                        } else {
+                            m1_dist = mvec1 / xsimd_sqrt(dist2);
+                        }
                         // Compute the mutual (negated) potential between 1 and 2.
                         const auto mut_pot = m1_dist * mvec2;
                         // Subtract it from the acccumulator for 1.
