@@ -2471,6 +2471,21 @@ public:
         accs_u(acc_pot_ilist_to_array<0>(out), theta, G, eps);
     }
     template <typename Allocator>
+    void pots_u(std::array<std::vector<F, Allocator>, 1> &out, F theta, F G = F(1), F eps = F(0)) const
+    {
+        acc_pot_dispatch<false, 1>(out, theta, G, eps);
+    }
+    template <typename It>
+    void pots_u(const std::array<It, 1> &out, F theta, F G = F(1), F eps = F(0)) const
+    {
+        acc_pot_dispatch<false, 1>(out, theta, G, eps);
+    }
+    template <typename It>
+    void pots_u(std::initializer_list<It> out, F theta, F G = F(1), F eps = F(0)) const
+    {
+        pots_u(acc_pot_ilist_to_array<1>(out), theta, G, eps);
+    }
+    template <typename Allocator>
     void accs_pots_u(std::array<std::vector<F, Allocator>, NDim + 1u> &out, F theta, F G = F(1), F eps = F(0)) const
     {
         acc_pot_dispatch<false, 2>(out, theta, G, eps);
@@ -2500,10 +2515,40 @@ public:
     {
         accs_o(acc_pot_ilist_to_array<0>(out), theta, G, eps);
     }
+    template <typename Allocator>
+    void pots_o(std::array<std::vector<F, Allocator>, 1> &out, F theta, F G = F(1), F eps = F(0)) const
+    {
+        acc_pot_dispatch<true, 1>(out, theta, G, eps);
+    }
+    template <typename It>
+    void pots_o(const std::array<It, 1> &out, F theta, F G = F(1), F eps = F(0)) const
+    {
+        acc_pot_dispatch<true, 1>(out, theta, G, eps);
+    }
+    template <typename It>
+    void pots_o(std::initializer_list<It> out, F theta, F G = F(1), F eps = F(0)) const
+    {
+        pots_o(acc_pot_ilist_to_array<1>(out), theta, G, eps);
+    }
+    template <typename Allocator>
+    void accs_pots_o(std::array<std::vector<F, Allocator>, NDim + 1u> &out, F theta, F G = F(1), F eps = F(0)) const
+    {
+        acc_pot_dispatch<true, 2>(out, theta, G, eps);
+    }
+    template <typename It>
+    void accs_pots_o(const std::array<It, NDim + 1u> &out, F theta, F G = F(1), F eps = F(0)) const
+    {
+        acc_pot_dispatch<true, 2>(out, theta, G, eps);
+    }
+    template <typename It>
+    void accs_pots_o(std::initializer_list<It> out, F theta, F G = F(1), F eps = F(0)) const
+    {
+        accs_pots_o(acc_pot_ilist_to_array<2>(out), theta, G, eps);
+    }
 
 private:
-    template <bool Ordered>
-    std::array<F, NDim> exact_acc_pot_impl(size_type orig_idx, F G, F eps) const
+    template <bool Ordered, unsigned Q>
+    auto exact_acc_pot_impl(size_type orig_idx, F G, F eps) const
     {
         simple_timer st("exact acc/pot computation");
         const auto eps2 = eps * eps;
@@ -2512,7 +2557,8 @@ private:
         // Check G.
         check_G_const(G);
         const auto size = m_parts[0].size();
-        std::array<F, NDim> retval{}, diffs;
+        std::array<F, nvecs_res<Q>> retval{};
+        std::array<F, NDim> diffs;
         const auto idx = Ordered ? m_ord_ind[orig_idx] : orig_idx;
         for (size_type i = 0; i < size; ++i) {
             if (i == idx) {
@@ -2523,9 +2569,20 @@ private:
                 diffs[j] = m_parts[j][i] - m_parts[j][idx];
                 dist2 = fma_wrap(diffs[j], diffs[j], dist2);
             }
-            const auto dist = std::sqrt(dist2), dist3 = dist * dist2, mG_dist3 = G * m_parts[NDim][i] / dist3;
-            for (std::size_t j = 0; j < NDim; ++j) {
-                retval[j] = fma_wrap(diffs[j], mG_dist3, retval[j]);
+            const auto inv_dist = F(1) / std::sqrt(dist2), Gmi_dist = G * m_parts[NDim][i] * inv_dist;
+            if constexpr (Q == 0u || Q == 2u) {
+                // Q == 0 or 2: accelerations are requested.
+                const auto Gmi_dist3 = inv_dist * inv_dist * Gmi_dist;
+                for (std::size_t j = 0; j < NDim; ++j) {
+                    retval[j] = fma_wrap(diffs[j], Gmi_dist3, retval[j]);
+                }
+            }
+            if constexpr (Q == 1u || Q == 2u) {
+                // Q == 1 or 2: potentials are requested.
+                // Establish the index of the potential in the result array:
+                // 0 if only the potentials are requested, NDim otherwise.
+                constexpr auto pot_idx = static_cast<std::size_t>(Q == 1u ? 0 : NDim);
+                retval[pot_idx] = fma_wrap(-Gmi_dist, m_parts[NDim][idx], retval[pot_idx]);
             }
         }
         return retval;
@@ -2534,11 +2591,27 @@ private:
 public:
     std::array<F, NDim> exact_acc_u(size_type idx, F G = F(1), F eps = F(0)) const
     {
-        return exact_acc_pot_impl<false>(idx, G, eps);
+        return exact_acc_pot_impl<false, 0>(idx, G, eps);
+    }
+    std::array<F, 1> exact_pot_u(size_type idx, F G = F(1), F eps = F(0)) const
+    {
+        return exact_acc_pot_impl<false, 1>(idx, G, eps);
+    }
+    std::array<F, NDim + 1u> exact_acc_pot_u(size_type idx, F G = F(1), F eps = F(0)) const
+    {
+        return exact_acc_pot_impl<false, 2>(idx, G, eps);
     }
     std::array<F, NDim> exact_acc_o(size_type idx, F G = F(1), F eps = F(0)) const
     {
-        return exact_acc_pot_impl<true>(idx, G, eps);
+        return exact_acc_pot_impl<true, 0>(idx, G, eps);
+    }
+    std::array<F, 1> exact_pot_o(size_type idx, F G = F(1), F eps = F(0)) const
+    {
+        return exact_acc_pot_impl<true, 1>(idx, G, eps);
+    }
+    std::array<F, NDim + 1u> exact_acc_pot_o(size_type idx, F G = F(1), F eps = F(0)) const
+    {
+        return exact_acc_pot_impl<true, 2>(idx, G, eps);
     }
 
 private:
