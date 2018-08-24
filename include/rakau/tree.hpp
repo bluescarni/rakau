@@ -2122,9 +2122,12 @@ private:
             for (size_type i = 0; i < tgt_size; ++i) {
                 F dist2(0);
                 for (std::size_t j = 0; j < NDim; ++j) {
-                    // Store the differences for later use.
                     const auto diff = com_pos[j] - p_ptrs[j][i];
-                    tmp_ptrs[j][i] = diff;
+                    if constexpr (Q == 0u || Q == 2u) {
+                        // Store the differences for later use, if we are computing
+                        // accelerations.
+                        tmp_ptrs[j][i] = diff;
+                    }
                     dist2 = fma_wrap(diff, diff, dist2);
                 }
                 if (src_dim2 >= theta2 * dist2) {
