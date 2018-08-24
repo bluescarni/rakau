@@ -1405,8 +1405,7 @@ private:
     // particles of a critical node. Data in here will be copied to
     // the output arrays after the accelerations/potentials from all the other
     // particles/nodes in the domain have been computed.
-    // TODO remove default value.
-    template <unsigned Q = 0>
+    template <unsigned Q>
     static auto &acc_pot_tmp_res()
     {
         static thread_local std::array<fp_vector, nvecs_res<Q>> tmp_res;
@@ -1563,8 +1562,7 @@ private:
                         // Load the second batch of particles.
                         const auto xvec2 = xsimd::load_unaligned(x_ptr + i2), yvec2 = xsimd::load_unaligned(y_ptr + i2),
                                    zvec2 = xsimd::load_unaligned(z_ptr + i2), mvec2 = xsimd::load_unaligned(m_ptr + i2);
-                        // TODO fix comment.
-                        // NOTE: now we are going to do a slight repetition of batch_batch_3d_accs(), with the goal
+                        // NOTE: now we are going to do a slight repetition of batch_batch_3d_pots(), with the goal
                         // of avoiding doing extra needless computations.
                         // Compute the relative positions of 2 wrt 1, and the distance square.
                         const auto diff_x = xvec2 - xvec1, diff_y = yvec2 - yvec1, diff_z = zvec2 - zvec1,
@@ -1599,8 +1597,7 @@ private:
                         // Load the second batch of particles.
                         const auto xvec2 = xsimd::load_unaligned(x_ptr + i2), yvec2 = xsimd::load_unaligned(y_ptr + i2),
                                    zvec2 = xsimd::load_unaligned(z_ptr + i2), mvec2 = xsimd::load_unaligned(m_ptr + i2);
-                        // TODO fix comment.
-                        // NOTE: now we are going to do a slight repetition of batch_batch_3d_accs(), with the goal
+                        // NOTE: now we are going to do a slight repetition of batch_batch_3d_accs_pots(), with the goal
                         // of avoiding doing extra needless computations.
                         // Compute the relative positions of 2 wrt 1, and the distance square.
                         const auto diff_x = xvec2 - xvec1, diff_y = yvec2 - yvec1, diff_z = zvec2 - zvec1,
@@ -2230,8 +2227,7 @@ private:
     // Top level function for the computation of the accelerations/potentials. out is the array of output iterators,
     // theta2 the square of the opening angle, G the grav constant, eps2 the square of the softening length. Q indicates
     // which quantities will be computed (accs, potentials, or both).
-    // TODO: remove default value.
-    template <typename It, unsigned Q = 0>
+    template <unsigned Q, typename It>
     void acc_pot_impl(const std::array<It, nvecs_res<Q>> &out, F theta2, F G, F eps2) const
     {
         // NOTE: we will be adding padding to the target node data when SIMD is active,
@@ -2268,7 +2264,7 @@ private:
             tbb::blocked_range<decltype(m_crit_nodes.size())>(0u, m_crit_nodes.size()),
             [this, theta2, G, eps2, pad_coord, &out](const auto &range) {
                 // Get references to the local temporary data.
-                auto &tmp_res = acc_pot_tmp_res();
+                auto &tmp_res = acc_pot_tmp_res<Q>();
                 auto &tmp_tgt = tgt_tmp_data();
                 for (auto i = range.begin(); i != range.end(); ++i) {
                     const auto tgt_code = get<0>(m_crit_nodes[i]);
@@ -2389,8 +2385,11 @@ private:
         }
     }
     // Top level dispatcher for the accs/pots functions. It will run a few checks and then invoke acc_pot_impl().
-    template <bool Ordered, typename Output>
-    void acc_pot_dispatch(const Output &out, F theta, F G, F eps) const
+    // out is the array of output iterators, theta the opening angle, G the grav const, eps the softening length.
+    // Q indicates which quantities will be computed (accs, potentials, or both).
+    // TODO remove default value.
+    template <bool Ordered, typename It, unsigned Q = 0>
+    void acc_pot_dispatch(const std::array<It, nvecs_res<Q>> &out, F theta, F G, F eps) const
     {
         simple_timer st("vector accs/pots computation");
         const auto theta2 = theta * theta, eps2 = eps * eps;
@@ -2408,34 +2407,36 @@ private:
         if constexpr (Ordered) {
             // Make sure we don't run into overflows when doing a permutated iteration
             // over the iterators in out.
-            using diff_t = typename std::iterator_traits<typename Output::value_type>::difference_type;
+            using diff_t = typename std::iterator_traits<It>::difference_type;
             if (m_parts[0].size() > static_cast<std::make_unsigned_t<diff_t>>(std::numeric_limits<diff_t>::max())) {
                 throw std::overflow_error("The number of particles (" + std::to_string(m_parts[0].size())
                                           + ") is too large, and it results in an overflow condition when computing "
                                             "the accelerations/potentials");
             }
             using it_t = decltype(boost::make_permutation_iterator(out[0], m_isort.begin()));
-            std::array<it_t, NDim> out_pits;
-            for (std::size_t j = 0; j < NDim; ++j) {
+            std::array<it_t, nvecs_res<Q>> out_pits;
+            for (std::size_t j = 0; j < nvecs_res<Q>; ++j) {
                 out_pits[j] = boost::make_permutation_iterator(out[j], m_isort.begin());
             }
             // NOTE: we are checking in the acc_pot_impl() function that we can index into
             // the permuted iterators without overflows (see the use of boost::numeric_cast()).
-            acc_pot_impl(out_pits, theta2, G, eps2);
+            acc_pot_impl<Q>(out_pits, theta2, G, eps2);
         } else {
-            acc_pot_impl(out, theta2, G, eps2);
+            acc_pot_impl<Q>(out, theta2, G, eps2);
         }
     }
     // Helper overload for an array of vectors. It will prepare the vectors and then
     // call the other overload.
-    template <bool Ordered, typename Allocator>
-    void acc_pot_dispatch(std::array<std::vector<F, Allocator>, NDim> &out, F theta, F G, F eps) const
+    // TODO remove default value.
+    template <bool Ordered, typename Allocator, unsigned Q = 0>
+    void acc_pot_dispatch(std::array<std::vector<F, Allocator>, nvecs_res<Q>> &out, F theta, F G, F eps) const
     {
-        std::array<F *, NDim> out_ptrs;
-        for (std::size_t j = 0; j < NDim; ++j) {
+        std::array<F *, nvecs_res<Q>> out_ptrs;
+        for (std::size_t j = 0; j < nvecs_res<Q>; ++j) {
             out[j].resize(boost::numeric_cast<decltype(out[j].size())>(m_parts[0].size()));
             out_ptrs[j] = out[j].data();
         }
+        // TODO careful about the order of the Q parameter here, after we remove the defaults.
         acc_pot_dispatch<Ordered>(out_ptrs, theta, G, eps);
     }
     // Small helper to turn an init list into an array, in the functions for the computation
