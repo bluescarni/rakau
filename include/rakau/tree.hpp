@@ -2175,8 +2175,7 @@ private:
     // eps2 the square of the softening length, tgt_size the number of particles in the target node, tgt_code its code,
     // p_ptrs are pointers to the coordinates/masses of the particles in the target node, res_ptrs pointers to the
     // output arrays. Q indicates which quantities will be computed (accs, potentials, or both).
-    // TODO remove the default value.
-    template <unsigned Q = 0>
+    template <unsigned Q>
     void tree_acc_pot(F theta2, F eps2, size_type tgt_size, UInt tgt_code,
                       const std::array<const F *, NDim + 1u> &p_ptrs,
                       const std::array<F *, nvecs_res<Q>> &res_ptrs) const
@@ -2228,10 +2227,12 @@ private:
             src_idx = tree_acc_pot_bh_check<Q>(src_idx, theta2, eps2, tgt_size, p_ptrs, res_ptrs);
         }
     }
-    // Top level function for the computation of the accelerations/potentials.
+    // Top level function for the computation of the accelerations/potentials. out is the array of output iterators,
+    // theta2 the square of the opening angle, G the grav constant, eps2 the square of the softening length. Q indicates
+    // which quantities will be computed (accs, potentials, or both).
     // TODO: remove default value.
     template <typename It, unsigned Q = 0>
-    void acc_pot_impl(const std::array<It, NDim> &out, F theta2, F G, F eps2) const
+    void acc_pot_impl(const std::array<It, nvecs_res<Q>> &out, F theta2, F G, F eps2) const
     {
         // NOTE: we will be adding padding to the target node data when SIMD is active,
         // in order to be able to use SIMD instructions on all the particles of the node.
@@ -2296,7 +2297,7 @@ private:
                         }
                     }();
                     // Prepare the temporary vectors containing the result.
-                    for (std::size_t j = 0; j < NDim; ++j) {
+                    for (std::size_t j = 0; j < nvecs_res<Q>; ++j) {
                         // Resize and fill with zeroes (everything, including the padding data).
                         tmp_res[j].resize(pdata_size);
                         std::fill(tmp_res[j].data(), tmp_res[j].data() + pdata_size, F(0));
@@ -2310,24 +2311,25 @@ private:
                         // From tgt_size to pdata_size (the padding values) we insert the padding coordinate.
                         std::fill(tmp_tgt[j].data() + tgt_size, tmp_tgt[j].data() + pdata_size, pad_coord);
                     }
-                    // Copy the masses and set the padding masses to zero.
+                    // Copy the particle masses and set the padding masses to zero.
                     tmp_tgt[NDim].resize(pdata_size);
                     std::copy(m_parts[NDim].data() + tgt_begin, m_parts[NDim].data() + tgt_begin + tgt_size,
                               tmp_tgt[NDim].data());
                     std::fill(tmp_tgt[NDim].data() + tgt_size, tmp_tgt[NDim].data() + pdata_size, F(0));
                     // Prepare arrays of pointers to the temporary data.
-                    std::array<F *, NDim> res_ptrs;
-                    std::array<const F *, NDim + 1u> p_ptrs;
-                    for (std::size_t j = 0; j < NDim; ++j) {
+                    std::array<F *, nvecs_res<Q>> res_ptrs;
+                    for (std::size_t j = 0; j < nvecs_res<Q>; ++j) {
                         res_ptrs[j] = tmp_res[j].data();
+                    }
+                    std::array<const F *, NDim + 1u> p_ptrs;
+                    for (std::size_t j = 0; j < NDim + 1u; ++j) {
                         p_ptrs[j] = tmp_tgt[j].data();
                     }
-                    p_ptrs[NDim] = tmp_tgt[NDim].data();
                     // Do the computation.
                     tree_acc_pot<Q>(theta2, eps2, tgt_size, tgt_code, p_ptrs, res_ptrs);
                     // Multiply by G, if needed.
                     if (G != F(1)) {
-                        for (std::size_t j = 0; j < NDim; ++j) {
+                        for (std::size_t j = 0; j < nvecs_res<Q>; ++j) {
                             auto r_ptr = res_ptrs[j];
                             if constexpr (simd_enabled) {
                                 using batch_type = xsimd::simd_type<F>;
@@ -2344,7 +2346,7 @@ private:
                         }
                     }
                     // Write out the result.
-                    for (std::size_t j = 0; j < NDim; ++j) {
+                    for (std::size_t j = 0; j < nvecs_res<Q>; ++j) {
                         std::copy(
                             res_ptrs[j], res_ptrs[j] + tgt_size,
                             out[j]
