@@ -24,8 +24,8 @@ namespace rakau_test
 {
 
 // Median.
-template <typename F>
-inline F median(std::vector<F> &v)
+template <typename T>
+inline T median(std::vector<T> &v)
 {
     assert(v.size());
     std::sort(v.begin(), v.end());
@@ -33,7 +33,7 @@ inline F median(std::vector<F> &v)
     if (v.size() % 2u) {
         return v[half_size];
     }
-    return (v[half_size] + v[half_size - 1u]) / F(2);
+    return (v[half_size - 1u] + v[half_size]) / T(2);
 }
 
 // Generate n uniformly-distributed particles in a D-dimensional box of given size, using
