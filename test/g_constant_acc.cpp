@@ -27,7 +27,7 @@ using namespace rakau_test;
 
 using fp_types = std::tuple<float, double>;
 
-static std::mt19937 rng;
+static std::mt19937 rng(1);
 
 TEST_CASE("g constant accelerations")
 {

@@ -10,6 +10,7 @@
 #define RAKAU_TEST_UTILS_HPP
 
 #include <algorithm>
+#include <cassert>
 #include <cstddef>
 #include <iterator>
 #include <random>
@@ -21,6 +22,19 @@
 
 namespace rakau_test
 {
+
+// Median.
+template <typename F>
+inline F median(std::vector<F> &v)
+{
+    assert(v.size());
+    std::sort(v.begin(), v.end());
+    const auto half_size = v.size() / 2u;
+    if (v.size() % 2u) {
+        return v[half_size];
+    }
+    return (v[half_size] + v[half_size - 1u]) / F(2);
+}
 
 // Generate n uniformly-distributed particles in a D-dimensional box of given size, using
 // the random number engine rng.

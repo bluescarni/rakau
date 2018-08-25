@@ -32,7 +32,7 @@ using namespace rakau_test;
 
 using fp_types = std::tuple<float, double>;
 
-static std::mt19937 rng;
+static std::mt19937 rng(0);
 
 TEST_CASE("acceleration/potential accuracy")
 {
@@ -43,17 +43,6 @@ TEST_CASE("acceleration/potential accuracy")
         auto max_leaf_ns = {1u, 2u, 8u, 16u};
         auto ncrits = {1u, 16u, 128u, 256u};
         std::array<std::vector<fp_type>, 4> accpots;
-        auto median = [](auto &v) {
-            if (!v.size()) {
-                throw;
-            }
-            std::sort(v.begin(), v.end());
-            const auto half_size = v.size() / 2u;
-            if (v.size() % 2u) {
-                return v[half_size];
-            }
-            return (v[half_size] + v[half_size - 1u]) / fp_type(2);
-        };
         fp_type tot_max_x_diff(0), tot_max_y_diff(0), tot_max_z_diff(0), tot_max_pot_diff(0);
         for (auto s : sizes) {
             auto parts = get_uniform_particles<3>(s, bsize, rng);
