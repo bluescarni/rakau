@@ -484,10 +484,9 @@ inline constexpr bool use_fast_inv_sqrt =
 // - add checks on the finiteness of the internal computations. For instance, we need all particles
 //   distances to be finite (including padding particles in the self-interaction routine), and
 //   we also need all possible accelerations to be finite. Can we do this check fast?
-// - try to hack up some fix for the slowness of the morton encoding in highly parallel setups. This
-//   had something to do with the tbb grain size, as far as I remember.
-// - we should investigate a parallel indirect radix sort implementation based on TBB, as the sorting
-//   of the codes can become the bottleneck in highly parallel situations.
+// - try replace TBB with another task based library. TBB seems to have an increasingly
+//   large overhead as the number of cores increases. If we do this, we need to provide a parallel
+//   sort implementation - most likely a radix based one, to improve performance.
 // - it is still not yet clear to me what the NUMA picture is here. During tree traversal, the results
 //   and the target node data are stored in thread local caches, so maybe we can try to ensure that
 //   at the beginning of traversal we re-init these caches in order to make sure they are allocated
@@ -500,7 +499,18 @@ inline constexpr bool use_fast_inv_sqrt =
 // - we should probably also think about replacing the morton encoder with some generic solution. It does not
 //   need to be super high performance, as morton encoding is hardly a bottleneck here. It's more important for it
 //   to be generic (i.e., work on a general number of dimensions), correct and compact.
-// - consider turning the compile time recursion in the tree builder into a runtime recursion.
+// - consider turning the compile time recursion in the tree builder into a runtime recursion. Generally speaking,
+//   review the tree creation code for better performance, possibly when we switch to another task library.
+// - add more MACs (e.g., the one from bonsai and the one from the gothic paper from Warren et al).
+// - double precision benchmarking/tuning.
+// - potential tuning (possibly not much improvement to be had there, but it should be investigated a bit
+//   at least).
+// - we currently define critical nodes those nodes with < ncrit particles. Some papers say that it's worth
+//   to check also the node's size, as a crit node whose size is very large will likely result in traversal lists
+//   which are not very similar to each other (which, in turn, means that during tree traversal the BH check
+//   will fail often). It's probably best to start experimenting with such size as a free parameter, check the
+//   performance with various values and then try to understand if there's any heuristic we can deduce from that.
+// - quadrupole moments.
 template <std::size_t NDim, typename F, typename UInt = std::size_t>
 class tree
 {
