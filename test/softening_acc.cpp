@@ -35,7 +35,7 @@ using fp_types = std::tuple<float, double>;
 static std::mt19937 rng;
 
 // NOTE: this is very similar to the accuracy test, just with various epsilons tested as well.
-TEST_CASE("softening")
+TEST_CASE("accelerations softening")
 {
     tuple_for_each(fp_types{}, [](auto x) {
         using fp_type = decltype(x);
