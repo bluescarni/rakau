@@ -2351,12 +2351,12 @@ private:
                                 using batch_type = xsimd::simd_type<F>;
                                 constexpr auto batch_size = batch_type::size;
                                 const batch_type Gvec(G);
-                                for (size_type i = 0; i < tgt_size; i += batch_size) {
-                                    (xsimd::load_aligned(r_ptr + i) * Gvec).store_aligned(r_ptr + i);
+                                for (size_type k = 0; k < tgt_size; k += batch_size) {
+                                    (xsimd::load_aligned(r_ptr + k) * Gvec).store_aligned(r_ptr + k);
                                 }
                             } else {
-                                for (size_type i = 0; i < tgt_size; ++i) {
-                                    *(r_ptr + i) *= G;
+                                for (size_type k = 0; k < tgt_size; ++k) {
+                                    *(r_ptr + k) *= G;
                                 }
                             }
                         }
