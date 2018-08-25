@@ -9,5 +9,6 @@ function(ADD_RAKAU_BENCHMARK arg1)
   add_test(${arg1} ${arg1})
 endfunction()
 
-ADD_RAKAU_BENCHMARK(benchmark_00)
-ADD_RAKAU_BENCHMARK(benchmark_accs_pots_float)
+ADD_RAKAU_BENCHMARK(benchmark_acc)
+ADD_RAKAU_BENCHMARK(benchmark_acc_pot)
+ADD_RAKAU_BENCHMARK(benchmark_pot)
