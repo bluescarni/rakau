@@ -31,7 +31,7 @@ using fp_types = std::tuple<float, double>;
 
 static std::mt19937 rng;
 
-TEST_CASE("accelerations ordering")
+TEST_CASE("potentials ordering")
 {
     tuple_for_each(fp_types{}, [](auto x) {
         using fp_type = decltype(x);
@@ -46,10 +46,10 @@ TEST_CASE("accelerations ordering")
         std::vector<size_type> track_idx(100);
         std::uniform_int_distribution<size_type> idist(0, s - 1u);
         std::generate(track_idx.begin(), track_idx.end(), [&idist]() { return idist(rng); });
-        // Get the exact accelerations on the particles.
-        std::vector<std::array<fp_type, 3>> exact_accs;
+        // Get the exact potentials on the particles.
+        std::vector<std::array<fp_type, 1>> exact_pots;
         for (auto idx : track_idx) {
-            exact_accs.emplace_back(t.exact_acc_o(idx));
+            exact_pots.emplace_back(t.exact_pot_o(idx));
         }
         // Now let's rotate the particles around the z axis by a random amount.
         std::uniform_real_distribution<fp_type> urd(fp_type(0), fp_type(2) * boost::math::constants::pi<fp_type>());
@@ -68,17 +68,14 @@ TEST_CASE("accelerations ordering")
                 r[2][i] = r0 * std::cos(th0);
             }
         });
-        // Now let's get the tree-calculated accelerations.
-        std::array<std::vector<fp_type>, 3> t_accs;
-        t.accs_o(t_accs, theta);
-        // Let's compare the absolute values of the accelerations.
+        // Now let's get the tree-calculated potentials.
+        std::array<std::vector<fp_type>, 1> t_pots;
+        t.pots_o(t_pots, theta);
+        // Let's compare the potentials.
         for (size_type i = 0; i < track_idx.size(); ++i) {
-            const auto eacc = std::sqrt(exact_accs[i][0] * exact_accs[i][0] + exact_accs[i][1] * exact_accs[i][1]
-                                        + exact_accs[i][2] * exact_accs[i][2]);
-            const auto tacc = std::sqrt(t_accs[0][track_idx[i]] * t_accs[0][track_idx[i]]
-                                        + t_accs[1][track_idx[i]] * t_accs[1][track_idx[i]]
-                                        + t_accs[2][track_idx[i]] * t_accs[2][track_idx[i]]);
-            const auto rdiff = std::abs(eacc - tacc) / eacc;
+            const auto epot = exact_pots[i][0];
+            const auto tpot = t_pots[0][track_idx[i]];
+            const auto rdiff = std::abs((epot - tpot) / epot);
             std::cout << "rdiff=" << rdiff << '\n';
             if (std::numeric_limits<fp_type>::is_iec559) {
                 // The usual arbitrary values.
@@ -106,14 +103,11 @@ TEST_CASE("accelerations ordering")
             }
         });
         // Try the init list overload as well.
-        t.accs_o({t_accs[0].begin(), t_accs[1].begin(), t_accs[2].begin()}, theta);
+        t.pots_o({t_pots[0].begin()}, theta);
         for (size_type i = 0; i < track_idx.size(); ++i) {
-            const auto eacc = std::sqrt(exact_accs[i][0] * exact_accs[i][0] + exact_accs[i][1] * exact_accs[i][1]
-                                        + exact_accs[i][2] * exact_accs[i][2]);
-            const auto tacc = std::sqrt(t_accs[0][track_idx[i]] * t_accs[0][track_idx[i]]
-                                        + t_accs[1][track_idx[i]] * t_accs[1][track_idx[i]]
-                                        + t_accs[2][track_idx[i]] * t_accs[2][track_idx[i]]);
-            const auto rdiff = std::abs(eacc - tacc) / eacc;
+            const auto epot = exact_pots[i][0];
+            const auto tpot = t_pots[0][track_idx[i]];
+            const auto rdiff = std::abs((epot - tpot) / epot);
             std::cout << "rdiff=" << rdiff << '\n';
             if (std::numeric_limits<fp_type>::is_iec559) {
                 if (std::is_same_v<fp_type, double>) {
@@ -133,14 +127,11 @@ TEST_CASE("accelerations ordering")
                 r[2][i] += delta;
             }
         });
-        t.accs_o(t_accs, theta);
+        t.pots_o(t_pots, theta);
         for (size_type i = 0; i < track_idx.size(); ++i) {
-            const auto eacc = std::sqrt(exact_accs[i][0] * exact_accs[i][0] + exact_accs[i][1] * exact_accs[i][1]
-                                        + exact_accs[i][2] * exact_accs[i][2]);
-            const auto tacc = std::sqrt(t_accs[0][track_idx[i]] * t_accs[0][track_idx[i]]
-                                        + t_accs[1][track_idx[i]] * t_accs[1][track_idx[i]]
-                                        + t_accs[2][track_idx[i]] * t_accs[2][track_idx[i]]);
-            const auto rdiff = std::abs(eacc - tacc) / eacc;
+            const auto epot = exact_pots[i][0];
+            const auto tpot = t_pots[0][track_idx[i]];
+            const auto rdiff = std::abs((epot - tpot) / epot);
             std::cout << "rdiff=" << rdiff << '\n';
             if (std::numeric_limits<fp_type>::is_iec559) {
                 if (std::is_same_v<fp_type, double>) {
@@ -150,9 +141,9 @@ TEST_CASE("accelerations ordering")
                 }
             }
         }
-        // Now let's update the exact accelerations on the tracked particles.
+        // Now let's update the exact potentials on the tracked particles.
         for (size_type i = 0; i < track_idx.size(); ++i) {
-            exact_accs[i] = t.exact_acc_o(track_idx[i]);
+            exact_pots[i] = t.exact_pot_o(track_idx[i]);
         }
         // Let's remove the delta.
         t.update_particles_u([delta](const auto &r) {
@@ -162,24 +153,17 @@ TEST_CASE("accelerations ordering")
                 r[2][i] -= delta;
             }
         });
-        // Compute the tree accelerations.
-        t.accs_o(t_accs, theta);
-        // Verify they are close to the original ones (i.e., close in all components,
-        // not only absolute value).
+        // Compute the tree potentials.
+        t.pots_o(t_pots, theta);
+        // Verify they are close to the original ones.
         for (size_type i = 0; i < track_idx.size(); ++i) {
-            const auto [ex, ey, ez] = exact_accs[i];
-            const auto xrdiff = std::abs((ex - t_accs[0][track_idx[i]]) / ex);
-            const auto yrdiff = std::abs((ey - t_accs[1][track_idx[i]]) / ey);
-            const auto zrdiff = std::abs((ez - t_accs[2][track_idx[i]]) / ez);
+            const auto epot = exact_pots[i][0];
+            const auto rdiff = std::abs((epot - t_pots[0][track_idx[i]]) / epot);
             if (std::numeric_limits<fp_type>::is_iec559) {
                 if (std::is_same_v<fp_type, double>) {
-                    REQUIRE(xrdiff <= fp_type(2E-11));
-                    REQUIRE(yrdiff <= fp_type(2E-11));
-                    REQUIRE(zrdiff <= fp_type(2E-11));
+                    REQUIRE(rdiff <= fp_type(2E-11));
                 } else {
-                    REQUIRE(xrdiff <= fp_type(2E-3));
-                    REQUIRE(yrdiff <= fp_type(2E-3));
-                    REQUIRE(zrdiff <= fp_type(2E-3));
+                    REQUIRE(rdiff <= fp_type(2E-3));
                 }
             }
         }
