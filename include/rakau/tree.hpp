@@ -1072,7 +1072,8 @@ private:
         // will be std::array<F, NDim>{}, that is, all max coordinates will be zero.
         tbb::enumerable_thread_specific<std::array<F, NDim>> max_coords(std::array<F, NDim>{});
         tbb::parallel_for(tbb::blocked_range<size_type>(0u, N), [&cm_it, &max_coords](const auto &range) {
-            auto &local_max = max_coords.local();
+            // Copy locally the current max coords array.
+            auto local_max = max_coords.local();
             for (auto i = range.begin(); i != range.end(); ++i) {
                 for (std::size_t j = 0; j < NDim; ++j) {
                     const auto tmp = std::abs(*(cm_it[j] + static_cast<it_diff_t>(i)));
@@ -1084,6 +1085,8 @@ private:
                     local_max[j] = std::max(local_max[j], tmp);
                 }
             }
+            // Store the updated max coords.
+            max_coords.local() = local_max;
         });
         // Combine the maxima from all threads into a single maximum vector.
         const auto mc = max_coords.combine([](const auto &c1, const auto &c2) {
