@@ -478,6 +478,23 @@ inline constexpr bool use_fast_inv_sqrt =
 #endif
     ;
 
+// Default values for the max_leaf_n and ncrit tree parameters.
+// These are determined experimentally from benchmarks on various systems.
+// NOTE: so far we have tested only on x86 systems, where it seems for
+// everything but AVX512 a good combination is 128, 16. For AVX512, 256
+// seems to work better than 128.
+inline constexpr unsigned default_max_leaf_n =
+#if defined(XSIMD_X86_INSTR_SET) && XSIMD_X86_INSTR_SET >= XSIMD_X86_AVX512_VERSION
+    256
+#else
+    128
+#endif
+    ;
+
+inline constexpr unsigned default_ncrit = 16;
+
+} // namespace detail
+
 enum class tree_status : unsigned { synced = 0, p_updated = 1, p_removed = 2 };
 
 inline tree_status operator|(tree_status s1, tree_status s2)
