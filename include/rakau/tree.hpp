@@ -517,8 +517,6 @@ inline tree_status &operator&=(tree_status &s1, tree_status s2)
     return s1 = s1 & s2;
 }
 
-} // namespace detail
-
 // NOTE: possible improvements:
 // - add checks on the finiteness of the internal computations. For instance, we need all particles
 //   distances to be finite (including padding particles in the self-interaction routine), and
@@ -1148,11 +1146,18 @@ private:
     }
 
 public:
+    // Default constructor.
+    tree()
+        : m_box_size(0), m_size_deduced(false), m_status(tree_status::synced), m_max_leaf_n(default_max_leaf_n),
+          m_ncrit(default_ncrit)
+    {
+    }
     // NOTE: It needs to be a random access iterator, as we need to index into it for parallel iteration.
     template <typename It>
     explicit tree(const F &box_size, const std::array<It, NDim + 1u> &cm_it, const size_type &N,
                   const size_type &max_leaf_n, const size_type &ncrit)
-        : m_box_size(box_size), m_size_deduced(box_size == F(0)), m_max_leaf_n(max_leaf_n), m_ncrit(ncrit)
+        : m_box_size(box_size), m_size_deduced(box_size == F(0)), m_status(tree_status::synced),
+          m_max_leaf_n(max_leaf_n), m_ncrit(ncrit)
     {
         simple_timer st("overall tree construction");
         // Check the box size, if it is not deduced.
@@ -1271,24 +1276,8 @@ public:
     {
     }
     tree(const tree &) = default;
-
-private:
-    // Helper to clear all the internal containers.
-    void clear_containers()
-    {
-        for (auto &p : m_parts) {
-            p.clear();
-        }
-        m_codes.clear();
-        m_isort.clear();
-        m_ord_ind.clear();
-        m_tree.clear();
-        m_crit_nodes.clear();
-    }
-
-public:
     tree(tree &&other) noexcept
-        : m_box_size(std::move(other.m_box_size)), m_size_deduced(other.m_size_deduced),
+        : m_box_size(std::move(other.m_box_size)), m_size_deduced(other.m_size_deduced), m_status(other.m_status),
           m_max_leaf_n(other.m_max_leaf_n), m_ncrit(other.m_ncrit), m_parts(std::move(other.m_parts)),
           m_codes(std::move(other.m_codes)), m_isort(std::move(other.m_isort)), m_ord_ind(std::move(other.m_ord_ind)),
           m_tree(std::move(other.m_tree)), m_crit_nodes(std::move(other.m_crit_nodes))
@@ -1296,7 +1285,7 @@ public:
         // Make sure other is left in an empty state, otherwise we might
         // have in principle assertions failures in the destructor of other
         // in debug mode.
-        other.clear_containers();
+        other.clear();
     }
     tree &operator=(const tree &other)
     {
@@ -1304,6 +1293,7 @@ public:
             if (this != &other) {
                 m_box_size = other.m_box_size;
                 m_size_deduced = other.m_size_deduced;
+                m_status = other.m_status;
                 m_max_leaf_n = other.m_max_leaf_n;
                 m_ncrit = other.m_ncrit;
                 m_parts = other.m_parts;
@@ -1316,9 +1306,9 @@ public:
             return *this;
         } catch (...) {
             // NOTE: if we triggered an exception, this might now be
-            // in an inconsistent state. Clear out the internal containers
+            // in an inconsistent state. Call clear()
             // to reset to a consistent state before re-throwing.
-            clear_containers();
+            clear();
             throw;
         }
     }
@@ -1327,6 +1317,7 @@ public:
         if (this != &other) {
             m_box_size = std::move(other.m_box_size);
             m_size_deduced = other.m_size_deduced;
+            m_status = other.m_status;
             m_max_leaf_n = other.m_max_leaf_n;
             m_ncrit = other.m_ncrit;
             m_parts = std::move(other.m_parts);
@@ -1338,34 +1329,64 @@ public:
             // Make sure other is left in an empty state, otherwise we might
             // have in principle assertions failures in the destructor of other
             // in debug mode.
-            other.clear_containers();
+            other.clear();
         }
         return *this;
     }
     ~tree()
     {
         // Run various debug checks.
+        // NOTE: even if the tree is not synced,
+        // these should still hold.
 #if !defined(NDEBUG)
         for (std::size_t j = 0; j < NDim; ++j) {
+            // All particle data vectors have the same size.
             assert(m_parts[NDim].size() == m_parts[j].size());
         }
 #endif
+        // Same number of particles and codes.
         assert(m_parts[0].size() == m_codes.size());
+        // Codes are sorted.
         assert(std::is_sorted(m_codes.begin(), m_codes.end()));
+        // The size of m_isort and m_ord_ind is the number of particles.
         assert(m_parts[0].size() == m_isort.size());
         assert(m_parts[0].size() == m_ord_ind.size());
 #if !defined(NDEBUG)
+        // m_ord_ind and m_isort are consistent with each other.
         for (decltype(m_isort.size()) i = 0; i < m_isort.size(); ++i) {
             assert(m_isort[i] < m_ord_ind.size());
             assert(m_ord_ind[m_isort[i]] == i);
         }
+        // m_isort does not contain duplicates.
         std::sort(m_isort.begin(), m_isort.end());
         assert(std::unique(m_isort.begin(), m_isort.end()) == m_isort.end());
 #endif
     }
+    // Reset the state of the tree to a known one.
+    void clear()
+    {
+        // Reset to a def-cted state.
+        m_box_size = F(0);
+        m_size_deduced = false;
+        m_status = tree_status::synced;
+        m_max_leaf_n = default_max_leaf_n;
+        m_ncrit = default_ncrit;
+        for (auto &p : m_parts) {
+            p.clear();
+        }
+        m_codes.clear();
+        m_isort.clear();
+        m_ord_ind.clear();
+        m_tree.clear();
+        m_crit_nodes.clear();
+    }
     // Tree pretty printing. Will print up to max_nodes, or all the nodes if max_nodes is zero.
     std::ostream &pprint(std::ostream &os, size_type max_nodes = 0) const
     {
+        if (m_status != tree_status::synced) {
+            // TODO error message.
+            throw;
+        }
         // NOTE: sanity check for the use of UInt in std::bitset.
         static_assert(unsigned(std::numeric_limits<UInt>::digits) <= std::numeric_limits<std::size_t>::max());
         const auto n_nodes = m_tree.size();
@@ -2463,6 +2484,10 @@ private:
     void acc_pot_dispatch(const std::array<It, nvecs_res<Q>> &out, F theta, F G, F eps) const
     {
         simple_timer st("vector accs/pots computation");
+        if (m_status != tree_status::synced) {
+            // TODO error message.
+            throw;
+        }
         const auto theta2 = theta * theta, eps2 = eps * eps;
         // Input param check.
         if (!std::isfinite(theta2) || theta2 <= F(0)) {
@@ -2623,6 +2648,10 @@ private:
     auto exact_acc_pot_impl(size_type orig_idx, F G, F eps) const
     {
         simple_timer st("exact acc/pot computation");
+        if (m_status != tree_status::synced) {
+            // TODO error message.
+            throw;
+        }
         const auto eps2 = eps * eps;
         // Check eps.
         check_eps_eps2(eps, eps2);
@@ -2831,7 +2860,7 @@ private:
             update_particles_impl<Ordered>(std::forward<Func>(f));
         } catch (...) {
             // Erase everything before re-throwing.
-            clear_containers();
+            clear();
             throw;
         }
     }
@@ -2883,7 +2912,7 @@ public:
             });
             tg.wait();
         } catch (...) {
-            clear_containers();
+            clear();
             throw;
         }
     }
@@ -2904,6 +2933,8 @@ private:
     F m_box_size;
     // Flag to signal if the domain size was deduced or explicitly specified.
     bool m_size_deduced;
+    // Tree status flag.
+    tree_status m_status;
     // The maximum number of particles in a leaf node.
     size_type m_max_leaf_n;
     // Number of particles in a critical node: if the number of particles in
