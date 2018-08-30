@@ -478,6 +478,28 @@ inline constexpr bool use_fast_inv_sqrt =
 #endif
     ;
 
+enum class tree_status : unsigned { synced = 0, p_updated = 1, p_removed = 2 };
+
+inline tree_status operator|(tree_status s1, tree_status s2)
+{
+    return static_cast<tree_status>(static_cast<unsigned>(s1) | static_cast<unsigned>(s2));
+}
+
+inline tree_status &operator|=(tree_status &s1, tree_status s2)
+{
+    return s1 = s1 | s2;
+}
+
+inline tree_status operator&(tree_status s1, tree_status s2)
+{
+    return static_cast<tree_status>(static_cast<unsigned>(s1) & static_cast<unsigned>(s2));
+}
+
+inline tree_status &operator&=(tree_status &s1, tree_status s2)
+{
+    return s1 = s1 & s2;
+}
+
 } // namespace detail
 
 // NOTE: possible improvements:
@@ -2694,58 +2716,74 @@ public:
     }
 
 private:
-    // After updating the particles' positions, this method must be called
-    // to reconstruct the other data members according to the new positions.
-    void refresh()
+    // After updating the particles' positions/masses, removal, etc., this method must be called
+    // to reconstruct the other data members according to the new positions. The op
+    // parameter signals which operation was performed before the refresh:
+    //
+    // - op == 0 --> particles positions/masses were updated,
+    // - op == 1 --> particles were removed.
+    void refresh(int op)
     {
+        // The new number of particles.
         const auto nparts = m_parts[0].size();
-        // First, we need to determine if we need to re-deduce the box size.
+        // Flag to signal if we need new codes. We do if the size is deduced
+        // (because the box might change size, hence new codes are needed),
+        // or if we updated the particles' positions. If we just removed existing
+        // particles and the size is not deduced but set upfront, then we don't
+        // need new codes.
+        const bool need_new_codes = m_size_deduced || op == 0;
+        // Re-deduce the box size, if needed.
         if (m_size_deduced) {
             m_box_size = determine_box_size(p_its_u(), nparts);
         }
-        // Second, let's generate the new codes, and a create a vector
+        // Let's generate the new codes, if needed, and a create a vector
         // for the new indirect sorting of the new codes.
         // NOTE: this is a slight repetition of some code in the constructor.
         // However, there it makes sense to mix the morton encoding with data movement,
         // while here the data is already in the member vectors. So we cannot really
         // refactor these bits in a common function.
-        std::vector<size_type, di_aligned_allocator<size_type>> v_ind;
-        v_ind.resize(boost::numeric_cast<decltype(v_ind.size())>(nparts));
-        tbb::parallel_for(tbb::blocked_range<decltype(m_parts[0].size())>(0u, nparts),
-                          [this, &v_ind](const auto &range) {
-                              std::array<UInt, NDim> tmp_dcoord;
-                              morton_encoder<NDim, UInt> me;
-                              for (auto i = range.begin(); i != range.end(); ++i) {
-                                  disc_coords(tmp_dcoord, i);
-                                  m_codes[i] = me(tmp_dcoord.data());
-                                  // NOTE: this is just a iota.
-                                  v_ind[i] = i;
-                              }
-                          });
-        // Do the sorting.
-        indirect_code_sort(v_ind.begin(), v_ind.end());
-        {
-            // Apply the indirect sorting.
-            tbb::task_group tg;
-            // NOTE: upon tree construction, we already checked that the number of particles does not
-            // overflow the limit imposed by apply_isort().
-            tg.run([this, &v_ind]() {
-                apply_isort(m_codes, v_ind);
-                // Make sure the sort worked as intended.
-                assert(std::is_sorted(m_codes.begin(), m_codes.end()));
-            });
-            for (std::size_t j = 0; j < NDim + 1u; ++j) {
-                tg.run([this, j, &v_ind]() { apply_isort(m_parts[j], v_ind); });
+        if (need_new_codes) {
+            std::vector<size_type, di_aligned_allocator<size_type>> v_ind;
+            // NOTE: so far, we are never adding particles, so we are sure that
+            // v_ind's size type can represent nparts (because of the checks
+            // we run in the ctor).
+            v_ind.resize(static_cast<decltype(v_ind.size())>(nparts));
+            tbb::parallel_for(tbb::blocked_range<decltype(m_parts[0].size())>(0u, nparts),
+                              [this, &v_ind](const auto &range) {
+                                  std::array<UInt, NDim> tmp_dcoord;
+                                  morton_encoder<NDim, UInt> me;
+                                  for (auto i = range.begin(); i != range.end(); ++i) {
+                                      disc_coords(tmp_dcoord, i);
+                                      m_codes[i] = me(tmp_dcoord.data());
+                                      // NOTE: this is just a iota.
+                                      v_ind[i] = i;
+                                  }
+                              });
+            // Do the sorting.
+            indirect_code_sort(v_ind.begin(), v_ind.end());
+            {
+                // Apply the indirect sorting.
+                tbb::task_group tg;
+                // NOTE: upon tree construction, we already checked that the number of particles does not
+                // overflow the limit imposed by apply_isort().
+                tg.run([this, &v_ind]() {
+                    apply_isort(m_codes, v_ind);
+                    // Make sure the sort worked as intended.
+                    assert(std::is_sorted(m_codes.begin(), m_codes.end()));
+                });
+                for (std::size_t j = 0; j < NDim + 1u; ++j) {
+                    tg.run([this, j, &v_ind]() { apply_isort(m_parts[j], v_ind); });
+                }
+                tg.run([this, &v_ind]() {
+                    // Apply the new indirect sorting to the original one.
+                    apply_isort(m_isort, v_ind);
+                    // Establish the indices for ordered iteration (in the original order).
+                    // NOTE: this goes in the same task as we need m_isort to be sorted
+                    // before calling this function.
+                    isort_to_ord_ind();
+                });
+                tg.wait();
             }
-            tg.run([this, &v_ind]() {
-                // Apply the new indirect sorting to the original one.
-                apply_isort(m_isort, v_ind);
-                // Establish the indices for ordered iteration (in the original order).
-                // NOTE: this goes in the same task as we need m_isort to be sorted
-                // before calling this function.
-                isort_to_ord_ind();
-            });
-            tg.wait();
         }
         // Re-construct the tree.
         m_tree.clear();
@@ -2764,7 +2802,7 @@ private:
             std::forward<Func>(f)(unord_p_its_impl(*this));
         }
         // Refresh the tree.
-        refresh();
+        refresh(0);
     }
     // Small wrapper around the particle update function that does
     // some exception-safe error handling.
@@ -2792,6 +2830,49 @@ public:
     {
         update_particles_dispatch<true>(std::forward<Func>(f));
     }
+    void remove_particles_mask_u(const std::vector<char> &mask)
+    {
+        const auto nparts = m_parts[0].size();
+        if (mask.size() != nparts) {
+            throw std::invalid_argument("The size of the mask for particle removal (" + std::to_string(mask.size())
+                                        + ") is not equal to the number of particles in the tree ("
+                                        + std::to_string(nparts) + ")");
+        }
+        try {
+            tbb::task_group tg;
+            // To the coordinates and the masses.
+            for (std::size_t j = 0; j < NDim + 1u; ++j) {
+                tg.run([this, j, nparts, &mask]() {
+                    size_type new_size = 0;
+                    auto cur_data = m_parts[j].data();
+                    for (size_type i = 0; i < nparts; ++i) {
+                        if (!mask[static_cast<decltype(mask.size())>(i)]) {
+                            cur_data[new_size++] = cur_data[i];
+                        }
+                    }
+                    m_parts[j].resize(new_size);
+                });
+            }
+            // Do the codes.
+            tg.run([this, nparts, &mask]() {
+                size_type new_size = 0;
+                auto cur_data = m_codes.data();
+                for (size_type i = 0; i < nparts; ++i) {
+                    if (!mask[static_cast<decltype(mask.size())>(i)]) {
+                        cur_data[new_size++] = cur_data[i];
+                    }
+                }
+                m_codes.resize(static_cast<decltype(m_codes.size())>(new_size));
+            });
+            tg.wait();
+        } catch (...) {
+            clear_containers();
+            throw;
+        }
+    }
+    void remove_particles_list_u(const std::vector<size_type> &list) {}
+    void remove_particles_mask_o(const std::vector<char> &mask) {}
+    void remove_particles_list_o(const std::vector<size_type> &list) {}
     F get_box_size() const
     {
         return m_box_size;
