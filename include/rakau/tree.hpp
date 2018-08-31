@@ -91,7 +91,7 @@
 
 #include <rakau/detail/simd.hpp>
 
-// likely/unlikely macros, for those compilers known to support them. For future use.
+// likely/unlikely macros, for those compilers known to support them.
 #if defined(__clang__) || defined(__GNUC__) || defined(__INTEL_COMPILER)
 
 #define rakau_likely(condition) __builtin_expect(static_cast<bool>(condition), 1)
@@ -1112,6 +1112,7 @@ private:
     // Determine the box size from an input sequence of iterators representing the coordinates and
     // the masses (unused) of the particles in the simulation.
     // NOTE: this function assumes we can index into It up to N.
+    // NOTE: this function is safe for N == 0 (it will return zero in that case).
     template <typename It>
     static F determine_box_size(const std::array<It, NDim + 1u> &cm_it, const size_type &N)
     {
@@ -1141,6 +1142,9 @@ private:
             max_coords.local() = local_max;
         });
         // Combine the maxima from all threads into a single maximum vector.
+        // NOTE: if max_coords is empty (i.e., for N == 0), the combine function will return a
+        // copy of the element used in the construction of the enumerable_thread_specific object,
+        // that is, an array of zeroes.
         const auto mc = max_coords.combine([](const auto &c1, const auto &c2) {
             std::array<F, NDim> retval;
             for (std::size_t j = 0; j < NDim; ++j) {
