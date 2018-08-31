@@ -91,6 +91,19 @@
 
 #include <rakau/detail/simd.hpp>
 
+// likely/unlikely macros, for those compilers known to support them.
+#if defined(__clang__) || defined(__GNUC__) || defined(__INTEL_COMPILER)
+
+#define rakau_likely(condition) __builtin_expect(static_cast<bool>(condition), 1)
+#define rakau_unlikely(condition) __builtin_expect(static_cast<bool>(condition), 0)
+
+#else
+
+#define rakau_likely(condition) (condition)
+#define rakau_unlikely(condition) (condition)
+
+#endif
+
 namespace rakau
 {
 
@@ -478,6 +491,23 @@ inline constexpr bool use_fast_inv_sqrt =
 #endif
     ;
 
+// Default values for the max_leaf_n and ncrit tree parameters.
+// These are determined experimentally from benchmarks on various systems.
+// NOTE: so far we have tested only on x86 systems, where it seems for
+// everything but AVX512 a good combination is 128, 16. For AVX512, 256
+// seems to work better than 128.
+inline constexpr unsigned default_max_leaf_n =
+#if defined(XSIMD_X86_INSTR_SET) && XSIMD_X86_INSTR_SET >= XSIMD_X86_AVX512_VERSION
+    256
+#else
+    128
+#endif
+    ;
+
+// NOTE: a value of 8 might get *slightly* better performance on the
+// acc/pot computations, but it results in a tree twice as big.
+inline constexpr unsigned default_ncrit = 16;
+
 } // namespace detail
 
 // NOTE: possible improvements:
@@ -769,6 +799,7 @@ private:
         simple_timer st("node building");
         // Make sure we always have an empty tree when invoking this method.
         assert(m_tree.empty());
+        assert(m_crit_nodes.empty());
         // Exit early if there are no particles.
         if (!m_codes.size()) {
             return;
@@ -1000,21 +1031,24 @@ private:
             // Rescale by factor.
             tmp *= factor;
             // Check: don't end up with a nonfinite value.
-            if (!std::isfinite(tmp)) {
+            if (rakau_unlikely(!std::isfinite(tmp))) {
                 throw std::invalid_argument("While trying to discretise the input coordinate " + std::to_string(x)
+                                            + " in a box of size " + std::to_string(m_box_size)
                                             + ", the non-finite value " + std::to_string(tmp) + " was generated");
             }
             // Check: don't end up outside the [0, factor) range.
-            if (tmp < F(0) || tmp >= F(factor)) {
+            if (rakau_unlikely(tmp < F(0) || tmp >= F(factor))) {
                 throw std::invalid_argument("The discretisation of the input coordinate " + std::to_string(x)
+                                            + " in a box of size " + std::to_string(m_box_size)
                                             + " produced the floating-point value " + std::to_string(tmp)
                                             + ", which is outside the allowed bounds");
             }
             // Cast to UInt and write to retval.
             retval[j] = static_cast<UInt>(tmp);
             // Last check, make sure we don't overflow.
-            if (retval[j] >= factor) {
+            if (rakau_unlikely(retval[j] >= factor)) {
                 throw std::invalid_argument("The discretisation of the input coordinate " + std::to_string(x)
+                                            + " in a box of size " + std::to_string(m_box_size)
                                             + " produced the integral value " + std::to_string(retval[j])
                                             + ", which is outside the allowed bounds");
             }
@@ -1049,17 +1083,10 @@ private:
             return codes_ptr[idx1] < codes_ptr[idx2];
         });
     }
-    // Small helper to check that the box size is sane.
-    static void check_box_size(const F &box_size)
-    {
-        if (!std::isfinite(box_size) || box_size <= F(0)) {
-            throw std::invalid_argument("The box size must be a finite positive value, but it is "
-                                        + std::to_string(box_size) + " instead");
-        }
-    }
     // Determine the box size from an input sequence of iterators representing the coordinates and
     // the masses (unused) of the particles in the simulation.
     // NOTE: this function assumes we can index into It up to N.
+    // NOTE: this function is safe for N == 0 (it will return zero in that case).
     template <typename It>
     static F determine_box_size(const std::array<It, NDim + 1u> &cm_it, const size_type &N)
     {
@@ -1089,6 +1116,9 @@ private:
             max_coords.local() = local_max;
         });
         // Combine the maxima from all threads into a single maximum vector.
+        // NOTE: if max_coords is empty (i.e., for N == 0), the combine function will return a
+        // copy of the element used in the construction of the enumerable_thread_specific object,
+        // that is, an array of zeroes.
         const auto mc = max_coords.combine([](const auto &c1, const auto &c2) {
             std::array<F, NDim> retval;
             for (std::size_t j = 0; j < NDim; ++j) {
@@ -1107,18 +1137,21 @@ private:
         }
         return retval;
     }
-
-public:
+    // Private constructor for implementation purposes. This is the constructor called by all the other ones.
     // NOTE: It needs to be a random access iterator, as we need to index into it for parallel iteration.
     template <typename It>
-    explicit tree(const F &box_size, const std::array<It, NDim + 1u> &cm_it, const size_type &N,
+    explicit tree(const F &box_size, bool box_size_deduced, const std::array<It, NDim + 1u> &cm_it, const size_type &N,
                   const size_type &max_leaf_n, const size_type &ncrit)
-        : m_box_size(box_size), m_size_deduced(box_size == F(0)), m_max_leaf_n(max_leaf_n), m_ncrit(ncrit)
+        : m_box_size(box_size), m_box_size_deduced(box_size_deduced), m_max_leaf_n(max_leaf_n), m_ncrit(ncrit)
     {
         simple_timer st("overall tree construction");
-        // Check the box size, if it is not deduced.
-        if (!m_size_deduced) {
-            check_box_size(box_size);
+        // Param consistency checks: if size is deduced, box_size must be zero.
+        assert(!m_box_size_deduced || m_box_size == F(0));
+        // Box size checks (if automatically deduced, m_box_size is set to zero, so it will
+        // pass the checks).
+        if (!std::isfinite(m_box_size) || m_box_size < F(0)) {
+            throw std::invalid_argument("The box size must be a finite non-negative value, but it is "
+                                        + std::to_string(box_size) + " instead");
         }
         // Check the max_leaf_n param.
         if (!max_leaf_n) {
@@ -1128,11 +1161,6 @@ public:
         if (!ncrit) {
             throw std::invalid_argument("The critical number of particles for the vectorised computation of the "
                                         "potentials/accelerations must be nonzero");
-        }
-        // Get out soon if there's nothing to do.
-        // NOTE: if the size is deduced, we'll end up with a box size of zero.
-        if (!N) {
-            return;
         }
         // Prepare the vectors.
         for (auto &vc : m_parts) {
@@ -1154,7 +1182,8 @@ public:
         m_isort.resize(boost::numeric_cast<decltype(m_isort.size())>(N));
         m_ord_ind.resize(boost::numeric_cast<decltype(m_ord_ind.size())>(N));
         // Deduce the box size, if needed.
-        if (m_size_deduced) {
+        if (m_box_size_deduced) {
+            // NOTE: this function works ok if N == 0.
             m_box_size = determine_box_size(cm_it, N);
         }
         {
@@ -1201,9 +1230,26 @@ public:
             tg.wait();
         }
         // Now let's proceed to the tree construction.
+        // NOTE: these functions work ok if N == 0.
         build_tree();
         // Now move to the computation of the COM of the nodes.
         build_tree_properties();
+    }
+
+public:
+    // Default constructor.
+    tree() : m_box_size(0), m_box_size_deduced(false), m_max_leaf_n(default_max_leaf_n), m_ncrit(default_ncrit) {}
+    template <typename It>
+    explicit tree(const F &box_size, const std::array<It, NDim + 1u> &cm_it, const size_type &N,
+                  const size_type &max_leaf_n = default_max_leaf_n, const size_type &ncrit = default_ncrit)
+        : tree(box_size, false, cm_it, N, max_leaf_n, ncrit)
+    {
+    }
+    template <typename It>
+    explicit tree(const std::array<It, NDim + 1u> &cm_it, const size_type &N,
+                  const size_type &max_leaf_n = default_max_leaf_n, const size_type &ncrit = default_ncrit)
+        : tree(F(0), true, cm_it, N, max_leaf_n, ncrit)
+    {
     }
 
 private:
@@ -1226,45 +1272,35 @@ public:
     // NOTE: as in the other ctor, It must be a ra iterator. This ensures also we can def-construct it in the
     // ctor_ilist_to_array() helper.
     template <typename It>
-    explicit tree(const F &box_size, std::initializer_list<It> cm_it, const size_type &N, const size_type &max_leaf_n,
-                  const size_type &ncrit)
+    explicit tree(const F &box_size, std::initializer_list<It> cm_it, const size_type &N,
+                  const size_type &max_leaf_n = default_max_leaf_n, const size_type &ncrit = default_ncrit)
         : tree(box_size, ctor_ilist_to_array(cm_it), N, max_leaf_n, ncrit)
     {
     }
-    tree(const tree &) = default;
-
-private:
-    // Helper to clear all the internal containers.
-    void clear_containers()
+    template <typename It>
+    explicit tree(std::initializer_list<It> cm_it, const size_type &N, const size_type &max_leaf_n = default_max_leaf_n,
+                  const size_type &ncrit = default_ncrit)
+        : tree(ctor_ilist_to_array(cm_it), N, max_leaf_n, ncrit)
     {
-        for (auto &p : m_parts) {
-            p.clear();
-        }
-        m_codes.clear();
-        m_isort.clear();
-        m_ord_ind.clear();
-        m_tree.clear();
-        m_crit_nodes.clear();
     }
-
-public:
+    tree(const tree &) = default;
     tree(tree &&other) noexcept
-        : m_box_size(std::move(other.m_box_size)), m_size_deduced(other.m_size_deduced),
-          m_max_leaf_n(other.m_max_leaf_n), m_ncrit(other.m_ncrit), m_parts(std::move(other.m_parts)),
-          m_codes(std::move(other.m_codes)), m_isort(std::move(other.m_isort)), m_ord_ind(std::move(other.m_ord_ind)),
-          m_tree(std::move(other.m_tree)), m_crit_nodes(std::move(other.m_crit_nodes))
+        : m_box_size(other.m_box_size), m_box_size_deduced(other.m_box_size_deduced), m_max_leaf_n(other.m_max_leaf_n),
+          m_ncrit(other.m_ncrit), m_parts(std::move(other.m_parts)), m_codes(std::move(other.m_codes)),
+          m_isort(std::move(other.m_isort)), m_ord_ind(std::move(other.m_ord_ind)), m_tree(std::move(other.m_tree)),
+          m_crit_nodes(std::move(other.m_crit_nodes))
     {
-        // Make sure other is left in an empty state, otherwise we might
+        // Make sure other is left in a known state, otherwise we might
         // have in principle assertions failures in the destructor of other
         // in debug mode.
-        other.clear_containers();
+        other.clear();
     }
     tree &operator=(const tree &other)
     {
         try {
             if (this != &other) {
                 m_box_size = other.m_box_size;
-                m_size_deduced = other.m_size_deduced;
+                m_box_size_deduced = other.m_box_size_deduced;
                 m_max_leaf_n = other.m_max_leaf_n;
                 m_ncrit = other.m_ncrit;
                 m_parts = other.m_parts;
@@ -1277,17 +1313,17 @@ public:
             return *this;
         } catch (...) {
             // NOTE: if we triggered an exception, this might now be
-            // in an inconsistent state. Clear out the internal containers
+            // in an inconsistent state. Call clear()
             // to reset to a consistent state before re-throwing.
-            clear_containers();
+            clear();
             throw;
         }
     }
     tree &operator=(tree &&other) noexcept
     {
         if (this != &other) {
-            m_box_size = std::move(other.m_box_size);
-            m_size_deduced = other.m_size_deduced;
+            m_box_size = other.m_box_size;
+            m_box_size_deduced = other.m_box_size_deduced;
             m_max_leaf_n = other.m_max_leaf_n;
             m_ncrit = other.m_ncrit;
             m_parts = std::move(other.m_parts);
@@ -1299,30 +1335,62 @@ public:
             // Make sure other is left in an empty state, otherwise we might
             // have in principle assertions failures in the destructor of other
             // in debug mode.
-            other.clear_containers();
+            other.clear();
         }
         return *this;
     }
     ~tree()
     {
-        // Run various debug checks.
 #if !defined(NDEBUG)
+        // Run various debug checks.
         for (std::size_t j = 0; j < NDim; ++j) {
+            // All particle data vectors have the same size.
             assert(m_parts[NDim].size() == m_parts[j].size());
         }
-#endif
+        // Same number of particles and codes.
         assert(m_parts[0].size() == m_codes.size());
+        // Codes are sorted.
         assert(std::is_sorted(m_codes.begin(), m_codes.end()));
+        // The size of m_isort and m_ord_ind is the number of particles.
         assert(m_parts[0].size() == m_isort.size());
         assert(m_parts[0].size() == m_ord_ind.size());
-#if !defined(NDEBUG)
+        // All coordinates must fit in the box, and they need to correspond
+        // to the correct Morton code.
+        std::array<UInt, NDim> tmp_dcoord;
+        morton_encoder<NDim, UInt> me;
+        for (size_type i = 0; i < m_parts[NDim].size(); ++i) {
+            for (std::size_t j = 0; j < NDim; ++j) {
+                assert(m_parts[j][i] < m_box_size / F(2));
+                assert(m_parts[j][i] >= -m_box_size / F(2));
+            }
+            disc_coords(tmp_dcoord, i);
+            assert(m_codes[i] == me(tmp_dcoord.data()));
+        }
+        // m_ord_ind and m_isort are consistent with each other.
         for (decltype(m_isort.size()) i = 0; i < m_isort.size(); ++i) {
             assert(m_isort[i] < m_ord_ind.size());
             assert(m_ord_ind[m_isort[i]] == i);
         }
+        // m_isort does not contain duplicates.
         std::sort(m_isort.begin(), m_isort.end());
         assert(std::unique(m_isort.begin(), m_isort.end()) == m_isort.end());
 #endif
+    }
+    // Reset the state of the tree to a known one, i.e., a def-cted tree.
+    void clear() noexcept
+    {
+        m_box_size = F(0);
+        m_box_size_deduced = false;
+        m_max_leaf_n = default_max_leaf_n;
+        m_ncrit = default_ncrit;
+        for (auto &p : m_parts) {
+            p.clear();
+        }
+        m_codes.clear();
+        m_isort.clear();
+        m_ord_ind.clear();
+        m_tree.clear();
+        m_crit_nodes.clear();
     }
     // Tree pretty printing. Will print up to max_nodes, or all the nodes if max_nodes is zero.
     std::ostream &pprint(std::ostream &os, size_type max_nodes = 0) const
@@ -1330,7 +1398,7 @@ public:
         // NOTE: sanity check for the use of UInt in std::bitset.
         static_assert(unsigned(std::numeric_limits<UInt>::digits) <= std::numeric_limits<std::size_t>::max());
         const auto n_nodes = m_tree.size();
-        os << "Box size                 : " << m_box_size << (m_size_deduced ? " (deduced)" : "") << '\n';
+        os << "Box size                 : " << m_box_size << (m_box_size_deduced ? " (deduced)" : "") << '\n';
         os << "Total number of particles: " << m_codes.size() << '\n';
         os << "Total number of nodes    : " << n_nodes << "\n\n";
         if (!n_nodes) {
@@ -2696,21 +2764,24 @@ public:
 private:
     // After updating the particles' positions, this method must be called
     // to reconstruct the other data members according to the new positions.
-    void refresh()
+    void sync()
     {
+        // Get the number of particles.
         const auto nparts = m_parts[0].size();
-        // First, we need to determine if we need to re-deduce the box size.
-        if (m_size_deduced) {
+        // Re-deduce the box size, if needed.
+        if (m_box_size_deduced) {
             m_box_size = determine_box_size(p_its_u(), nparts);
         }
-        // Second, let's generate the new codes, and a create a vector
-        // for the new indirect sorting of the new codes.
+        // Establish the new codes and re-order the internal data members accordingly.
         // NOTE: this is a slight repetition of some code in the constructor.
         // However, there it makes sense to mix the morton encoding with data movement,
         // while here the data is already in the member vectors. So we cannot really
         // refactor these bits in a common function.
         std::vector<size_type, di_aligned_allocator<size_type>> v_ind;
-        v_ind.resize(boost::numeric_cast<decltype(v_ind.size())>(nparts));
+        // NOTE: we are never changing the number of particles in a tree, thus we are sure
+        // that v_ind's size type can represent nparts (because of the checks
+        // we run in the ctor).
+        v_ind.resize(static_cast<decltype(v_ind.size())>(nparts));
         tbb::parallel_for(tbb::blocked_range<decltype(m_parts[0].size())>(0u, nparts),
                           [this, &v_ind](const auto &range) {
                               std::array<UInt, NDim> tmp_dcoord;
@@ -2747,36 +2818,32 @@ private:
             });
             tg.wait();
         }
-        // Re-construct the tree.
+        // Re-construct the tree. Make sure we empty the tree structures
+        // before doing it.
         m_tree.clear();
+        m_crit_nodes.clear();
         build_tree();
         build_tree_properties();
     }
-    // Implementation of the particles update function.
-    template <bool Ordered, typename Func>
-    void update_particles_impl(Func &&f)
-    {
-        if constexpr (Ordered) {
-            // Apply the functor to the ordered iterators.
-            std::forward<Func>(f)(ord_p_its_impl(*this));
-        } else {
-            // Apply the functor to the unordered iterators.
-            std::forward<Func>(f)(unord_p_its_impl(*this));
-        }
-        // Refresh the tree.
-        refresh();
-    }
-    // Small wrapper around the particle update function that does
-    // some exception-safe error handling.
+    // Invoke the particle update function with an
+    // exception safe wrapper.
     template <bool Ordered, typename Func>
     void update_particles_dispatch(Func &&f)
     {
         simple_timer st("overall update_particles");
         try {
-            update_particles_impl<Ordered>(std::forward<Func>(f));
+            if constexpr (Ordered) {
+                // Apply the functor to the ordered iterators.
+                std::forward<Func>(f)(ord_p_its_impl(*this));
+            } else {
+                // Apply the functor to the unordered iterators.
+                std::forward<Func>(f)(unord_p_its_impl(*this));
+            }
+            // Sync the tree structures.
+            sync();
         } catch (...) {
             // Erase everything before re-throwing.
-            clear_containers();
+            clear();
             throw;
         }
     }
@@ -2796,16 +2863,24 @@ public:
     {
         return m_box_size;
     }
-    bool box_size_deduced() const
+    bool get_box_size_deduced() const
     {
-        return m_size_deduced;
+        return m_box_size_deduced;
+    }
+    size_type get_ncrit() const
+    {
+        return m_ncrit;
+    }
+    size_type get_max_leaf_n() const
+    {
+        return m_max_leaf_n;
     }
 
 private:
     // The size of the domain.
     F m_box_size;
     // Flag to signal if the domain size was deduced or explicitly specified.
-    bool m_size_deduced;
+    bool m_box_size_deduced;
     // The maximum number of particles in a leaf node.
     size_type m_max_leaf_n;
     // Number of particles in a critical node: if the number of particles in
