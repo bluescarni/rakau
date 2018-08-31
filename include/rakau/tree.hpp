@@ -1031,21 +1031,24 @@ private:
             // Rescale by factor.
             tmp *= factor;
             // Check: don't end up with a nonfinite value.
-            if (!std::isfinite(tmp)) {
+            if (rakau_unlikely(!std::isfinite(tmp))) {
                 throw std::invalid_argument("While trying to discretise the input coordinate " + std::to_string(x)
+                                            + " in a box of size " + std::to_string(m_box_size)
                                             + ", the non-finite value " + std::to_string(tmp) + " was generated");
             }
             // Check: don't end up outside the [0, factor) range.
-            if (tmp < F(0) || tmp >= F(factor)) {
+            if (rakau_unlikely(tmp < F(0) || tmp >= F(factor))) {
                 throw std::invalid_argument("The discretisation of the input coordinate " + std::to_string(x)
+                                            + " in a box of size " + std::to_string(m_box_size)
                                             + " produced the floating-point value " + std::to_string(tmp)
                                             + ", which is outside the allowed bounds");
             }
             // Cast to UInt and write to retval.
             retval[j] = static_cast<UInt>(tmp);
             // Last check, make sure we don't overflow.
-            if (retval[j] >= factor) {
+            if (rakau_unlikely(retval[j] >= factor)) {
                 throw std::invalid_argument("The discretisation of the input coordinate " + std::to_string(x)
+                                            + " in a box of size " + std::to_string(m_box_size)
                                             + " produced the integral value " + std::to_string(retval[j])
                                             + ", which is outside the allowed bounds");
             }
@@ -1137,13 +1140,13 @@ private:
     // Private constructor for implementation purposes. This is the constructor called by all the other ones.
     // NOTE: It needs to be a random access iterator, as we need to index into it for parallel iteration.
     template <typename It>
-    explicit tree(const F &box_size, bool size_deduced, const std::array<It, NDim + 1u> &cm_it, const size_type &N,
+    explicit tree(const F &box_size, bool box_size_deduced, const std::array<It, NDim + 1u> &cm_it, const size_type &N,
                   const size_type &max_leaf_n, const size_type &ncrit)
-        : m_box_size(box_size), m_size_deduced(size_deduced), m_max_leaf_n(max_leaf_n), m_ncrit(ncrit)
+        : m_box_size(box_size), m_box_size_deduced(box_size_deduced), m_max_leaf_n(max_leaf_n), m_ncrit(ncrit)
     {
         simple_timer st("overall tree construction");
         // Param consistency checks: if size is deduced, box_size must be zero.
-        assert(!m_size_deduced || m_box_size == F(0));
+        assert(!m_box_size_deduced || m_box_size == F(0));
         // Box size checks (if automatically deduced, m_box_size is set to zero, so it will
         // pass the checks).
         if (!std::isfinite(m_box_size) || m_box_size < F(0)) {
@@ -1179,7 +1182,7 @@ private:
         m_isort.resize(boost::numeric_cast<decltype(m_isort.size())>(N));
         m_ord_ind.resize(boost::numeric_cast<decltype(m_ord_ind.size())>(N));
         // Deduce the box size, if needed.
-        if (m_size_deduced) {
+        if (m_box_size_deduced) {
             // NOTE: this function works ok if N == 0.
             m_box_size = determine_box_size(cm_it, N);
         }
@@ -1235,7 +1238,7 @@ private:
 
 public:
     // Default constructor.
-    tree() : m_box_size(0), m_size_deduced(false), m_max_leaf_n(default_max_leaf_n), m_ncrit(default_ncrit) {}
+    tree() : m_box_size(0), m_box_size_deduced(false), m_max_leaf_n(default_max_leaf_n), m_ncrit(default_ncrit) {}
     template <typename It>
     explicit tree(const F &box_size, const std::array<It, NDim + 1u> &cm_it, const size_type &N,
                   const size_type &max_leaf_n = default_max_leaf_n, const size_type &ncrit = default_ncrit)
@@ -1282,7 +1285,7 @@ public:
     }
     tree(const tree &) = default;
     tree(tree &&other) noexcept
-        : m_box_size(other.m_box_size), m_size_deduced(other.m_size_deduced), m_max_leaf_n(other.m_max_leaf_n),
+        : m_box_size(other.m_box_size), m_box_size_deduced(other.m_box_size_deduced), m_max_leaf_n(other.m_max_leaf_n),
           m_ncrit(other.m_ncrit), m_parts(std::move(other.m_parts)), m_codes(std::move(other.m_codes)),
           m_isort(std::move(other.m_isort)), m_ord_ind(std::move(other.m_ord_ind)), m_tree(std::move(other.m_tree)),
           m_crit_nodes(std::move(other.m_crit_nodes))
@@ -1297,7 +1300,7 @@ public:
         try {
             if (this != &other) {
                 m_box_size = other.m_box_size;
-                m_size_deduced = other.m_size_deduced;
+                m_box_size_deduced = other.m_box_size_deduced;
                 m_max_leaf_n = other.m_max_leaf_n;
                 m_ncrit = other.m_ncrit;
                 m_parts = other.m_parts;
@@ -1320,7 +1323,7 @@ public:
     {
         if (this != &other) {
             m_box_size = other.m_box_size;
-            m_size_deduced = other.m_size_deduced;
+            m_box_size_deduced = other.m_box_size_deduced;
             m_max_leaf_n = other.m_max_leaf_n;
             m_ncrit = other.m_ncrit;
             m_parts = std::move(other.m_parts);
@@ -1338,13 +1341,12 @@ public:
     }
     ~tree()
     {
-        // Run various debug checks.
 #if !defined(NDEBUG)
+        // Run various debug checks.
         for (std::size_t j = 0; j < NDim; ++j) {
             // All particle data vectors have the same size.
             assert(m_parts[NDim].size() == m_parts[j].size());
         }
-#endif
         // Same number of particles and codes.
         assert(m_parts[0].size() == m_codes.size());
         // Codes are sorted.
@@ -1352,7 +1354,18 @@ public:
         // The size of m_isort and m_ord_ind is the number of particles.
         assert(m_parts[0].size() == m_isort.size());
         assert(m_parts[0].size() == m_ord_ind.size());
-#if !defined(NDEBUG)
+        // All coordinates must fit in the box, and they need to correspond
+        // to the correct Morton code.
+        std::array<UInt, NDim> tmp_dcoord;
+        morton_encoder<NDim, UInt> me;
+        for (size_type i = 0; i < m_parts[NDim].size(); ++i) {
+            for (std::size_t j = 0; j < NDim; ++j) {
+                assert(m_parts[j][i] < m_box_size / F(2));
+                assert(m_parts[j][i] >= -m_box_size / F(2));
+            }
+            disc_coords(tmp_dcoord, i);
+            assert(m_codes[i] == me(tmp_dcoord.data()));
+        }
         // m_ord_ind and m_isort are consistent with each other.
         for (decltype(m_isort.size()) i = 0; i < m_isort.size(); ++i) {
             assert(m_isort[i] < m_ord_ind.size());
@@ -1367,7 +1380,7 @@ public:
     void clear() noexcept
     {
         m_box_size = F(0);
-        m_size_deduced = false;
+        m_box_size_deduced = false;
         m_max_leaf_n = default_max_leaf_n;
         m_ncrit = default_ncrit;
         for (auto &p : m_parts) {
@@ -1385,7 +1398,7 @@ public:
         // NOTE: sanity check for the use of UInt in std::bitset.
         static_assert(unsigned(std::numeric_limits<UInt>::digits) <= std::numeric_limits<std::size_t>::max());
         const auto n_nodes = m_tree.size();
-        os << "Box size                 : " << m_box_size << (m_size_deduced ? " (deduced)" : "") << '\n';
+        os << "Box size                 : " << m_box_size << (m_box_size_deduced ? " (deduced)" : "") << '\n';
         os << "Total number of particles: " << m_codes.size() << '\n';
         os << "Total number of nodes    : " << n_nodes << "\n\n";
         if (!n_nodes) {
@@ -2756,7 +2769,7 @@ private:
         // Get the number of particles.
         const auto nparts = m_parts[0].size();
         // Re-deduce the box size, if needed.
-        if (m_size_deduced) {
+        if (m_box_size_deduced) {
             m_box_size = determine_box_size(p_its_u(), nparts);
         }
         // Establish the new codes and re-order the internal data members accordingly.
@@ -2850,16 +2863,24 @@ public:
     {
         return m_box_size;
     }
-    bool box_size_deduced() const
+    bool get_box_size_deduced() const
     {
-        return m_size_deduced;
+        return m_box_size_deduced;
+    }
+    size_type get_ncrit() const
+    {
+        return m_ncrit;
+    }
+    size_type get_max_leaf_n() const
+    {
+        return m_max_leaf_n;
     }
 
 private:
     // The size of the domain.
     F m_box_size;
     // Flag to signal if the domain size was deduced or explicitly specified.
-    bool m_size_deduced;
+    bool m_box_size_deduced;
     // The maximum number of particles in a leaf node.
     size_type m_max_leaf_n;
     // Number of particles in a critical node: if the number of particles in
