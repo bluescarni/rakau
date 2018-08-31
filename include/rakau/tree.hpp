@@ -91,6 +91,19 @@
 
 #include <rakau/detail/simd.hpp>
 
+// likely/unlikely macros, for those compilers known to support them. For future use.
+#if defined(__clang__) || defined(__GNUC__) || defined(__INTEL_COMPILER)
+
+#define rakau_likely(condition) __builtin_expect(static_cast<bool>(condition), 1)
+#define rakau_unlikely(condition) __builtin_expect(static_cast<bool>(condition), 0)
+
+#else
+
+#define rakau_likely(condition) (condition)
+#define rakau_unlikely(condition) (condition)
+
+#endif
+
 namespace rakau
 {
 
