@@ -504,6 +504,8 @@ inline constexpr unsigned default_max_leaf_n =
 #endif
     ;
 
+// NOTE: a value of 8 might get *slightly* better performance on the
+// acc/pot computations, but it results in a tree twice as big.
 inline constexpr unsigned default_ncrit = 16;
 
 } // namespace detail
@@ -1290,12 +1292,12 @@ public:
     }
     tree(const tree &) = default;
     tree(tree &&other) noexcept
-        : m_box_size(std::move(other.m_box_size)), m_size_deduced(other.m_size_deduced), m_status(other.m_status),
+        : m_box_size(other.m_box_size), m_size_deduced(other.m_size_deduced), m_status(other.m_status),
           m_max_leaf_n(other.m_max_leaf_n), m_ncrit(other.m_ncrit), m_parts(std::move(other.m_parts)),
           m_codes(std::move(other.m_codes)), m_isort(std::move(other.m_isort)), m_ord_ind(std::move(other.m_ord_ind)),
           m_tree(std::move(other.m_tree)), m_crit_nodes(std::move(other.m_crit_nodes))
     {
-        // Make sure other is left in an empty state, otherwise we might
+        // Make sure other is left in a known state, otherwise we might
         // have in principle assertions failures in the destructor of other
         // in debug mode.
         other.clear();
@@ -1328,7 +1330,7 @@ public:
     tree &operator=(tree &&other) noexcept
     {
         if (this != &other) {
-            m_box_size = std::move(other.m_box_size);
+            m_box_size = other.m_box_size;
             m_size_deduced = other.m_size_deduced;
             m_status = other.m_status;
             m_max_leaf_n = other.m_max_leaf_n;
@@ -1375,10 +1377,9 @@ public:
         assert(std::unique(m_isort.begin(), m_isort.end()) == m_isort.end());
 #endif
     }
-    // Reset the state of the tree to a known one.
-    void clear()
+    // Reset the state of the tree to a known one, i.e., a def-cted tree.
+    void clear() noexcept
     {
-        // Reset to a def-cted state.
         m_box_size = F(0);
         m_size_deduced = false;
         m_status = tree_status::synced;
