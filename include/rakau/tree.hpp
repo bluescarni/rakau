@@ -1238,24 +1238,14 @@ public:
     tree() : m_box_size(0), m_size_deduced(false), m_max_leaf_n(default_max_leaf_n), m_ncrit(default_ncrit) {}
     template <typename It>
     explicit tree(const F &box_size, const std::array<It, NDim + 1u> &cm_it, const size_type &N,
-                  const size_type &max_leaf_n, const size_type &ncrit)
+                  const size_type &max_leaf_n = default_max_leaf_n, const size_type &ncrit = default_ncrit)
         : tree(box_size, false, cm_it, N, max_leaf_n, ncrit)
     {
     }
     template <typename It>
-    explicit tree(const F &box_size, const std::array<It, NDim + 1u> &cm_it, const size_type &N)
-        : tree(box_size, cm_it, N, default_max_leaf_n, default_ncrit)
-    {
-    }
-    template <typename It>
-    explicit tree(const std::array<It, NDim + 1u> &cm_it, const size_type &N, const size_type &max_leaf_n,
-                  const size_type &ncrit)
+    explicit tree(const std::array<It, NDim + 1u> &cm_it, const size_type &N,
+                  const size_type &max_leaf_n = default_max_leaf_n, const size_type &ncrit = default_ncrit)
         : tree(F(0), true, cm_it, N, max_leaf_n, ncrit)
-    {
-    }
-    template <typename It>
-    explicit tree(const std::array<It, NDim + 1u> &cm_it, const size_type &N)
-        : tree(cm_it, N, default_max_leaf_n, default_ncrit)
     {
     }
 
@@ -1279,25 +1269,15 @@ public:
     // NOTE: as in the other ctor, It must be a ra iterator. This ensures also we can def-construct it in the
     // ctor_ilist_to_array() helper.
     template <typename It>
-    explicit tree(const F &box_size, std::initializer_list<It> cm_it, const size_type &N, const size_type &max_leaf_n,
-                  const size_type &ncrit)
+    explicit tree(const F &box_size, std::initializer_list<It> cm_it, const size_type &N,
+                  const size_type &max_leaf_n = default_max_leaf_n, const size_type &ncrit = default_ncrit)
         : tree(box_size, ctor_ilist_to_array(cm_it), N, max_leaf_n, ncrit)
     {
     }
     template <typename It>
-    explicit tree(const F &box_size, std::initializer_list<It> cm_it, const size_type &N)
-        : tree(box_size, cm_it, N, default_max_leaf_n, default_ncrit)
-    {
-    }
-    template <typename It>
-    explicit tree(std::initializer_list<It> cm_it, const size_type &N, const size_type &max_leaf_n,
-                  const size_type &ncrit)
+    explicit tree(std::initializer_list<It> cm_it, const size_type &N, const size_type &max_leaf_n = default_max_leaf_n,
+                  const size_type &ncrit = default_ncrit)
         : tree(ctor_ilist_to_array(cm_it), N, max_leaf_n, ncrit)
-    {
-    }
-    template <typename It>
-    explicit tree(std::initializer_list<It> cm_it, const size_type &N)
-        : tree(cm_it, N, default_max_leaf_n, default_ncrit)
     {
     }
     tree(const tree &) = default;
