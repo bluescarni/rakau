@@ -2116,12 +2116,12 @@ private:
             const batch_type src_dim2_vec(src_dim2), theta2_vec(theta2), eps2_vec(eps2), x_com_vec(com_pos[0]),
                 y_com_vec(com_pos[1]), z_com_vec(com_pos[2]);
             // Pointers to the coordinates.
-            const auto x_ptr = p_ptrs[0], y_ptr = p_ptrs[1], z_ptr = p_ptrs[2];
+            const auto [x_ptr, y_ptr, z_ptr, m_ptr] = p_ptrs;
             if constexpr (Q == 0u) {
                 // Q == 0, accelerations only.
                 //
                 // Pointers to the temporary data.
-                const auto tmp_x = tmp_ptrs[0], tmp_y = tmp_ptrs[1], tmp_z = tmp_ptrs[2], tmp_dist3 = tmp_ptrs[3];
+                const auto [tmp_x, tmp_y, tmp_z, tmp_dist3] = tmp_ptrs;
                 for (size_type i = 0; i < tgt_size; i += batch_size) {
                     const auto diff_x = x_com_vec - batch_type(x_ptr + i, xsimd::aligned_mode{}),
                                diff_y = y_com_vec - batch_type(y_ptr + i, xsimd::aligned_mode{}),
@@ -2172,8 +2172,7 @@ private:
                 // Q == 2, accelerations and potentials.
                 //
                 // Pointers to the temporary data.
-                const auto tmp_x = tmp_ptrs[0], tmp_y = tmp_ptrs[1], tmp_z = tmp_ptrs[2], tmp_dist3 = tmp_ptrs[3],
-                           tmp_dist = tmp_ptrs[4];
+                const auto [tmp_x, tmp_y, tmp_z, tmp_dist3, tmp_dist] = tmp_ptrs;
                 for (size_type i = 0; i < tgt_size; i += batch_size) {
                     const auto diff_x = x_com_vec - batch_type(x_ptr + i, xsimd::aligned_mode{}),
                                diff_y = y_com_vec - batch_type(y_ptr + i, xsimd::aligned_mode{}),
@@ -2282,9 +2281,10 @@ private:
             const auto src_code = get<0>(src_node);
             // Number of children of the source node.
             const auto n_children_src = get<1>(src_node)[2];
-            if (src_code == tgt_code) {
+            if (rakau_unlikely(src_code == tgt_code)) {
                 // If src_code == tgt_code, we are currently visiting the target node.
                 // Compute the self interactions and skip all the children of the target node.
+                // NOTE: mark it as unlikely as we will run into this condition only once per traversal.
                 tree_self_interactions<Q>(eps2, tgt_size, p_ptrs, res_ptrs);
                 src_idx += n_children_src + 1u;
                 continue;
