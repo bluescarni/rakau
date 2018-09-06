@@ -1570,22 +1570,20 @@ private:
     void tree_self_interactions(F eps2, size_type tgt_size, const std::array<const F *, NDim + 1u> &p_ptrs,
                                 const std::array<F *, nvecs_res<Q>> &res_ptrs) const
     {
-        // Pointer to the masses.
-        const auto m_ptr = p_ptrs[NDim];
         if constexpr (simd_enabled && NDim == 3u) {
             // xsimd batch type.
             using batch_type = xsimd::simd_type<F>;
             // Size of batch_type.
             constexpr auto batch_size = batch_type::size;
-            // Shortcuts to the node coordinates.
-            const auto x_ptr = p_ptrs[0], y_ptr = p_ptrs[1], z_ptr = p_ptrs[2];
+            // Shortcuts to the node coordinates/masses.
+            const auto [x_ptr, y_ptr, z_ptr, m_ptr] = p_ptrs;
             // Softening length, vector version.
             const batch_type eps2_vec(eps2);
             if constexpr (Q == 0u) {
                 // Q == 0, accelerations only.
                 //
                 // Shortcuts to the result vectors.
-                const auto res_x = res_ptrs[0], res_y = res_ptrs[1], res_z = res_ptrs[2];
+                const auto [res_x, res_y, res_z] = res_ptrs;
                 for (size_type i1 = 0; i1 < tgt_size; i1 += batch_size) {
                     // Load the first batch of particles.
                     const auto xvec1 = xsimd::load_aligned(x_ptr + i1), yvec1 = xsimd::load_aligned(y_ptr + i1),
@@ -1677,7 +1675,7 @@ private:
                 // Q == 2, accelerations and potentials.
                 //
                 // Shortcuts to the result vectors.
-                const auto res_x = res_ptrs[0], res_y = res_ptrs[1], res_z = res_ptrs[2], res_pot = res_ptrs[3];
+                const auto [res_x, res_y, res_z, res_pot] = res_ptrs;
                 for (size_type i1 = 0; i1 < tgt_size; i1 += batch_size) {
                     // Load the first batch of particles.
                     const auto xvec1 = xsimd::load_aligned(x_ptr + i1), yvec1 = xsimd::load_aligned(y_ptr + i1),
@@ -1736,6 +1734,8 @@ private:
                 }
             }
         } else {
+            // Pointer to the masses.
+            const auto m_ptr = p_ptrs[NDim];
             // Temporary vectors to be used in the loops below.
             std::array<F, NDim> diffs, pos1;
             for (size_type i1 = 0; i1 < tgt_size; ++i1) {
@@ -1820,15 +1820,17 @@ private:
             // Vector version of eps2.
             const batch_type eps2_vec(eps2);
             // Pointers to the target node data.
-            const auto x_ptr1 = p_ptrs[0], y_ptr1 = p_ptrs[1], z_ptr1 = p_ptrs[2];
+            const auto [x_ptr1, y_ptr1, z_ptr1, m_ptr1] = p_ptrs;
             // Pointers to the source node data.
             const auto x_ptr2 = m_parts[0].data() + src_begin, y_ptr2 = m_parts[1].data() + src_begin,
                        z_ptr2 = m_parts[2].data() + src_begin, m_ptr2 = m_parts[3].data() + src_begin;
             if constexpr (Q == 0u) {
                 // Q == 0, accelerations only.
                 //
+                // We are not using m_ptr1 here.
+                ignore_args(m_ptr1);
                 // Pointers to the result data.
-                const auto res_x = res_ptrs[0], res_y = res_ptrs[1], res_z = res_ptrs[2];
+                const auto [res_x, res_y, res_z] = res_ptrs;
                 for (size_type i = 0; i < tgt_size; i += batch_size) {
                     // Load the current batch of target data.
                     const auto xvec1 = batch_type(x_ptr1 + i, xsimd::aligned_mode{}),
@@ -1855,8 +1857,6 @@ private:
                 //
                 // Pointer to the result data.
                 const auto res = res_ptrs[0];
-                // Pointer to the target masses.
-                const auto m_ptr1 = p_ptrs[3];
                 for (size_type i = 0; i < tgt_size; i += batch_size) {
                     // Load the current batch of target data.
                     const auto xvec1 = batch_type(x_ptr1 + i, xsimd::aligned_mode{}),
@@ -1883,9 +1883,7 @@ private:
                 // Q == 2, accelerations and potentials.
                 //
                 // Pointers to the result data.
-                const auto res_x = res_ptrs[0], res_y = res_ptrs[1], res_z = res_ptrs[2], res_pot = res_ptrs[3];
-                // Pointer to the target masses.
-                const auto m_ptr1 = p_ptrs[3];
+                const auto [res_x, res_y, res_z, res_pot] = res_ptrs;
                 for (size_type i = 0; i < tgt_size; i += batch_size) {
                     // Load the current batch of target data.
                     const auto xvec1 = batch_type(x_ptr1 + i, xsimd::aligned_mode{}),
@@ -1922,7 +1920,7 @@ private:
                 }
                 // Load the target mass, but only if we are interested in the potentials.
                 F m1;
-                (void)m1;
+                ignore_args(m1);
                 if constexpr (Q == 1u || Q == 2u) {
                     m1 = p_ptrs[NDim][i1];
                 }
@@ -1970,13 +1968,14 @@ private:
             // Vector version of the source node mass.
             const batch_type m_src_vec(m_src);
             if constexpr (Q == 0u) {
-                (void)p_ptrs;
                 // Q == 0, accelerations only.
                 //
+                // No need for p_ptrs in this branch.
+                ignore_args(p_ptrs);
                 // Pointers to the temporary coordinate diffs and 1/dist3 values computed in the BH check.
-                const auto tmp_x = tmp_ptrs[0], tmp_y = tmp_ptrs[1], tmp_z = tmp_ptrs[2], tmp_dist3 = tmp_ptrs[3];
+                const auto [tmp_x, tmp_y, tmp_z, tmp_dist3] = tmp_ptrs;
                 // Pointers to the result arrays.
-                const auto res_x = res_ptrs[0], res_y = res_ptrs[1], res_z = res_ptrs[2];
+                const auto [res_x, res_y, res_z] = res_ptrs;
                 for (size_type i = 0; i < tgt_size; i += batch_size) {
                     // Compute m_src/dist**3 and load the differences.
                     const auto m_src_dist3_vec = use_fast_inv_sqrt<batch_type>
@@ -2016,12 +2015,11 @@ private:
                 // Q == 2, accelerations and potentials.
                 //
                 // Pointers to the temporary coordinate diffs, 1/dist3 and 1/dist values computed in the BH check.
-                const auto tmp_x = tmp_ptrs[0], tmp_y = tmp_ptrs[1], tmp_z = tmp_ptrs[2], tmp_dist3 = tmp_ptrs[3],
-                           tmp_dist = tmp_ptrs[4];
+                const auto [tmp_x, tmp_y, tmp_z, tmp_dist3, tmp_dist] = tmp_ptrs;
                 // Pointer to the target masses.
                 const auto m_ptr = p_ptrs[3];
                 // Pointers to the result arrays.
-                const auto res_x = res_ptrs[0], res_y = res_ptrs[1], res_z = res_ptrs[2], res_pot = res_ptrs[3];
+                const auto [res_x, res_y, res_z, res_pot] = res_ptrs;
                 for (size_type i = 0; i < tgt_size; i += batch_size) {
                     // Compute m_src/dist**3, m_src/dist and load the differences.
                     const auto m_src_dist3_vec = use_fast_inv_sqrt<batch_type>
@@ -2049,7 +2047,7 @@ private:
         } else {
             // Init the pointer to the target masses, but only if potentials are requested.
             const F *m_ptr;
-            (void)m_ptr;
+            ignore_args(m_ptr);
             if constexpr (Q == 1u || Q == 2u) {
                 m_ptr = p_ptrs[3];
             }
