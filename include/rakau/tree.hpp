@@ -110,12 +110,6 @@ namespace rakau
 inline namespace detail
 {
 
-// Helper to ignore unused args in functions.
-template <typename... Args>
-inline void ignore_args(const Args &...)
-{
-}
-
 // Dependent false for static_assert in if constexpr.
 // http://en.cppreference.com/w/cpp/language/if#Constexpr_If
 template <typename T>
@@ -593,9 +587,12 @@ private:
     // range. The children nodes will be appended in depth-first order to tree. crit_nodes is the local
     // list of critical nodes, crit_ancestor a flag signalling if the parent node or one of its
     // ancestors is a critical node.
+    // NOTE: here and elsewhere the use of [[maybe_unused]] is a bit random, as we use to suppress
+    // GCC warnings which also look rather random (e.g., it complains about some unused
+    // arguments but not others).
     template <unsigned ParentLevel, typename CIt>
-    size_type build_tree_ser_impl(tree_type &tree, cnode_list_type &crit_nodes, UInt parent_code, CIt begin, CIt end,
-                                  bool crit_ancestor)
+    size_type build_tree_ser_impl(tree_type &tree, cnode_list_type &crit_nodes, [[maybe_unused]] UInt parent_code,
+                                  CIt begin, CIt end, bool crit_ancestor)
     {
         if constexpr (ParentLevel < cbits) {
             assert(tree_level<NDim>(parent_code) == ParentLevel);
@@ -697,8 +694,6 @@ private:
         } else {
             // NOTE: if we end up here, it means we walked through all the recursion levels
             // and we cannot go any deeper.
-            // GCC warnings about unused params.
-            ignore_args(parent_code, begin, end);
             return 0;
         }
     }
@@ -709,8 +704,8 @@ private:
     // have codes in the [begin, end) range. crit_nodes is the global list of lists of critical nodes, crit_ancestor a
     // flag signalling if the parent node or one of its ancestors is a critical node.
     template <unsigned ParentLevel, typename Out, typename CritNodes, typename CIt>
-    size_type build_tree_par_impl(Out &trees, CritNodes &crit_nodes, UInt parent_code, CIt begin, CIt end,
-                                  unsigned split_level, bool crit_ancestor)
+    size_type build_tree_par_impl(Out &trees, CritNodes &crit_nodes, [[maybe_unused]] UInt parent_code, CIt begin,
+                                  CIt end, [[maybe_unused]] unsigned split_level, [[maybe_unused]] bool crit_ancestor)
     {
         if constexpr (ParentLevel < cbits) {
             assert(tree_level<NDim>(parent_code) == ParentLevel);
@@ -790,7 +785,6 @@ private:
             tg.wait();
             return retval.load();
         } else {
-            ignore_args(parent_code, begin, end, split_level, crit_ancestor);
             return 0;
         }
     }
@@ -1827,8 +1821,6 @@ private:
             if constexpr (Q == 0u) {
                 // Q == 0, accelerations only.
                 //
-                // We are not using m_ptr1 here.
-                ignore_args(m_ptr1);
                 // Pointers to the result data.
                 const auto [res_x, res_y, res_z] = res_ptrs;
                 for (size_type i = 0; i < tgt_size; i += batch_size) {
@@ -1919,8 +1911,7 @@ private:
                     pos1[j] = p_ptrs[j][i1];
                 }
                 // Load the target mass, but only if we are interested in the potentials.
-                F m1;
-                ignore_args(m1);
+                [[maybe_unused]] F m1;
                 if constexpr (Q == 1u || Q == 2u) {
                     m1 = p_ptrs[NDim][i1];
                 }
@@ -1970,8 +1961,6 @@ private:
             if constexpr (Q == 0u) {
                 // Q == 0, accelerations only.
                 //
-                // No need for p_ptrs in this branch.
-                ignore_args(p_ptrs);
                 // Pointers to the temporary coordinate diffs and 1/dist3 values computed in the BH check.
                 const auto [tmp_x, tmp_y, tmp_z, tmp_dist3] = tmp_ptrs;
                 // Pointers to the result arrays.
@@ -2046,8 +2035,7 @@ private:
             }
         } else {
             // Init the pointer to the target masses, but only if potentials are requested.
-            const F *m_ptr;
-            ignore_args(m_ptr);
+            [[maybe_unused]] const F *m_ptr;
             if constexpr (Q == 1u || Q == 2u) {
                 m_ptr = p_ptrs[3];
             }
