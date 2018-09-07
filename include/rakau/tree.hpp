@@ -110,12 +110,6 @@ namespace rakau
 inline namespace detail
 {
 
-// Helper to ignore unused args in functions.
-template <typename... Args>
-inline void ignore_args(const Args &...)
-{
-}
-
 // Dependent false for static_assert in if constexpr.
 // http://en.cppreference.com/w/cpp/language/if#Constexpr_If
 template <typename T>
@@ -593,9 +587,12 @@ private:
     // range. The children nodes will be appended in depth-first order to tree. crit_nodes is the local
     // list of critical nodes, crit_ancestor a flag signalling if the parent node or one of its
     // ancestors is a critical node.
+    // NOTE: here and elsewhere the use of [[maybe_unused]] is a bit random, as we use to suppress
+    // GCC warnings which also look rather random (e.g., it complains about some unused
+    // arguments but not others).
     template <unsigned ParentLevel, typename CIt>
-    size_type build_tree_ser_impl(tree_type &tree, cnode_list_type &crit_nodes, UInt parent_code, CIt begin, CIt end,
-                                  bool crit_ancestor)
+    size_type build_tree_ser_impl(tree_type &tree, cnode_list_type &crit_nodes, [[maybe_unused]] UInt parent_code,
+                                  CIt begin, CIt end, bool crit_ancestor)
     {
         if constexpr (ParentLevel < cbits) {
             assert(tree_level<NDim>(parent_code) == ParentLevel);
@@ -697,8 +694,6 @@ private:
         } else {
             // NOTE: if we end up here, it means we walked through all the recursion levels
             // and we cannot go any deeper.
-            // GCC warnings about unused params.
-            ignore_args(parent_code, begin, end);
             return 0;
         }
     }
@@ -709,8 +704,8 @@ private:
     // have codes in the [begin, end) range. crit_nodes is the global list of lists of critical nodes, crit_ancestor a
     // flag signalling if the parent node or one of its ancestors is a critical node.
     template <unsigned ParentLevel, typename Out, typename CritNodes, typename CIt>
-    size_type build_tree_par_impl(Out &trees, CritNodes &crit_nodes, UInt parent_code, CIt begin, CIt end,
-                                  unsigned split_level, bool crit_ancestor)
+    size_type build_tree_par_impl(Out &trees, CritNodes &crit_nodes, [[maybe_unused]] UInt parent_code, CIt begin,
+                                  CIt end, [[maybe_unused]] unsigned split_level, [[maybe_unused]] bool crit_ancestor)
     {
         if constexpr (ParentLevel < cbits) {
             assert(tree_level<NDim>(parent_code) == ParentLevel);
@@ -790,7 +785,6 @@ private:
             tg.wait();
             return retval.load();
         } else {
-            ignore_args(parent_code, begin, end, split_level, crit_ancestor);
             return 0;
         }
     }
@@ -1570,22 +1564,20 @@ private:
     void tree_self_interactions(F eps2, size_type tgt_size, const std::array<const F *, NDim + 1u> &p_ptrs,
                                 const std::array<F *, nvecs_res<Q>> &res_ptrs) const
     {
-        // Pointer to the masses.
-        const auto m_ptr = p_ptrs[NDim];
         if constexpr (simd_enabled && NDim == 3u) {
             // xsimd batch type.
             using batch_type = xsimd::simd_type<F>;
             // Size of batch_type.
             constexpr auto batch_size = batch_type::size;
-            // Shortcuts to the node coordinates.
-            const auto x_ptr = p_ptrs[0], y_ptr = p_ptrs[1], z_ptr = p_ptrs[2];
+            // Shortcuts to the node coordinates/masses.
+            const auto [x_ptr, y_ptr, z_ptr, m_ptr] = p_ptrs;
             // Softening length, vector version.
             const batch_type eps2_vec(eps2);
             if constexpr (Q == 0u) {
                 // Q == 0, accelerations only.
                 //
                 // Shortcuts to the result vectors.
-                const auto res_x = res_ptrs[0], res_y = res_ptrs[1], res_z = res_ptrs[2];
+                const auto [res_x, res_y, res_z] = res_ptrs;
                 for (size_type i1 = 0; i1 < tgt_size; i1 += batch_size) {
                     // Load the first batch of particles.
                     const auto xvec1 = xsimd::load_aligned(x_ptr + i1), yvec1 = xsimd::load_aligned(y_ptr + i1),
@@ -1677,7 +1669,7 @@ private:
                 // Q == 2, accelerations and potentials.
                 //
                 // Shortcuts to the result vectors.
-                const auto res_x = res_ptrs[0], res_y = res_ptrs[1], res_z = res_ptrs[2], res_pot = res_ptrs[3];
+                const auto [res_x, res_y, res_z, res_pot] = res_ptrs;
                 for (size_type i1 = 0; i1 < tgt_size; i1 += batch_size) {
                     // Load the first batch of particles.
                     const auto xvec1 = xsimd::load_aligned(x_ptr + i1), yvec1 = xsimd::load_aligned(y_ptr + i1),
@@ -1736,6 +1728,8 @@ private:
                 }
             }
         } else {
+            // Pointer to the masses.
+            const auto m_ptr = p_ptrs[NDim];
             // Temporary vectors to be used in the loops below.
             std::array<F, NDim> diffs, pos1;
             for (size_type i1 = 0; i1 < tgt_size; ++i1) {
@@ -1820,7 +1814,7 @@ private:
             // Vector version of eps2.
             const batch_type eps2_vec(eps2);
             // Pointers to the target node data.
-            const auto x_ptr1 = p_ptrs[0], y_ptr1 = p_ptrs[1], z_ptr1 = p_ptrs[2];
+            const auto [x_ptr1, y_ptr1, z_ptr1, m_ptr1] = p_ptrs;
             // Pointers to the source node data.
             const auto x_ptr2 = m_parts[0].data() + src_begin, y_ptr2 = m_parts[1].data() + src_begin,
                        z_ptr2 = m_parts[2].data() + src_begin, m_ptr2 = m_parts[3].data() + src_begin;
@@ -1828,7 +1822,7 @@ private:
                 // Q == 0, accelerations only.
                 //
                 // Pointers to the result data.
-                const auto res_x = res_ptrs[0], res_y = res_ptrs[1], res_z = res_ptrs[2];
+                const auto [res_x, res_y, res_z] = res_ptrs;
                 for (size_type i = 0; i < tgt_size; i += batch_size) {
                     // Load the current batch of target data.
                     const auto xvec1 = batch_type(x_ptr1 + i, xsimd::aligned_mode{}),
@@ -1855,8 +1849,6 @@ private:
                 //
                 // Pointer to the result data.
                 const auto res = res_ptrs[0];
-                // Pointer to the target masses.
-                const auto m_ptr1 = p_ptrs[3];
                 for (size_type i = 0; i < tgt_size; i += batch_size) {
                     // Load the current batch of target data.
                     const auto xvec1 = batch_type(x_ptr1 + i, xsimd::aligned_mode{}),
@@ -1883,9 +1875,7 @@ private:
                 // Q == 2, accelerations and potentials.
                 //
                 // Pointers to the result data.
-                const auto res_x = res_ptrs[0], res_y = res_ptrs[1], res_z = res_ptrs[2], res_pot = res_ptrs[3];
-                // Pointer to the target masses.
-                const auto m_ptr1 = p_ptrs[3];
+                const auto [res_x, res_y, res_z, res_pot] = res_ptrs;
                 for (size_type i = 0; i < tgt_size; i += batch_size) {
                     // Load the current batch of target data.
                     const auto xvec1 = batch_type(x_ptr1 + i, xsimd::aligned_mode{}),
@@ -1921,8 +1911,7 @@ private:
                     pos1[j] = p_ptrs[j][i1];
                 }
                 // Load the target mass, but only if we are interested in the potentials.
-                F m1;
-                (void)m1;
+                [[maybe_unused]] F m1;
                 if constexpr (Q == 1u || Q == 2u) {
                     m1 = p_ptrs[NDim][i1];
                 }
@@ -1970,13 +1959,12 @@ private:
             // Vector version of the source node mass.
             const batch_type m_src_vec(m_src);
             if constexpr (Q == 0u) {
-                (void)p_ptrs;
                 // Q == 0, accelerations only.
                 //
                 // Pointers to the temporary coordinate diffs and 1/dist3 values computed in the BH check.
-                const auto tmp_x = tmp_ptrs[0], tmp_y = tmp_ptrs[1], tmp_z = tmp_ptrs[2], tmp_dist3 = tmp_ptrs[3];
+                const auto [tmp_x, tmp_y, tmp_z, tmp_dist3] = tmp_ptrs;
                 // Pointers to the result arrays.
-                const auto res_x = res_ptrs[0], res_y = res_ptrs[1], res_z = res_ptrs[2];
+                const auto [res_x, res_y, res_z] = res_ptrs;
                 for (size_type i = 0; i < tgt_size; i += batch_size) {
                     // Compute m_src/dist**3 and load the differences.
                     const auto m_src_dist3_vec = use_fast_inv_sqrt<batch_type>
@@ -2016,12 +2004,11 @@ private:
                 // Q == 2, accelerations and potentials.
                 //
                 // Pointers to the temporary coordinate diffs, 1/dist3 and 1/dist values computed in the BH check.
-                const auto tmp_x = tmp_ptrs[0], tmp_y = tmp_ptrs[1], tmp_z = tmp_ptrs[2], tmp_dist3 = tmp_ptrs[3],
-                           tmp_dist = tmp_ptrs[4];
+                const auto [tmp_x, tmp_y, tmp_z, tmp_dist3, tmp_dist] = tmp_ptrs;
                 // Pointer to the target masses.
                 const auto m_ptr = p_ptrs[3];
                 // Pointers to the result arrays.
-                const auto res_x = res_ptrs[0], res_y = res_ptrs[1], res_z = res_ptrs[2], res_pot = res_ptrs[3];
+                const auto [res_x, res_y, res_z, res_pot] = res_ptrs;
                 for (size_type i = 0; i < tgt_size; i += batch_size) {
                     // Compute m_src/dist**3, m_src/dist and load the differences.
                     const auto m_src_dist3_vec = use_fast_inv_sqrt<batch_type>
@@ -2048,8 +2035,7 @@ private:
             }
         } else {
             // Init the pointer to the target masses, but only if potentials are requested.
-            const F *m_ptr;
-            (void)m_ptr;
+            [[maybe_unused]] const F *m_ptr;
             if constexpr (Q == 1u || Q == 2u) {
                 m_ptr = p_ptrs[3];
             }
@@ -2130,12 +2116,12 @@ private:
             const batch_type src_dim2_vec(src_dim2), theta2_vec(theta2), eps2_vec(eps2), x_com_vec(com_pos[0]),
                 y_com_vec(com_pos[1]), z_com_vec(com_pos[2]);
             // Pointers to the coordinates.
-            const auto x_ptr = p_ptrs[0], y_ptr = p_ptrs[1], z_ptr = p_ptrs[2];
+            const auto [x_ptr, y_ptr, z_ptr, m_ptr] = p_ptrs;
             if constexpr (Q == 0u) {
                 // Q == 0, accelerations only.
                 //
                 // Pointers to the temporary data.
-                const auto tmp_x = tmp_ptrs[0], tmp_y = tmp_ptrs[1], tmp_z = tmp_ptrs[2], tmp_dist3 = tmp_ptrs[3];
+                const auto [tmp_x, tmp_y, tmp_z, tmp_dist3] = tmp_ptrs;
                 for (size_type i = 0; i < tgt_size; i += batch_size) {
                     const auto diff_x = x_com_vec - batch_type(x_ptr + i, xsimd::aligned_mode{}),
                                diff_y = y_com_vec - batch_type(y_ptr + i, xsimd::aligned_mode{}),
@@ -2186,8 +2172,7 @@ private:
                 // Q == 2, accelerations and potentials.
                 //
                 // Pointers to the temporary data.
-                const auto tmp_x = tmp_ptrs[0], tmp_y = tmp_ptrs[1], tmp_z = tmp_ptrs[2], tmp_dist3 = tmp_ptrs[3],
-                           tmp_dist = tmp_ptrs[4];
+                const auto [tmp_x, tmp_y, tmp_z, tmp_dist3, tmp_dist] = tmp_ptrs;
                 for (size_type i = 0; i < tgt_size; i += batch_size) {
                     const auto diff_x = x_com_vec - batch_type(x_ptr + i, xsimd::aligned_mode{}),
                                diff_y = y_com_vec - batch_type(y_ptr + i, xsimd::aligned_mode{}),
@@ -2296,9 +2281,10 @@ private:
             const auto src_code = get<0>(src_node);
             // Number of children of the source node.
             const auto n_children_src = get<1>(src_node)[2];
-            if (src_code == tgt_code) {
+            if (rakau_unlikely(src_code == tgt_code)) {
                 // If src_code == tgt_code, we are currently visiting the target node.
                 // Compute the self interactions and skip all the children of the target node.
+                // NOTE: mark it as unlikely as we will run into this condition only once per traversal.
                 tree_self_interactions<Q>(eps2, tgt_size, p_ptrs, res_ptrs);
                 src_idx += n_children_src + 1u;
                 continue;
