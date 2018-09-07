@@ -222,12 +222,18 @@ struct morton_encoder<2, std::uint32_t> {
     }
 };
 
+// Computation of the cbits value (number of bits to use
+// in the morton encoding for each coordinate).
 template <typename UInt, std::size_t NDim>
-inline constexpr unsigned cbits_v = []() {
+constexpr auto compute_cbits_v()
+{
     constexpr unsigned nbits = std::numeric_limits<UInt>::digits;
     static_assert(nbits > NDim, "The number of bits must be greater than the number of dimensions.");
     return static_cast<unsigned>(nbits / NDim - !(nbits % NDim));
-}();
+}
+
+template <typename UInt, std::size_t NDim>
+inline constexpr unsigned cbits_v = compute_cbits_v<UInt, NDim>();
 
 // clz wrapper. n must be a nonzero unsigned integral.
 template <typename UInt>
@@ -366,7 +372,9 @@ struct di_aligned_allocator {
     // Alignment must be either zero or:
     // - not less than the natural alignment of T,
     // - a power of 2.
-    static_assert(!Alignment || (Alignment >= alignof(T) && (Alignment & (Alignment - 1u)) == 0u));
+    static_assert(
+        !Alignment || (Alignment >= alignof(T) && (Alignment & (Alignment - 1u)) == 0u),
+        "Invalid alignment value: the alignment must be a power of 2 and not less than the natural alignment of T.");
     // value_type must always be present.
     using value_type = T;
     // Make sure the size_type is consistent with the size type returned
@@ -539,15 +547,16 @@ template <std::size_t NDim, typename F, typename UInt = std::size_t>
 class tree
 {
     // Need at least 1 dimension.
-    static_assert(NDim);
+    static_assert(NDim, "The number of dimensions must be at least 1.");
     // We need to compute NDim + N safely. Currently, N is up to 2
     // (NDim + 2 vectors are needed in the temporary storage when both
     // accelerations and potentials are requested).
-    static_assert(NDim <= std::numeric_limits<std::size_t>::max() - 2u);
+    static_assert(NDim <= std::numeric_limits<std::size_t>::max() - 2u, "The number of dimensions is too high.");
     // Only C++ FP types are supported at the moment.
-    static_assert(std::is_floating_point_v<F>);
+    static_assert(std::is_floating_point_v<F>, "The type F must be a C++ floating-point type.");
     // UInt must be an unsigned integral.
-    static_assert(std::is_integral_v<UInt> && std::is_unsigned_v<UInt>);
+    static_assert(std::is_integral_v<UInt> && std::is_unsigned_v<UInt>,
+                  "The type UInt must be a C++ unsigned integral type.");
     // cbits shortcut.
     static constexpr unsigned cbits = cbits_v<UInt, NDim>;
     // simd_enabled shortcut.
