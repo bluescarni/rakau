@@ -151,7 +151,7 @@ TEST_CASE("ctors")
         REQUIRE(t3.get_max_leaf_n() == default_max_leaf_n);
         REQUIRE(t3.get_ncrit() == default_ncrit);
         // Self assignments.
-        t4a = t4a;
+        t4a = *&t4a;
         REQUIRE(t4a.get_box_size() == fp_type(21));
         REQUIRE(t4a.get_box_size_deduced());
         REQUIRE(t4a.get_max_leaf_n() == default_max_leaf_n);
