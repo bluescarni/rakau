@@ -163,10 +163,13 @@ struct morton_encoder<3, std::uint64_t> {
         assert(y < (1ul << 21));
         assert(z < (1ul << 21));
         assert(
-            !(::m3D_e_sLUT<std::uint64_t, std::uint32_t>(std::uint32_t(x), std::uint32_t(y), std::uint32_t(z)) >> 63u));
-        assert((::morton3D_64_encode(x, y, z)
-                == ::m3D_e_sLUT<std::uint64_t, std::uint32_t>(std::uint32_t(x), std::uint32_t(y), std::uint32_t(z))));
-        return ::m3D_e_sLUT<std::uint64_t, std::uint32_t>(std::uint32_t(x), std::uint32_t(y), std::uint32_t(z));
+            !(libmorton::m3D_e_sLUT<std::uint64_t, std::uint32_t>(std::uint32_t(x), std::uint32_t(y), std::uint32_t(z))
+              >> 63u));
+        assert((libmorton::morton3D_64_encode(x, y, z)
+                == libmorton::m3D_e_sLUT<std::uint64_t, std::uint32_t>(std::uint32_t(x), std::uint32_t(y),
+                                                                       std::uint32_t(z))));
+        return libmorton::m3D_e_sLUT<std::uint64_t, std::uint32_t>(std::uint32_t(x), std::uint32_t(y),
+                                                                   std::uint32_t(z));
     }
 };
 
@@ -182,10 +185,13 @@ struct morton_encoder<3, std::uint32_t> {
         assert(y < (1ul << 10));
         assert(z < (1ul << 10));
         assert(
-            !(::m3D_e_sLUT<std::uint32_t, std::uint32_t>(std::uint32_t(x), std::uint32_t(y), std::uint32_t(z)) >> 31u));
-        assert((::morton3D_32_encode(x, y, z)
-                == ::m3D_e_sLUT<std::uint32_t, std::uint32_t>(std::uint32_t(x), std::uint32_t(y), std::uint32_t(z))));
-        return ::m3D_e_sLUT<std::uint32_t, std::uint32_t>(std::uint32_t(x), std::uint32_t(y), std::uint32_t(z));
+            !(libmorton::m3D_e_sLUT<std::uint32_t, std::uint32_t>(std::uint32_t(x), std::uint32_t(y), std::uint32_t(z))
+              >> 31u));
+        assert((libmorton::morton3D_32_encode(x, y, z)
+                == libmorton::m3D_e_sLUT<std::uint32_t, std::uint32_t>(std::uint32_t(x), std::uint32_t(y),
+                                                                       std::uint32_t(z))));
+        return libmorton::m3D_e_sLUT<std::uint32_t, std::uint32_t>(std::uint32_t(x), std::uint32_t(y),
+                                                                   std::uint32_t(z));
     }
 };
 
@@ -199,10 +205,10 @@ struct morton_encoder<2, std::uint64_t> {
         const auto y = *(it + 1);
         assert(x < (1ul << 31));
         assert(y < (1ul << 31));
-        assert(!(::m2D_e_sLUT<std::uint64_t, std::uint32_t>(std::uint32_t(x), std::uint32_t(y)) >> 63u));
-        assert((::morton2D_64_encode(x, y)
-                == ::m2D_e_sLUT<std::uint64_t, std::uint32_t>(std::uint32_t(x), std::uint32_t(y))));
-        return ::m2D_e_sLUT<std::uint64_t, std::uint32_t>(std::uint32_t(x), std::uint32_t(y));
+        assert(!(libmorton::m2D_e_sLUT<std::uint64_t, std::uint32_t>(std::uint32_t(x), std::uint32_t(y)) >> 63u));
+        assert((libmorton::morton2D_64_encode(x, y)
+                == libmorton::m2D_e_sLUT<std::uint64_t, std::uint32_t>(std::uint32_t(x), std::uint32_t(y))));
+        return libmorton::m2D_e_sLUT<std::uint64_t, std::uint32_t>(std::uint32_t(x), std::uint32_t(y));
     }
 };
 
@@ -215,10 +221,10 @@ struct morton_encoder<2, std::uint32_t> {
         const auto y = *(it + 1);
         assert(x < (1ul << 15));
         assert(y < (1ul << 15));
-        assert(!(::m2D_e_sLUT<std::uint32_t, std::uint32_t>(std::uint32_t(x), std::uint32_t(y)) >> 31u));
-        assert((::morton2D_32_encode(x, y)
-                == ::m2D_e_sLUT<std::uint32_t, std::uint32_t>(std::uint32_t(x), std::uint32_t(y))));
-        return ::m2D_e_sLUT<std::uint32_t, std::uint32_t>(std::uint32_t(x), std::uint32_t(y));
+        assert(!(libmorton::m2D_e_sLUT<std::uint32_t, std::uint32_t>(std::uint32_t(x), std::uint32_t(y)) >> 31u));
+        assert((libmorton::morton2D_32_encode(x, y)
+                == libmorton::m2D_e_sLUT<std::uint32_t, std::uint32_t>(std::uint32_t(x), std::uint32_t(y))));
+        return libmorton::m2D_e_sLUT<std::uint32_t, std::uint32_t>(std::uint32_t(x), std::uint32_t(y));
     }
 };
 
