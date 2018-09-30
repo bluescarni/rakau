@@ -535,8 +535,8 @@ inline constexpr unsigned default_ncrit = 16;
 //   review the tree creation code for better performance, possibly when we switch to another task library.
 // - add more MACs (e.g., the one from bonsai and the one from the gothic paper from Warren et al).
 // - double precision benchmarking/tuning.
-// - potential tuning (possibly not much improvement to be had there, but it should be investigated a bit
-//   at least).
+// - tuning for the potential computation (possibly not much improvement to be had there, but it should be investigated
+//   a bit at least).
 // - we currently define critical nodes those nodes with < ncrit particles. Some papers say that it's worth
 //   to check also the node's size, as a crit node whose size is very large will likely result in traversal lists
 //   which are not very similar to each other (which, in turn, means that during tree traversal the BH check
