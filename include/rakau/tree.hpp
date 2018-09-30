@@ -601,7 +601,7 @@ private:
     // arguments but not others).
     template <unsigned ParentLevel, typename CIt>
     size_type build_tree_ser_impl(tree_type &tree, cnode_list_type &crit_nodes, [[maybe_unused]] UInt parent_code,
-                                  CIt begin, CIt end, bool crit_ancestor)
+                                  [[maybe_unused]] CIt begin, [[maybe_unused]] CIt end, bool crit_ancestor)
     {
         if constexpr (ParentLevel < cbits) {
             assert(tree_level<NDim>(parent_code) == ParentLevel);
@@ -713,8 +713,9 @@ private:
     // have codes in the [begin, end) range. crit_nodes is the global list of lists of critical nodes, crit_ancestor a
     // flag signalling if the parent node or one of its ancestors is a critical node.
     template <unsigned ParentLevel, typename Out, typename CritNodes, typename CIt>
-    size_type build_tree_par_impl(Out &trees, CritNodes &crit_nodes, [[maybe_unused]] UInt parent_code, CIt begin,
-                                  CIt end, [[maybe_unused]] unsigned split_level, [[maybe_unused]] bool crit_ancestor)
+    size_type build_tree_par_impl(Out &trees, CritNodes &crit_nodes, [[maybe_unused]] UInt parent_code,
+                                  [[maybe_unused]] CIt begin, [[maybe_unused]] CIt end,
+                                  [[maybe_unused]] unsigned split_level, [[maybe_unused]] bool crit_ancestor)
     {
         if constexpr (ParentLevel < cbits) {
             assert(tree_level<NDim>(parent_code) == ParentLevel);
@@ -2126,6 +2127,7 @@ private:
                 y_com_vec(com_pos[1]), z_com_vec(com_pos[2]);
             // Pointers to the coordinates.
             const auto [x_ptr, y_ptr, z_ptr, m_ptr] = p_ptrs;
+            (void)m_ptr;
             if constexpr (Q == 0u) {
                 // Q == 0, accelerations only.
                 //
