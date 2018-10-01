@@ -27,9 +27,9 @@ using namespace rakau_test;
 
 using fp_types = std::tuple<float, double>;
 
-static std::mt19937 rng;
+static std::mt19937 rng(1);
 
-TEST_CASE("g constant")
+TEST_CASE("g constant accelerations")
 {
     tuple_for_each(fp_types{}, [](auto x) {
         using fp_type = decltype(x);

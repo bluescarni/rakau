@@ -82,17 +82,22 @@ inline xsimd::batch<F, N> inv_sqrt_newton_iter(xsimd::batch<F, N> y0, xsimd::bat
 // Computation of 1/sqrt(x)**3 via fast rsqrt.
 #if XSIMD_X86_INSTR_SET >= XSIMD_X86_AVX512_VERSION
 
-inline xsimd::batch<float, 16> inv_sqrt_3(xsimd::batch<float, 16> x)
+inline xsimd::batch<float, 16> inv_sqrt(xsimd::batch<float, 16> x)
 {
     // NOTE: AVX512-ER has an intrinsic for 28-bit precision (rather than 14-bit)
     // rsqrt, but it does not seem to be widely available yet.
 #if defined(RAKAU_WITH_SIMD_COUNTERS)
     // Increase the corresponding TL counter, if requested.
-    // NOTE: these inv_sqrt_3 functions are the only places where
+    // NOTE: these inv_sqrt functions are the only places where
     // we use the rsqrt intrinsics.
     ++simd_rsqrt_counter_tl;
 #endif
-    const auto tmp = inv_sqrt_newton_iter(xsimd::batch<float, 16>(_mm512_rsqrt14_ps(x)), x);
+    return inv_sqrt_newton_iter(xsimd::batch<float, 16>(_mm512_rsqrt14_ps(x)), x);
+}
+
+inline xsimd::batch<float, 16> inv_sqrt_3(xsimd::batch<float, 16> x)
+{
+    const auto tmp = inv_sqrt(x);
     return tmp * tmp * tmp;
 }
 
@@ -100,12 +105,17 @@ inline xsimd::batch<float, 16> inv_sqrt_3(xsimd::batch<float, 16> x)
 
 #if XSIMD_X86_INSTR_SET >= XSIMD_X86_AVX_VERSION
 
-inline xsimd::batch<float, 8> inv_sqrt_3(xsimd::batch<float, 8> x)
+inline xsimd::batch<float, 8> inv_sqrt(xsimd::batch<float, 8> x)
 {
 #if defined(RAKAU_WITH_SIMD_COUNTERS)
     ++simd_rsqrt_counter_tl;
 #endif
-    const auto tmp = inv_sqrt_newton_iter(xsimd::batch<float, 8>(_mm256_rsqrt_ps(x)), x);
+    return inv_sqrt_newton_iter(xsimd::batch<float, 8>(_mm256_rsqrt_ps(x)), x);
+}
+
+inline xsimd::batch<float, 8> inv_sqrt_3(xsimd::batch<float, 8> x)
+{
+    const auto tmp = inv_sqrt(x);
     return tmp * tmp * tmp;
 }
 

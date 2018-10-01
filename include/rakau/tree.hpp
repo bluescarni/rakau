@@ -92,17 +92,24 @@
 
 #include <rakau/detail/simd.hpp>
 
+// likely/unlikely macros, for those compilers known to support them.
+#if defined(__clang__) || defined(__GNUC__) || defined(__INTEL_COMPILER)
+
+#define rakau_likely(condition) __builtin_expect(static_cast<bool>(condition), 1)
+#define rakau_unlikely(condition) __builtin_expect(static_cast<bool>(condition), 0)
+
+#else
+
+#define rakau_likely(condition) (condition)
+#define rakau_unlikely(condition) (condition)
+
+#endif
+
 namespace rakau
 {
 
 inline namespace detail
 {
-
-// Helper to ignore unused args in functions.
-template <typename... Args>
-inline void ignore_args(const Args &...)
-{
-}
 
 // Dependent false for static_assert in if constexpr.
 // http://en.cppreference.com/w/cpp/language/if#Constexpr_If
@@ -157,10 +164,13 @@ struct morton_encoder<3, std::uint64_t> {
         assert(y < (1ul << 21));
         assert(z < (1ul << 21));
         assert(
-            !(::m3D_e_sLUT<std::uint64_t, std::uint32_t>(std::uint32_t(x), std::uint32_t(y), std::uint32_t(z)) >> 63u));
-        assert((::morton3D_64_encode(x, y, z)
-                == ::m3D_e_sLUT<std::uint64_t, std::uint32_t>(std::uint32_t(x), std::uint32_t(y), std::uint32_t(z))));
-        return ::m3D_e_sLUT<std::uint64_t, std::uint32_t>(std::uint32_t(x), std::uint32_t(y), std::uint32_t(z));
+            !(libmorton::m3D_e_sLUT<std::uint64_t, std::uint32_t>(std::uint32_t(x), std::uint32_t(y), std::uint32_t(z))
+              >> 63u));
+        assert((libmorton::morton3D_64_encode(x, y, z)
+                == libmorton::m3D_e_sLUT<std::uint64_t, std::uint32_t>(std::uint32_t(x), std::uint32_t(y),
+                                                                       std::uint32_t(z))));
+        return libmorton::m3D_e_sLUT<std::uint64_t, std::uint32_t>(std::uint32_t(x), std::uint32_t(y),
+                                                                   std::uint32_t(z));
     }
 };
 
@@ -176,10 +186,13 @@ struct morton_encoder<3, std::uint32_t> {
         assert(y < (1ul << 10));
         assert(z < (1ul << 10));
         assert(
-            !(::m3D_e_sLUT<std::uint32_t, std::uint32_t>(std::uint32_t(x), std::uint32_t(y), std::uint32_t(z)) >> 31u));
-        assert((::morton3D_32_encode(x, y, z)
-                == ::m3D_e_sLUT<std::uint32_t, std::uint32_t>(std::uint32_t(x), std::uint32_t(y), std::uint32_t(z))));
-        return ::m3D_e_sLUT<std::uint32_t, std::uint32_t>(std::uint32_t(x), std::uint32_t(y), std::uint32_t(z));
+            !(libmorton::m3D_e_sLUT<std::uint32_t, std::uint32_t>(std::uint32_t(x), std::uint32_t(y), std::uint32_t(z))
+              >> 31u));
+        assert((libmorton::morton3D_32_encode(x, y, z)
+                == libmorton::m3D_e_sLUT<std::uint32_t, std::uint32_t>(std::uint32_t(x), std::uint32_t(y),
+                                                                       std::uint32_t(z))));
+        return libmorton::m3D_e_sLUT<std::uint32_t, std::uint32_t>(std::uint32_t(x), std::uint32_t(y),
+                                                                   std::uint32_t(z));
     }
 };
 
@@ -193,10 +206,10 @@ struct morton_encoder<2, std::uint64_t> {
         const auto y = *(it + 1);
         assert(x < (1ul << 31));
         assert(y < (1ul << 31));
-        assert(!(::m2D_e_sLUT<std::uint64_t, std::uint32_t>(std::uint32_t(x), std::uint32_t(y)) >> 63u));
-        assert((::morton2D_64_encode(x, y)
-                == ::m2D_e_sLUT<std::uint64_t, std::uint32_t>(std::uint32_t(x), std::uint32_t(y))));
-        return ::m2D_e_sLUT<std::uint64_t, std::uint32_t>(std::uint32_t(x), std::uint32_t(y));
+        assert(!(libmorton::m2D_e_sLUT<std::uint64_t, std::uint32_t>(std::uint32_t(x), std::uint32_t(y)) >> 63u));
+        assert((libmorton::morton2D_64_encode(x, y)
+                == libmorton::m2D_e_sLUT<std::uint64_t, std::uint32_t>(std::uint32_t(x), std::uint32_t(y))));
+        return libmorton::m2D_e_sLUT<std::uint64_t, std::uint32_t>(std::uint32_t(x), std::uint32_t(y));
     }
 };
 
@@ -209,19 +222,25 @@ struct morton_encoder<2, std::uint32_t> {
         const auto y = *(it + 1);
         assert(x < (1ul << 15));
         assert(y < (1ul << 15));
-        assert(!(::m2D_e_sLUT<std::uint32_t, std::uint32_t>(std::uint32_t(x), std::uint32_t(y)) >> 31u));
-        assert((::morton2D_32_encode(x, y)
-                == ::m2D_e_sLUT<std::uint32_t, std::uint32_t>(std::uint32_t(x), std::uint32_t(y))));
-        return ::m2D_e_sLUT<std::uint32_t, std::uint32_t>(std::uint32_t(x), std::uint32_t(y));
+        assert(!(libmorton::m2D_e_sLUT<std::uint32_t, std::uint32_t>(std::uint32_t(x), std::uint32_t(y)) >> 31u));
+        assert((libmorton::morton2D_32_encode(x, y)
+                == libmorton::m2D_e_sLUT<std::uint32_t, std::uint32_t>(std::uint32_t(x), std::uint32_t(y))));
+        return libmorton::m2D_e_sLUT<std::uint32_t, std::uint32_t>(std::uint32_t(x), std::uint32_t(y));
     }
 };
 
+// Computation of the cbits value (number of bits to use
+// in the morton encoding for each coordinate).
 template <typename UInt, std::size_t NDim>
-inline constexpr unsigned cbits_v = []() {
+constexpr auto compute_cbits_v()
+{
     constexpr unsigned nbits = std::numeric_limits<UInt>::digits;
     static_assert(nbits > NDim, "The number of bits must be greater than the number of dimensions.");
     return static_cast<unsigned>(nbits / NDim - !(nbits % NDim));
-}();
+}
+
+template <typename UInt, std::size_t NDim>
+inline constexpr unsigned cbits_v = compute_cbits_v<UInt, NDim>();
 
 // clz wrapper. n must be a nonzero unsigned integral.
 template <typename UInt>
@@ -360,7 +379,9 @@ struct di_aligned_allocator {
     // Alignment must be either zero or:
     // - not less than the natural alignment of T,
     // - a power of 2.
-    static_assert(!Alignment || (Alignment >= alignof(T) && (Alignment & (Alignment - 1u)) == 0u));
+    static_assert(
+        !Alignment || (Alignment >= alignof(T) && (Alignment & (Alignment - 1u)) == 0u),
+        "Invalid alignment value: the alignment must be a power of 2 and not less than the natural alignment of T.");
     // value_type must always be present.
     using value_type = T;
     // Make sure the size_type is consistent with the size type returned
@@ -479,16 +500,32 @@ inline constexpr bool use_fast_inv_sqrt =
 #endif
     ;
 
+// Default values for the max_leaf_n and ncrit tree parameters.
+// These are determined experimentally from benchmarks on various systems.
+// NOTE: so far we have tested only on x86 systems, where it seems for
+// everything but AVX512 a good combination is 128, 16. For AVX512, 256
+// seems to work better than 128.
+inline constexpr unsigned default_max_leaf_n =
+#if defined(XSIMD_X86_INSTR_SET) && XSIMD_X86_INSTR_SET >= XSIMD_X86_AVX512_VERSION
+    256
+#else
+    128
+#endif
+    ;
+
+// NOTE: a value of 8 might get *slightly* better performance on the
+// acc/pot computations, but it results in a tree twice as big.
+inline constexpr unsigned default_ncrit = 16;
+
 } // namespace detail
 
 // NOTE: possible improvements:
 // - add checks on the finiteness of the internal computations. For instance, we need all particles
 //   distances to be finite (including padding particles in the self-interaction routine), and
 //   we also need all possible accelerations to be finite. Can we do this check fast?
-// - try to hack up some fix for the slowness of the morton encoding in highly parallel setups. This
-//   had something to do with the tbb grain size, as far as I remember.
-// - we should investigate a parallel indirect radix sort implementation based on TBB, as the sorting
-//   of the codes can become the bottleneck in highly parallel situations.
+// - try replace TBB with another task based library. TBB seems to have an increasingly
+//   large overhead as the number of cores increases. If we do this, we need to provide a parallel
+//   sort implementation - most likely a radix based one, to improve performance.
 // - it is still not yet clear to me what the NUMA picture is here. During tree traversal, the results
 //   and the target node data are stored in thread local caches, so maybe we can try to ensure that
 //   at the beginning of traversal we re-init these caches in order to make sure they are allocated
@@ -501,18 +538,32 @@ inline constexpr bool use_fast_inv_sqrt =
 // - we should probably also think about replacing the morton encoder with some generic solution. It does not
 //   need to be super high performance, as morton encoding is hardly a bottleneck here. It's more important for it
 //   to be generic (i.e., work on a general number of dimensions), correct and compact.
-// - consider turning the compile time recursion in the tree builder into a runtime recursion.
+// - consider turning the compile time recursion in the tree builder into a runtime recursion. Generally speaking,
+//   review the tree creation code for better performance, possibly when we switch to another task library.
+// - add more MACs (e.g., the one from bonsai and the one from the gothic paper from Warren et al).
+// - double precision benchmarking/tuning.
+// - tuning for the potential computation (possibly not much improvement to be had there, but it should be investigated
+//   a bit at least).
+// - we currently define critical nodes those nodes with < ncrit particles. Some papers say that it's worth
+//   to check also the node's size, as a crit node whose size is very large will likely result in traversal lists
+//   which are not very similar to each other (which, in turn, means that during tree traversal the BH check
+//   will fail often). It's probably best to start experimenting with such size as a free parameter, check the
+//   performance with various values and then try to understand if there's any heuristic we can deduce from that.
+// - quadrupole moments.
 template <std::size_t NDim, typename F, typename UInt = std::size_t>
 class tree
 {
     // Need at least 1 dimension.
-    static_assert(NDim);
-    // We often need to compute NDim + 1.
-    static_assert(NDim < std::numeric_limits<std::size_t>::max());
+    static_assert(NDim, "The number of dimensions must be at least 1.");
+    // We need to compute NDim + N safely. Currently, N is up to 2
+    // (NDim + 2 vectors are needed in the temporary storage when both
+    // accelerations and potentials are requested).
+    static_assert(NDim <= std::numeric_limits<std::size_t>::max() - 2u, "The number of dimensions is too high.");
     // Only C++ FP types are supported at the moment.
-    static_assert(std::is_floating_point_v<F>);
+    static_assert(std::is_floating_point_v<F>, "The type F must be a C++ floating-point type.");
     // UInt must be an unsigned integral.
-    static_assert(std::is_integral_v<UInt> && std::is_unsigned_v<UInt>);
+    static_assert(std::is_integral_v<UInt> && std::is_unsigned_v<UInt>,
+                  "The type UInt must be a C++ unsigned integral type.");
     // cbits shortcut.
     static constexpr unsigned cbits = cbits_v<UInt, NDim>;
     // simd_enabled shortcut.
@@ -552,9 +603,12 @@ private:
     // range. The children nodes will be appended in depth-first order to tree. crit_nodes is the local
     // list of critical nodes, crit_ancestor a flag signalling if the parent node or one of its
     // ancestors is a critical node.
+    // NOTE: here and elsewhere the use of [[maybe_unused]] is a bit random, as we use to suppress
+    // GCC warnings which also look rather random (e.g., it complains about some unused
+    // arguments but not others).
     template <unsigned ParentLevel, typename CIt>
-    size_type build_tree_ser_impl(tree_type &tree, cnode_list_type &crit_nodes, UInt parent_code, CIt begin, CIt end,
-                                  bool crit_ancestor)
+    size_type build_tree_ser_impl(tree_type &tree, cnode_list_type &crit_nodes, [[maybe_unused]] UInt parent_code,
+                                  [[maybe_unused]] CIt begin, [[maybe_unused]] CIt end, bool crit_ancestor)
     {
         if constexpr (ParentLevel < cbits) {
             assert(tree_level<NDim>(parent_code) == ParentLevel);
@@ -656,8 +710,6 @@ private:
         } else {
             // NOTE: if we end up here, it means we walked through all the recursion levels
             // and we cannot go any deeper.
-            // GCC warnings about unused params.
-            ignore_args(parent_code, begin, end);
             return 0;
         }
     }
@@ -668,8 +720,9 @@ private:
     // have codes in the [begin, end) range. crit_nodes is the global list of lists of critical nodes, crit_ancestor a
     // flag signalling if the parent node or one of its ancestors is a critical node.
     template <unsigned ParentLevel, typename Out, typename CritNodes, typename CIt>
-    size_type build_tree_par_impl(Out &trees, CritNodes &crit_nodes, UInt parent_code, CIt begin, CIt end,
-                                  unsigned split_level, bool crit_ancestor)
+    size_type build_tree_par_impl(Out &trees, CritNodes &crit_nodes, [[maybe_unused]] UInt parent_code,
+                                  [[maybe_unused]] CIt begin, [[maybe_unused]] CIt end,
+                                  [[maybe_unused]] unsigned split_level, [[maybe_unused]] bool crit_ancestor)
     {
         if constexpr (ParentLevel < cbits) {
             assert(tree_level<NDim>(parent_code) == ParentLevel);
@@ -749,7 +802,6 @@ private:
             tg.wait();
             return retval.load();
         } else {
-            ignore_args(parent_code, begin, end, split_level, crit_ancestor);
             return 0;
         }
     }
@@ -758,6 +810,7 @@ private:
         simple_timer st("node building");
         // Make sure we always have an empty tree when invoking this method.
         assert(m_tree.empty());
+        assert(m_crit_nodes.empty());
         // Exit early if there are no particles.
         if (!m_codes.size()) {
             return;
@@ -989,21 +1042,24 @@ private:
             // Rescale by factor.
             tmp *= factor;
             // Check: don't end up with a nonfinite value.
-            if (!std::isfinite(tmp)) {
+            if (rakau_unlikely(!std::isfinite(tmp))) {
                 throw std::invalid_argument("While trying to discretise the input coordinate " + std::to_string(x)
+                                            + " in a box of size " + std::to_string(m_box_size)
                                             + ", the non-finite value " + std::to_string(tmp) + " was generated");
             }
             // Check: don't end up outside the [0, factor) range.
-            if (tmp < F(0) || tmp >= F(factor)) {
+            if (rakau_unlikely(tmp < F(0) || tmp >= F(factor))) {
                 throw std::invalid_argument("The discretisation of the input coordinate " + std::to_string(x)
+                                            + " in a box of size " + std::to_string(m_box_size)
                                             + " produced the floating-point value " + std::to_string(tmp)
                                             + ", which is outside the allowed bounds");
             }
             // Cast to UInt and write to retval.
             retval[j] = static_cast<UInt>(tmp);
             // Last check, make sure we don't overflow.
-            if (retval[j] >= factor) {
+            if (rakau_unlikely(retval[j] >= factor)) {
                 throw std::invalid_argument("The discretisation of the input coordinate " + std::to_string(x)
+                                            + " in a box of size " + std::to_string(m_box_size)
                                             + " produced the integral value " + std::to_string(retval[j])
                                             + ", which is outside the allowed bounds");
             }
@@ -1038,17 +1094,10 @@ private:
             return codes_ptr[idx1] < codes_ptr[idx2];
         });
     }
-    // Small helper to check that the box size is sane.
-    static void check_box_size(const F &box_size)
-    {
-        if (!std::isfinite(box_size) || box_size <= F(0)) {
-            throw std::invalid_argument("The box size must be a finite positive value, but it is "
-                                        + std::to_string(box_size) + " instead");
-        }
-    }
     // Determine the box size from an input sequence of iterators representing the coordinates and
     // the masses (unused) of the particles in the simulation.
     // NOTE: this function assumes we can index into It up to N.
+    // NOTE: this function is safe for N == 0 (it will return zero in that case).
     template <typename It>
     static F determine_box_size(const std::array<It, NDim + 1u> &cm_it, const size_type &N)
     {
@@ -1061,7 +1110,8 @@ private:
         // will be std::array<F, NDim>{}, that is, all max coordinates will be zero.
         tbb::enumerable_thread_specific<std::array<F, NDim>> max_coords(std::array<F, NDim>{});
         tbb::parallel_for(tbb::blocked_range<size_type>(0u, N), [&cm_it, &max_coords](const auto &range) {
-            auto &local_max = max_coords.local();
+            // Copy locally the current max coords array.
+            auto local_max = max_coords.local();
             for (auto i = range.begin(); i != range.end(); ++i) {
                 for (std::size_t j = 0; j < NDim; ++j) {
                     const auto tmp = std::abs(*(cm_it[j] + static_cast<it_diff_t>(i)));
@@ -1073,8 +1123,13 @@ private:
                     local_max[j] = std::max(local_max[j], tmp);
                 }
             }
+            // Store the updated max coords.
+            max_coords.local() = local_max;
         });
         // Combine the maxima from all threads into a single maximum vector.
+        // NOTE: if max_coords is empty (i.e., for N == 0), the combine function will return a
+        // copy of the element used in the construction of the enumerable_thread_specific object,
+        // that is, an array of zeroes.
         const auto mc = max_coords.combine([](const auto &c1, const auto &c2) {
             std::array<F, NDim> retval;
             for (std::size_t j = 0; j < NDim; ++j) {
@@ -1093,18 +1148,21 @@ private:
         }
         return retval;
     }
-
-public:
+    // Private constructor for implementation purposes. This is the constructor called by all the other ones.
     // NOTE: It needs to be a random access iterator, as we need to index into it for parallel iteration.
     template <typename It>
-    explicit tree(const F &box_size, const std::array<It, NDim + 1u> &cm_it, const size_type &N,
+    explicit tree(const F &box_size, bool box_size_deduced, const std::array<It, NDim + 1u> &cm_it, const size_type &N,
                   const size_type &max_leaf_n, const size_type &ncrit)
-        : m_box_size(box_size), m_size_deduced(box_size == F(0)), m_max_leaf_n(max_leaf_n), m_ncrit(ncrit)
+        : m_box_size(box_size), m_box_size_deduced(box_size_deduced), m_max_leaf_n(max_leaf_n), m_ncrit(ncrit)
     {
         simple_timer st("overall tree construction");
-        // Check the box size, if it is not deduced.
-        if (!m_size_deduced) {
-            check_box_size(box_size);
+        // Param consistency checks: if size is deduced, box_size must be zero.
+        assert(!m_box_size_deduced || m_box_size == F(0));
+        // Box size checks (if automatically deduced, m_box_size is set to zero, so it will
+        // pass the checks).
+        if (!std::isfinite(m_box_size) || m_box_size < F(0)) {
+            throw std::invalid_argument("The box size must be a finite non-negative value, but it is "
+                                        + std::to_string(box_size) + " instead");
         }
         // Check the max_leaf_n param.
         if (!max_leaf_n) {
@@ -1113,12 +1171,7 @@ public:
         // Check the ncrit param.
         if (!ncrit) {
             throw std::invalid_argument("The critical number of particles for the vectorised computation of the "
-                                        "accelerations must be nonzero");
-        }
-        // Get out soon if there's nothing to do.
-        // NOTE: if the size is deduced, we'll end up with a box size of zero.
-        if (!N) {
-            return;
+                                        "potentials/accelerations must be nonzero");
         }
         // Prepare the vectors.
         for (auto &vc : m_parts) {
@@ -1140,7 +1193,8 @@ public:
         m_isort.resize(boost::numeric_cast<decltype(m_isort.size())>(N));
         m_ord_ind.resize(boost::numeric_cast<decltype(m_ord_ind.size())>(N));
         // Deduce the box size, if needed.
-        if (m_size_deduced) {
+        if (m_box_size_deduced) {
+            // NOTE: this function works ok if N == 0.
             m_box_size = determine_box_size(cm_it, N);
         }
         {
@@ -1210,9 +1264,26 @@ public:
             tg.wait();
         }
         // Now let's proceed to the tree construction.
+        // NOTE: these functions work ok if N == 0.
         build_tree();
         // Now move to the computation of the COM of the nodes.
         build_tree_properties();
+    }
+
+public:
+    // Default constructor.
+    tree() : m_box_size(0), m_box_size_deduced(false), m_max_leaf_n(default_max_leaf_n), m_ncrit(default_ncrit) {}
+    template <typename It>
+    explicit tree(const F &box_size, const std::array<It, NDim + 1u> &cm_it, const size_type &N,
+                  const size_type &max_leaf_n = default_max_leaf_n, const size_type &ncrit = default_ncrit)
+        : tree(box_size, false, cm_it, N, max_leaf_n, ncrit)
+    {
+    }
+    template <typename It>
+    explicit tree(const std::array<It, NDim + 1u> &cm_it, const size_type &N,
+                  const size_type &max_leaf_n = default_max_leaf_n, const size_type &ncrit = default_ncrit)
+        : tree(F(0), true, cm_it, N, max_leaf_n, ncrit)
+    {
     }
 
 private:
@@ -1235,45 +1306,35 @@ public:
     // NOTE: as in the other ctor, It must be a ra iterator. This ensures also we can def-construct it in the
     // ctor_ilist_to_array() helper.
     template <typename It>
-    explicit tree(const F &box_size, std::initializer_list<It> cm_it, const size_type &N, const size_type &max_leaf_n,
-                  const size_type &ncrit)
+    explicit tree(const F &box_size, std::initializer_list<It> cm_it, const size_type &N,
+                  const size_type &max_leaf_n = default_max_leaf_n, const size_type &ncrit = default_ncrit)
         : tree(box_size, ctor_ilist_to_array(cm_it), N, max_leaf_n, ncrit)
     {
     }
-    tree(const tree &) = default;
-
-private:
-    // Helper to clear all the internal containers.
-    void clear_containers()
+    template <typename It>
+    explicit tree(std::initializer_list<It> cm_it, const size_type &N, const size_type &max_leaf_n = default_max_leaf_n,
+                  const size_type &ncrit = default_ncrit)
+        : tree(ctor_ilist_to_array(cm_it), N, max_leaf_n, ncrit)
     {
-        for (auto &p : m_parts) {
-            p.clear();
-        }
-        m_codes.clear();
-        m_isort.clear();
-        m_ord_ind.clear();
-        m_tree.clear();
-        m_crit_nodes.clear();
     }
-
-public:
+    tree(const tree &) = default;
     tree(tree &&other) noexcept
-        : m_box_size(std::move(other.m_box_size)), m_size_deduced(other.m_size_deduced),
-          m_max_leaf_n(other.m_max_leaf_n), m_ncrit(other.m_ncrit), m_parts(std::move(other.m_parts)),
-          m_codes(std::move(other.m_codes)), m_isort(std::move(other.m_isort)), m_ord_ind(std::move(other.m_ord_ind)),
-          m_tree(std::move(other.m_tree)), m_crit_nodes(std::move(other.m_crit_nodes))
+        : m_box_size(other.m_box_size), m_box_size_deduced(other.m_box_size_deduced), m_max_leaf_n(other.m_max_leaf_n),
+          m_ncrit(other.m_ncrit), m_parts(std::move(other.m_parts)), m_codes(std::move(other.m_codes)),
+          m_isort(std::move(other.m_isort)), m_ord_ind(std::move(other.m_ord_ind)), m_tree(std::move(other.m_tree)),
+          m_crit_nodes(std::move(other.m_crit_nodes))
     {
-        // Make sure other is left in an empty state, otherwise we might
+        // Make sure other is left in a known state, otherwise we might
         // have in principle assertions failures in the destructor of other
         // in debug mode.
-        other.clear_containers();
+        other.clear();
     }
     tree &operator=(const tree &other)
     {
         try {
             if (this != &other) {
                 m_box_size = other.m_box_size;
-                m_size_deduced = other.m_size_deduced;
+                m_box_size_deduced = other.m_box_size_deduced;
                 m_max_leaf_n = other.m_max_leaf_n;
                 m_ncrit = other.m_ncrit;
                 m_parts = other.m_parts;
@@ -1286,17 +1347,17 @@ public:
             return *this;
         } catch (...) {
             // NOTE: if we triggered an exception, this might now be
-            // in an inconsistent state. Clear out the internal containers
+            // in an inconsistent state. Call clear()
             // to reset to a consistent state before re-throwing.
-            clear_containers();
+            clear();
             throw;
         }
     }
     tree &operator=(tree &&other) noexcept
     {
         if (this != &other) {
-            m_box_size = std::move(other.m_box_size);
-            m_size_deduced = other.m_size_deduced;
+            m_box_size = other.m_box_size;
+            m_box_size_deduced = other.m_box_size_deduced;
             m_max_leaf_n = other.m_max_leaf_n;
             m_ncrit = other.m_ncrit;
             m_parts = std::move(other.m_parts);
@@ -1308,30 +1369,62 @@ public:
             // Make sure other is left in an empty state, otherwise we might
             // have in principle assertions failures in the destructor of other
             // in debug mode.
-            other.clear_containers();
+            other.clear();
         }
         return *this;
     }
     ~tree()
     {
-        // Run various debug checks.
 #if !defined(NDEBUG)
+        // Run various debug checks.
         for (std::size_t j = 0; j < NDim; ++j) {
+            // All particle data vectors have the same size.
             assert(m_parts[NDim].size() == m_parts[j].size());
         }
-#endif
+        // Same number of particles and codes.
         assert(m_parts[0].size() == m_codes.size());
+        // Codes are sorted.
         assert(std::is_sorted(m_codes.begin(), m_codes.end()));
+        // The size of m_isort and m_ord_ind is the number of particles.
         assert(m_parts[0].size() == m_isort.size());
         assert(m_parts[0].size() == m_ord_ind.size());
-#if !defined(NDEBUG)
+        // All coordinates must fit in the box, and they need to correspond
+        // to the correct Morton code.
+        std::array<UInt, NDim> tmp_dcoord;
+        morton_encoder<NDim, UInt> me;
+        for (size_type i = 0; i < m_parts[NDim].size(); ++i) {
+            for (std::size_t j = 0; j < NDim; ++j) {
+                assert(m_parts[j][i] < m_box_size / F(2));
+                assert(m_parts[j][i] >= -m_box_size / F(2));
+            }
+            disc_coords(tmp_dcoord, i);
+            assert(m_codes[i] == me(tmp_dcoord.data()));
+        }
+        // m_ord_ind and m_isort are consistent with each other.
         for (decltype(m_isort.size()) i = 0; i < m_isort.size(); ++i) {
             assert(m_isort[i] < m_ord_ind.size());
             assert(m_ord_ind[m_isort[i]] == i);
         }
+        // m_isort does not contain duplicates.
         std::sort(m_isort.begin(), m_isort.end());
         assert(std::unique(m_isort.begin(), m_isort.end()) == m_isort.end());
 #endif
+    }
+    // Reset the state of the tree to a known one, i.e., a def-cted tree.
+    void clear() noexcept
+    {
+        m_box_size = F(0);
+        m_box_size_deduced = false;
+        m_max_leaf_n = default_max_leaf_n;
+        m_ncrit = default_ncrit;
+        for (auto &p : m_parts) {
+            p.clear();
+        }
+        m_codes.clear();
+        m_isort.clear();
+        m_ord_ind.clear();
+        m_tree.clear();
+        m_crit_nodes.clear();
     }
     // Tree pretty printing. Will print up to max_nodes, or all the nodes if max_nodes is zero.
     std::ostream &pprint(std::ostream &os, size_type max_nodes = 0) const
@@ -1339,7 +1432,7 @@ public:
         // NOTE: sanity check for the use of UInt in std::bitset.
         static_assert(unsigned(std::numeric_limits<UInt>::digits) <= std::numeric_limits<std::size_t>::max());
         const auto n_nodes = m_tree.size();
-        os << "Box size                 : " << m_box_size << (m_size_deduced ? " (deduced)" : "") << '\n';
+        os << "Box size                 : " << m_box_size << (m_box_size_deduced ? " (deduced)" : "") << '\n';
         os << "Total number of particles: " << m_codes.size() << '\n';
         os << "Total number of nodes    : " << n_nodes << "\n\n";
         if (!n_nodes) {
@@ -1389,20 +1482,48 @@ public:
     }
 
 private:
-    // Temporary storage used to store the distances between the particles
-    // of a node and the COM of another node while traversing the tree.
-    static auto &vec_acc_tmp_vecs()
+    // Helpers to compute how many vectors we will need to store temporary
+    // data during the BH check.
+    // Q == 0 -> accelerations only, NDim + 1 vectors (temporary diffs + 1/dist3)
+    // Q == 1 -> potentials only, 1 vector (1/dist)
+    // Q == 2 -> accs + pots, NDim + 2u vectors (temporary diffs + 1/dist3 + 1/dist)
+    template <unsigned Q>
+    static constexpr std::size_t compute_nvecs_tmp()
     {
-        static thread_local std::array<fp_vector, NDim + 1u> tmp_vecs;
+        static_assert(Q <= 2u);
+        return static_cast<std::size_t>(Q == 0u ? NDim + 1u : (Q == 1u ? 1u : NDim + 2u));
+    }
+    template <unsigned Q>
+    static constexpr std::size_t nvecs_tmp = compute_nvecs_tmp<Q>();
+    // Storage for temporary data computed during the BH check (which will be re-used
+    // by another function).
+    template <unsigned Q>
+    static auto &acc_pot_tmp_vecs()
+    {
+        static thread_local std::array<fp_vector, nvecs_tmp<Q>> tmp_vecs;
         return tmp_vecs;
     }
-    // Temporary storage to accumulate the accelerations induced on the
-    // particles of a critical node. Data in here will be copied to
-    // the output array after the accelerations from all the other
-    // particles/nodes in the domain have been computed.
-    static auto &vec_acc_tmp_res()
+    // Helpers to compute how many vectors we will need to store the results
+    // of the computation of the accelerations/potentials.
+    // Q == 0 -> accelerations only, NDim vectors
+    // Q == 1 -> potentials only, 1 vector
+    // Q == 2 -> accs + pots, NDim + 1 vectors
+    template <unsigned Q>
+    static constexpr std::size_t compute_nvecs_res()
     {
-        static thread_local std::array<fp_vector, NDim> tmp_res;
+        static_assert(Q <= 2u);
+        return static_cast<std::size_t>(Q == 0u ? NDim : (Q == 1u ? 1u : NDim + 1u));
+    }
+    template <unsigned Q>
+    static constexpr std::size_t nvecs_res = compute_nvecs_res<Q>();
+    // Temporary storage to accumulate the accelerations/potentials induced on the
+    // particles of a critical node. Data in here will be copied to
+    // the output arrays after the accelerations/potentials from all the other
+    // particles/nodes in the domain have been computed.
+    template <unsigned Q>
+    static auto &acc_pot_tmp_res()
+    {
+        static thread_local std::array<fp_vector, nvecs_res<Q>> tmp_res;
         return tmp_res;
     }
     // Temporary vectors to store the data of a target node during traversal.
@@ -1411,12 +1532,12 @@ private:
         static thread_local std::array<fp_vector, NDim + 1u> tmp_tgt;
         return tmp_tgt;
     }
-    // Compute the element-wise attraction on the batch of particles at xvec1, yvec1, zvec1 by the
+    // Compute the element-wise accelerations on the batch of particles at xvec1, yvec1, zvec1 by the
     // particles at xvec2, yvec2, zvec2 with masses mvec2, and add the result into res_x_vec, res_y_vec,
     // res_z_vec. eps2_vec is the square of the softening length.
     template <typename B>
-    static void batch_batch_3d(B &res_x_vec, B &res_y_vec, B &res_z_vec, B xvec1, B yvec1, B zvec1, B xvec2, B yvec2,
-                               B zvec2, B mvec2, B eps2_vec)
+    static void batch_batch_3d_accs(B &res_x_vec, B &res_y_vec, B &res_z_vec, B xvec1, B yvec1, B zvec1, B xvec2,
+                                    B yvec2, B zvec2, B mvec2, B eps2_vec)
     {
         const B diff_x = xvec2 - xvec1, diff_y = yvec2 - yvec1, diff_z = zvec2 - zvec1,
                 dist2 = diff_x * diff_x + diff_y * diff_y + xsimd_fma(diff_z, diff_z, eps2_vec);
@@ -1432,69 +1553,223 @@ private:
         res_y_vec = xsimd_fma(diff_y, m2_dist3, res_y_vec);
         res_z_vec = xsimd_fma(diff_z, m2_dist3, res_z_vec);
     }
+    // Compute the element-wise mutual potential for 2 sets of particles at the specified coordinates and
+    // with the specified masses. eps2_vec is the square of the softening length. The return value
+    // is the negated mutual potential (that is, m1 * m2 / dist).
+    template <typename B>
+    static B batch_batch_3d_pots(B xvec1, B yvec1, B zvec1, B mvec1, B xvec2, B yvec2, B zvec2, B mvec2, B eps2_vec)
+    {
+        const B diff_x = xvec2 - xvec1, diff_y = yvec2 - yvec1, diff_z = zvec2 - zvec1,
+                dist2 = diff_x * diff_x + diff_y * diff_y + xsimd_fma(diff_z, diff_z, eps2_vec);
+        B m1_dist;
+        if constexpr (use_fast_inv_sqrt<B>) {
+            m1_dist = mvec1 * inv_sqrt(dist2);
+        } else {
+            m1_dist = mvec1 / xsimd_sqrt(dist2);
+        }
+        return m1_dist * mvec2;
+    }
+    // A combination of the 2 functions above, computing both accelerations and potentials between 2 batches.
+    // For both the accs and pots, the results are accumulated into the return values.
+    template <typename B>
+    static void batch_batch_3d_accs_pots(B &res_x_vec, B &res_y_vec, B &res_z_vec, B &res_pot_vec, B xvec1, B yvec1,
+                                         B zvec1, B mvec1, B xvec2, B yvec2, B zvec2, B mvec2, B eps2_vec)
+    {
+        const B diff_x = xvec2 - xvec1, diff_y = yvec2 - yvec1, diff_z = zvec2 - zvec1,
+                dist2 = diff_x * diff_x + diff_y * diff_y + xsimd_fma(diff_z, diff_z, eps2_vec);
+        B m2_dist, m2_dist3;
+        if constexpr (use_fast_inv_sqrt<B>) {
+            const auto tmp = inv_sqrt(dist2), tmp3 = tmp * tmp * tmp;
+            m2_dist = mvec2 * tmp;
+            m2_dist3 = mvec2 * tmp3;
+        } else {
+            // NOTE: as in the self interaction function and in the leaf-target interaction function,
+            // we should check if it is worthwhile to reduce the number of divisions here.
+            const auto dist = xsimd_sqrt(dist2), dist3 = dist2 * dist;
+            m2_dist = mvec2 / dist;
+            m2_dist3 = mvec2 / dist3;
+        }
+        // Write out the results.
+        res_x_vec = xsimd_fma(diff_x, m2_dist3, res_x_vec);
+        res_y_vec = xsimd_fma(diff_y, m2_dist3, res_y_vec);
+        res_z_vec = xsimd_fma(diff_z, m2_dist3, res_z_vec);
+        // NOTE: need a negated FMA for the potential.
+        res_pot_vec = xsimd_fnma(mvec1, m2_dist, res_pot_vec);
+    }
     // Function to compute the self-interactions within a target node. eps2 is the square of the softening length,
     // tgt_size is the number of particles in the target node, p_ptrs pointers to the target particles'
-    // coordinates/masses, res_ptrs pointers to the output arrays.
-    void tree_accel_self_interactions(F eps2, size_type tgt_size, const std::array<const F *, NDim + 1u> &p_ptrs,
-                                      const std::array<F *, NDim> &res_ptrs) const
+    // coordinates/masses, res_ptrs pointers to the output arrays. Q indicates which quantities will be computed
+    // (accs, potentials, or both).
+    template <unsigned Q>
+    void tree_self_interactions(F eps2, size_type tgt_size, const std::array<const F *, NDim + 1u> &p_ptrs,
+                                const std::array<F *, nvecs_res<Q>> &res_ptrs) const
     {
-        // Pointer to the masses.
-        const auto m_ptr = p_ptrs[NDim];
         if constexpr (simd_enabled && NDim == 3u) {
             // xsimd batch type.
             using batch_type = xsimd::simd_type<F>;
             // Size of batch_type.
             constexpr auto batch_size = batch_type::size;
-            // Shortcuts to the node coordinates.
-            const auto x_ptr = p_ptrs[0], y_ptr = p_ptrs[1], z_ptr = p_ptrs[2];
-            // Shortcuts to the result vectors.
-            const auto res_x = res_ptrs[0], res_y = res_ptrs[1], res_z = res_ptrs[2];
+            // Shortcuts to the node coordinates/masses.
+            const auto [x_ptr, y_ptr, z_ptr, m_ptr] = p_ptrs;
             // Softening length, vector version.
             const batch_type eps2_vec(eps2);
-            for (size_type i1 = 0; i1 < tgt_size; i1 += batch_size) {
-                // Load the first batch of particles.
-                const auto xvec1 = xsimd::load_aligned(x_ptr + i1), yvec1 = xsimd::load_aligned(y_ptr + i1),
-                           zvec1 = xsimd::load_aligned(z_ptr + i1), mvec1 = xsimd::load_aligned(m_ptr + i1);
-                // Init the accumulators for the accelerations on the first batch of particles.
-                batch_type res_x_vec1(F(0)), res_y_vec1(F(0)), res_z_vec1(F(0));
-                // Now we iterate over the node particles starting 1 position past i1 (to avoid self interactions).
-                // This is the classical n body inner loop.
-                for (size_type i2 = i1 + 1u; i2 < tgt_size; ++i2) {
-                    // Load the second batch of particles.
-                    const auto xvec2 = xsimd::load_unaligned(x_ptr + i2), yvec2 = xsimd::load_unaligned(y_ptr + i2),
-                               zvec2 = xsimd::load_unaligned(z_ptr + i2), mvec2 = xsimd::load_unaligned(m_ptr + i2);
-                    // NOTE: now we are going to do a slight repetition of batch_batch_3d(), with the goal
-                    // of avoiding doing extra needless computations.
-                    // Compute the relative positions of 2 wrt 1, and the distance square.
-                    const auto diff_x = xvec2 - xvec1, diff_y = yvec2 - yvec1, diff_z = zvec2 - zvec1,
-                               dist2 = diff_x * diff_x + diff_y * diff_y + xsimd_fma(diff_z, diff_z, eps2_vec);
-                    // Compute m1/dist3 and m2/dist3.
-                    batch_type m1_dist3, m2_dist3;
-                    if constexpr (use_fast_inv_sqrt<batch_type>) {
-                        const auto tmp = inv_sqrt_3(dist2);
-                        m1_dist3 = mvec1 * tmp;
-                        m2_dist3 = mvec2 * tmp;
-                    } else {
-                        const auto dist = xsimd_sqrt(dist2);
-                        const auto dist3 = dist * dist2;
-                        m1_dist3 = mvec1 / dist3;
-                        m2_dist3 = mvec2 / dist3;
+            if constexpr (Q == 0u) {
+                // Q == 0, accelerations only.
+                //
+                // Shortcuts to the result vectors.
+                const auto [res_x, res_y, res_z] = res_ptrs;
+                for (size_type i1 = 0; i1 < tgt_size; i1 += batch_size) {
+                    // Load the first batch of particles.
+                    const auto xvec1 = xsimd::load_aligned(x_ptr + i1), yvec1 = xsimd::load_aligned(y_ptr + i1),
+                               zvec1 = xsimd::load_aligned(z_ptr + i1), mvec1 = xsimd::load_aligned(m_ptr + i1);
+                    // Init the accumulators for the accelerations on the first batch of particles.
+                    batch_type res_x_vec1(F(0)), res_y_vec1(F(0)), res_z_vec1(F(0));
+                    // Now we iterate over the node particles starting 1 position past i1 (to avoid self interactions).
+                    // This is the classical n body inner loop.
+                    for (size_type i2 = i1 + 1u; i2 < tgt_size; ++i2) {
+                        // Load the second batch of particles.
+                        const auto xvec2 = xsimd::load_unaligned(x_ptr + i2), yvec2 = xsimd::load_unaligned(y_ptr + i2),
+                                   zvec2 = xsimd::load_unaligned(z_ptr + i2), mvec2 = xsimd::load_unaligned(m_ptr + i2);
+                        // NOTE: now we are going to do a slight repetition of batch_batch_3d_accs(), with the goal
+                        // of avoiding doing extra needless computations.
+                        // Compute the relative positions of 2 wrt 1, and the distance square.
+                        const auto diff_x = xvec2 - xvec1, diff_y = yvec2 - yvec1, diff_z = zvec2 - zvec1,
+                                   dist2 = diff_x * diff_x + diff_y * diff_y + xsimd_fma(diff_z, diff_z, eps2_vec);
+                        // Compute m1/dist3 and m2/dist3.
+                        batch_type m1_dist3, m2_dist3;
+                        if constexpr (use_fast_inv_sqrt<batch_type>) {
+                            const auto tmp = inv_sqrt_3(dist2);
+                            m1_dist3 = mvec1 * tmp;
+                            m2_dist3 = mvec2 * tmp;
+                        } else {
+                            // NOTE: here it might be beneficial to compute 1/sqrt()
+                            // and get rid of a division, paying instead a couple of extra
+                            // multiplications. To be benchmarked.
+                            const auto dist = xsimd_sqrt(dist2);
+                            const auto dist3 = dist * dist2;
+                            m1_dist3 = mvec1 / dist3;
+                            m2_dist3 = mvec2 / dist3;
+                        }
+                        // Add to the accumulators for 1 the accelerations due to the batch 2.
+                        res_x_vec1 = xsimd_fma(diff_x, m2_dist3, res_x_vec1);
+                        res_y_vec1 = xsimd_fma(diff_y, m2_dist3, res_y_vec1);
+                        res_z_vec1 = xsimd_fma(diff_z, m2_dist3, res_z_vec1);
+                        // Add *directly into the result buffer* the acceleration on 2 due to 1.
+                        xsimd_fnma(diff_x, m1_dist3, xsimd::load_unaligned(res_x + i2)).store_unaligned(res_x + i2);
+                        xsimd_fnma(diff_y, m1_dist3, xsimd::load_unaligned(res_y + i2)).store_unaligned(res_y + i2);
+                        xsimd_fnma(diff_z, m1_dist3, xsimd::load_unaligned(res_z + i2)).store_unaligned(res_z + i2);
                     }
-                    // Add to the accumulators for 1 the accelerations due to the batch 2.
-                    res_x_vec1 = xsimd_fma(diff_x, m2_dist3, res_x_vec1);
-                    res_y_vec1 = xsimd_fma(diff_y, m2_dist3, res_y_vec1);
-                    res_z_vec1 = xsimd_fma(diff_z, m2_dist3, res_z_vec1);
-                    // Add *directly into the result buffer* the acceleration on 2 due to 1.
-                    xsimd_fnma(diff_x, m1_dist3, xsimd::load_unaligned(res_x + i2)).store_unaligned(res_x + i2);
-                    xsimd_fnma(diff_y, m1_dist3, xsimd::load_unaligned(res_y + i2)).store_unaligned(res_y + i2);
-                    xsimd_fnma(diff_z, m1_dist3, xsimd::load_unaligned(res_z + i2)).store_unaligned(res_z + i2);
+                    // Add the accumulated acceleration on 1 to the values already in the result buffer.
+                    (xsimd::load_aligned(res_x + i1) + res_x_vec1).store_aligned(res_x + i1);
+                    (xsimd::load_aligned(res_y + i1) + res_y_vec1).store_aligned(res_y + i1);
+                    (xsimd::load_aligned(res_z + i1) + res_z_vec1).store_aligned(res_z + i1);
                 }
-                // Add the accumulated acceleration on 1 to the values already in the result buffer.
-                (xsimd::load_aligned(res_x + i1) + res_x_vec1).store_aligned(res_x + i1);
-                (xsimd::load_aligned(res_y + i1) + res_y_vec1).store_aligned(res_y + i1);
-                (xsimd::load_aligned(res_z + i1) + res_z_vec1).store_aligned(res_z + i1);
+            } else if constexpr (Q == 1u) {
+                // Q == 1, potentials only.
+                //
+                // Shortcut to the result vector.
+                const auto res = res_ptrs[0];
+                for (size_type i1 = 0; i1 < tgt_size; i1 += batch_size) {
+                    // Load the first batch of particles.
+                    const auto xvec1 = xsimd::load_aligned(x_ptr + i1), yvec1 = xsimd::load_aligned(y_ptr + i1),
+                               zvec1 = xsimd::load_aligned(z_ptr + i1), mvec1 = xsimd::load_aligned(m_ptr + i1);
+                    // Init the accumulator for the potential on the first batch of particles.
+                    batch_type res_vec(F(0));
+                    // Now we iterate over the node particles starting 1 position past i1 (to avoid self interactions).
+                    // This is the classical n body inner loop.
+                    for (size_type i2 = i1 + 1u; i2 < tgt_size; ++i2) {
+                        // Load the second batch of particles.
+                        const auto xvec2 = xsimd::load_unaligned(x_ptr + i2), yvec2 = xsimd::load_unaligned(y_ptr + i2),
+                                   zvec2 = xsimd::load_unaligned(z_ptr + i2), mvec2 = xsimd::load_unaligned(m_ptr + i2);
+                        // NOTE: now we are going to do a slight repetition of batch_batch_3d_pots(), with the goal
+                        // of avoiding doing extra needless computations.
+                        // Compute the relative positions of 2 wrt 1, and the distance square.
+                        const auto diff_x = xvec2 - xvec1, diff_y = yvec2 - yvec1, diff_z = zvec2 - zvec1,
+                                   dist2 = diff_x * diff_x + diff_y * diff_y + xsimd_fma(diff_z, diff_z, eps2_vec);
+                        // Compute m1/dist.
+                        batch_type m1_dist;
+                        if constexpr (use_fast_inv_sqrt<batch_type>) {
+                            m1_dist = mvec1 * inv_sqrt(dist2);
+                        } else {
+                            m1_dist = mvec1 / xsimd_sqrt(dist2);
+                        }
+                        // Compute the mutual (negated) potential between 1 and 2.
+                        const auto mut_pot = m1_dist * mvec2;
+                        // Subtract it from the acccumulator for 1.
+                        res_vec -= mut_pot;
+                        // Subtract *directly from the result buffer* the mutual negated potential for 2.
+                        (xsimd::load_unaligned(res + i2) - mut_pot).store_unaligned(res + i2);
+                    }
+                    // Add the accumulated potentials on 1 from the values already in the result buffer.
+                    // NOTE: we are doing an add here because we already built res_vec with repeated
+                    // subtractions, thus generating a negative value.
+                    (xsimd::load_aligned(res + i1) + res_vec).store_aligned(res + i1);
+                }
+            } else {
+                // Q == 2, accelerations and potentials.
+                //
+                // Shortcuts to the result vectors.
+                const auto [res_x, res_y, res_z, res_pot] = res_ptrs;
+                for (size_type i1 = 0; i1 < tgt_size; i1 += batch_size) {
+                    // Load the first batch of particles.
+                    const auto xvec1 = xsimd::load_aligned(x_ptr + i1), yvec1 = xsimd::load_aligned(y_ptr + i1),
+                               zvec1 = xsimd::load_aligned(z_ptr + i1), mvec1 = xsimd::load_aligned(m_ptr + i1);
+                    // Init the accumulators for the accelerations/potentials on the first batch of particles.
+                    batch_type res_x_vec1(F(0)), res_y_vec1(F(0)), res_z_vec1(F(0)), res_pot_vec(F(0));
+                    // Now we iterate over the node particles starting 1 position past i1 (to avoid self interactions).
+                    // This is the classical n body inner loop.
+                    for (size_type i2 = i1 + 1u; i2 < tgt_size; ++i2) {
+                        // Load the second batch of particles.
+                        const auto xvec2 = xsimd::load_unaligned(x_ptr + i2), yvec2 = xsimd::load_unaligned(y_ptr + i2),
+                                   zvec2 = xsimd::load_unaligned(z_ptr + i2), mvec2 = xsimd::load_unaligned(m_ptr + i2);
+                        // NOTE: now we are going to do a slight repetition of batch_batch_3d_accs_pots(), with the goal
+                        // of avoiding doing extra needless computations.
+                        // Compute the relative positions of 2 wrt 1, and the distance square.
+                        const auto diff_x = xvec2 - xvec1, diff_y = yvec2 - yvec1, diff_z = zvec2 - zvec1,
+                                   dist2 = diff_x * diff_x + diff_y * diff_y + xsimd_fma(diff_z, diff_z, eps2_vec);
+                        // Compute m1/dist, m1/dist3 and m2/dist3.
+                        batch_type m1_dist, m1_dist3, m2_dist3;
+                        if constexpr (use_fast_inv_sqrt<batch_type>) {
+                            const auto tmp = inv_sqrt(dist2);
+                            m1_dist = mvec1 * tmp;
+                            const auto tmp3 = tmp * tmp * tmp;
+                            m1_dist3 = mvec1 * tmp3;
+                            m2_dist3 = mvec2 * tmp3;
+                        } else {
+                            // NOTE: as hinted above in the Q == 0 case, perhaps we can avoid
+                            // some of these divisions.
+                            const auto dist = xsimd_sqrt(dist2);
+                            m1_dist = mvec1 / dist;
+                            const auto dist3 = dist * dist2;
+                            m1_dist3 = mvec1 / dist3;
+                            m2_dist3 = mvec2 / dist3;
+                        }
+                        // Compute the mutual (negated) potential between 1 and 2.
+                        const auto mut_pot = m1_dist * mvec2;
+                        // Add to the accumulators for 1 the accelerations due to the batch 2,
+                        // and subtract the mutual negated potential from the acccumulator for 1.
+                        res_x_vec1 = xsimd_fma(diff_x, m2_dist3, res_x_vec1);
+                        res_y_vec1 = xsimd_fma(diff_y, m2_dist3, res_y_vec1);
+                        res_z_vec1 = xsimd_fma(diff_z, m2_dist3, res_z_vec1);
+                        res_pot_vec -= mut_pot;
+                        // Add *directly into the result buffer* the acceleration on 2 due to 1,
+                        // and subtract the negated potential.
+                        xsimd_fnma(diff_x, m1_dist3, xsimd::load_unaligned(res_x + i2)).store_unaligned(res_x + i2);
+                        xsimd_fnma(diff_y, m1_dist3, xsimd::load_unaligned(res_y + i2)).store_unaligned(res_y + i2);
+                        xsimd_fnma(diff_z, m1_dist3, xsimd::load_unaligned(res_z + i2)).store_unaligned(res_z + i2);
+                        (xsimd::load_unaligned(res_pot + i2) - mut_pot).store_unaligned(res_pot + i2);
+                    }
+                    // Add the accumulated accelerations/potentials on 1 to the values already in the result buffer.
+                    (xsimd::load_aligned(res_x + i1) + res_x_vec1).store_aligned(res_x + i1);
+                    (xsimd::load_aligned(res_y + i1) + res_y_vec1).store_aligned(res_y + i1);
+                    (xsimd::load_aligned(res_z + i1) + res_z_vec1).store_aligned(res_z + i1);
+                    // NOTE: the accumulated potential is added because it was constructed as a negative quantity.
+                    (xsimd::load_aligned(res_pot + i1) + res_pot_vec).store_aligned(res_pot + i1);
+                }
             }
         } else {
+            // Pointer to the masses.
+            const auto m_ptr = p_ptrs[NDim];
             // Temporary vectors to be used in the loops below.
             std::array<F, NDim> diffs, pos1;
             for (size_type i1 = 0; i1 < tgt_size; ++i1) {
@@ -1504,9 +1779,9 @@ private:
                 }
                 // Load the mass of the current particle.
                 const auto m1 = m_ptr[i1];
-                // The acceleration vector on the current particle
+                // The acceleration/potential vector for the current particle
                 // (inited to zero).
-                std::array<F, NDim> a1{};
+                std::array<F, nvecs_res<Q>> a1{};
                 for (size_type i2 = i1 + 1u; i2 < tgt_size; ++i2) {
                     // Determine dist2, dist and dist3.
                     F dist2(eps2);
@@ -1514,31 +1789,57 @@ private:
                         diffs[j] = p_ptrs[j][i2] - pos1[j];
                         dist2 = fma_wrap(diffs[j], diffs[j], dist2);
                     }
-                    const auto dist = std::sqrt(dist2), dist3 = dist2 * dist, m2_dist3 = m_ptr[i2] / dist3,
-                               m1_dist3 = m1 / dist3;
-                    // Accumulate the accelerations, both in the local
-                    // accumulator for the current particle and in the global
-                    // acc vector for the opposite acceleration.
-                    for (std::size_t j = 0; j < NDim; ++j) {
-                        a1[j] = fma_wrap(m2_dist3, diffs[j], a1[j]);
-                        // NOTE: this is a fused negated multiply-add.
-                        res_ptrs[j][i2] = fma_wrap(m1_dist3, -diffs[j], res_ptrs[j][i2]);
+                    const auto dist = std::sqrt(dist2), m2 = m_ptr[i2];
+                    if constexpr (Q == 0u || Q == 2u) {
+                        // Q == 0 or 2: accelerations are requested.
+                        const auto dist3 = dist2 * dist, m2_dist3 = m2 / dist3, m1_dist3 = m1 / dist3;
+                        // Accumulate the accelerations, both in the local
+                        // accumulator for the current particle and in the global
+                        // acc vector for the opposite acceleration.
+                        for (std::size_t j = 0; j < NDim; ++j) {
+                            a1[j] = fma_wrap(m2_dist3, diffs[j], a1[j]);
+                            // NOTE: this is a fused negated multiply-add.
+                            res_ptrs[j][i2] = fma_wrap(m1_dist3, -diffs[j], res_ptrs[j][i2]);
+                        }
+                    }
+                    if constexpr (Q == 1u || Q == 2u) {
+                        // Q == 1 or 2: potentials are requested.
+                        // Establish the index of the potential in the result array:
+                        // 0 if only the potentials are requested, NDim otherwise.
+                        constexpr auto pot_idx = static_cast<std::size_t>(Q == 1u ? 0 : NDim);
+                        // Compute the negated mutual potential.
+                        const auto mut_pot = m1 / dist * m2;
+                        // Subtract mut_pot from the accumulator for the current particle and from
+                        // the total potential of particle i2.
+                        a1[pot_idx] -= mut_pot;
+                        res_ptrs[pot_idx][i2] -= mut_pot;
                     }
                 }
-                // Update the acceleration on the first particle
+                // Update the acceleration/potential on the first particle
                 // in the temporary storage.
-                for (std::size_t j = 0; j < NDim; ++j) {
-                    res_ptrs[j][i1] += a1[j];
+                if constexpr (Q == 0u || Q == 2u) {
+                    for (std::size_t j = 0; j < NDim; ++j) {
+                        res_ptrs[j][i1] += a1[j];
+                    }
+                }
+                if constexpr (Q == 1u || Q == 2u) {
+                    constexpr auto pot_idx = static_cast<std::size_t>(Q == 1u ? 0 : NDim);
+                    // NOTE: addition, because the value in a1[pot_idx] was already built
+                    // as a negative quantity.
+                    res_ptrs[pot_idx][i1] += a1[pot_idx];
                 }
             }
         }
     }
-    // Function to compute the acceleration on a target node by all the particles of a leaf source node. eps2 is the
-    // square of the softening length, src_idx is the index, in the tree structure, of the leaf node, tgt_size the
-    // number of particles in the target node, p_ptrs pointers to the target particles' coordinates/masses, res_ptrs
-    // pointers to the output arrays.
-    void tree_accel_leaf(F eps2, size_type src_idx, size_type tgt_size, const std::array<const F *, NDim + 1u> &p_ptrs,
-                         const std::array<F *, NDim> &res_ptrs) const
+    // Function to compute the accelerations/potentials on a target node by all the particles of a leaf source node.
+    // eps2 is the square of the softening length, src_idx is the index, in the tree structure, of the leaf node,
+    // tgt_size the number of particles in the target node, p_ptrs pointers to the target particles' coordinates/masses,
+    // res_ptrs pointers to the output arrays. Q indicates which quantities will be computed (accs, potentials, or
+    // both).
+    template <unsigned Q>
+    void tree_acc_pot_leaf(F eps2, size_type src_idx, size_type tgt_size,
+                           const std::array<const F *, NDim + 1u> &p_ptrs,
+                           const std::array<F *, nvecs_res<Q>> &res_ptrs) const
     {
         // Get a reference to the source node.
         const auto &src_node = m_tree[src_idx];
@@ -1548,36 +1849,97 @@ private:
             // The SIMD-accelerated version.
             using batch_type = xsimd::simd_type<F>;
             constexpr auto batch_size = batch_type::size;
-            // Pointers to the target node data.
-            const auto x_ptr1 = p_ptrs[0], y_ptr1 = p_ptrs[1], z_ptr1 = p_ptrs[2];
-            // Pointers to the source node data.
-            const auto x_ptr2 = m_parts[0].data() + src_begin, y_ptr2 = m_parts[1].data() + src_begin,
-                       z_ptr2 = m_parts[2].data() + src_begin, m_ptr2 = m_parts[3].data() + src_begin;
-            // Pointers to the result data.
-            const auto res_x = res_ptrs[0], res_y = res_ptrs[1], res_z = res_ptrs[2];
             // The number of particles in the source node.
             const auto src_size = static_cast<size_type>(src_end - src_begin);
             // Vector version of eps2.
             const batch_type eps2_vec(eps2);
-            for (size_type i = 0; i < tgt_size; i += batch_size) {
-                // Load the current batch of target data.
-                const auto xvec1 = batch_type(x_ptr1 + i, xsimd::aligned_mode{}),
-                           yvec1 = batch_type(y_ptr1 + i, xsimd::aligned_mode{}),
-                           zvec1 = batch_type(z_ptr1 + i, xsimd::aligned_mode{});
-                // Init the batches for computing the accelerations, loading the
-                // accumulated acceleration for the current batch.
-                auto res_x_vec = batch_type(res_x + i, xsimd::aligned_mode{}),
-                     res_y_vec = batch_type(res_y + i, xsimd::aligned_mode{}),
-                     res_z_vec = batch_type(res_z + i, xsimd::aligned_mode{});
-                for (size_type j = 0; j < src_size; ++j) {
-                    // Compute the interaction with the source particle.
-                    batch_batch_3d(res_x_vec, res_y_vec, res_z_vec, xvec1, yvec1, zvec1, batch_type(x_ptr2[j]),
-                                   batch_type(y_ptr2[j]), batch_type(z_ptr2[j]), batch_type(m_ptr2[j]), eps2_vec);
+            // Pointers to the target node data.
+            const auto [x_ptr1, y_ptr1, z_ptr1, m_ptr1] = p_ptrs;
+            // Pointers to the source node data.
+            const auto x_ptr2 = m_parts[0].data() + src_begin, y_ptr2 = m_parts[1].data() + src_begin,
+                       z_ptr2 = m_parts[2].data() + src_begin, m_ptr2 = m_parts[3].data() + src_begin;
+            if constexpr (Q == 0u) {
+                // Q == 0, accelerations only.
+                //
+                // Pointers to the result data.
+                const auto [res_x, res_y, res_z] = res_ptrs;
+                for (size_type i = 0; i < tgt_size; i += batch_size) {
+                    // Load the current batch of target data.
+                    const auto xvec1 = batch_type(x_ptr1 + i, xsimd::aligned_mode{}),
+                               yvec1 = batch_type(y_ptr1 + i, xsimd::aligned_mode{}),
+                               zvec1 = batch_type(z_ptr1 + i, xsimd::aligned_mode{});
+                    // Init the batches for computing the accelerations, loading the
+                    // accumulated acceleration for the current batch.
+                    auto res_x_vec = batch_type(res_x + i, xsimd::aligned_mode{}),
+                         res_y_vec = batch_type(res_y + i, xsimd::aligned_mode{}),
+                         res_z_vec = batch_type(res_z + i, xsimd::aligned_mode{});
+                    for (size_type j = 0; j < src_size; ++j) {
+                        // Compute the interaction with the source particle.
+                        batch_batch_3d_accs(res_x_vec, res_y_vec, res_z_vec, xvec1, yvec1, zvec1, batch_type(x_ptr2[j]),
+                                            batch_type(y_ptr2[j]), batch_type(z_ptr2[j]), batch_type(m_ptr2[j]),
+                                            eps2_vec);
+                    }
+                    // Store the updated accelerations in the temporary vectors.
+                    res_x_vec.store_aligned(res_x + i);
+                    res_y_vec.store_aligned(res_y + i);
+                    res_z_vec.store_aligned(res_z + i);
                 }
-                // Store the updated accelerations in the temporary vectors.
-                res_x_vec.store_aligned(res_x + i);
-                res_y_vec.store_aligned(res_y + i);
-                res_z_vec.store_aligned(res_z + i);
+            } else if constexpr (Q == 1u) {
+                // Q == 1, potentials only.
+                //
+                // Pointer to the result data.
+                const auto res = res_ptrs[0];
+                for (size_type i = 0; i < tgt_size; i += batch_size) {
+                    // Load the current batch of target data.
+                    const auto xvec1 = batch_type(x_ptr1 + i, xsimd::aligned_mode{}),
+                               yvec1 = batch_type(y_ptr1 + i, xsimd::aligned_mode{}),
+                               zvec1 = batch_type(z_ptr1 + i, xsimd::aligned_mode{}),
+                               mvec1 = batch_type(m_ptr1 + i, xsimd::aligned_mode{});
+                    // Init the batch for computing the potentials, loading the
+                    // accumulated potentials for the current batch.
+                    auto res_vec = batch_type(res + i, xsimd::aligned_mode{});
+                    for (size_type j = 0; j < src_size; ++j) {
+                        // Compute the interaction with the source particle,
+                        // and subtract the obtained potentials from the current
+                        // accumulated value.
+                        // NOTE: need a subtraction because batch_batch_3d_pots() returns
+                        // the negated potential.
+                        res_vec -= batch_batch_3d_pots(xvec1, yvec1, zvec1, mvec1, batch_type(x_ptr2[j]),
+                                                       batch_type(y_ptr2[j]), batch_type(z_ptr2[j]),
+                                                       batch_type(m_ptr2[j]), eps2_vec);
+                    }
+                    // Store the updated potentials in the temporary vector.
+                    res_vec.store_aligned(res + i);
+                }
+            } else {
+                // Q == 2, accelerations and potentials.
+                //
+                // Pointers to the result data.
+                const auto [res_x, res_y, res_z, res_pot] = res_ptrs;
+                for (size_type i = 0; i < tgt_size; i += batch_size) {
+                    // Load the current batch of target data.
+                    const auto xvec1 = batch_type(x_ptr1 + i, xsimd::aligned_mode{}),
+                               yvec1 = batch_type(y_ptr1 + i, xsimd::aligned_mode{}),
+                               zvec1 = batch_type(z_ptr1 + i, xsimd::aligned_mode{}),
+                               mvec1 = batch_type(m_ptr1 + i, xsimd::aligned_mode{});
+                    // Init the batches for computing the accelerations and the potentials, loading the
+                    // accumulated values for the current batch.
+                    auto res_x_vec = batch_type(res_x + i, xsimd::aligned_mode{}),
+                         res_y_vec = batch_type(res_y + i, xsimd::aligned_mode{}),
+                         res_z_vec = batch_type(res_z + i, xsimd::aligned_mode{}),
+                         res_pot_vec = batch_type(res_pot + i, xsimd::aligned_mode{});
+                    for (size_type j = 0; j < src_size; ++j) {
+                        // Compute the interaction with the source particle.
+                        batch_batch_3d_accs_pots(res_x_vec, res_y_vec, res_z_vec, res_pot_vec, xvec1, yvec1, zvec1,
+                                                 mvec1, batch_type(x_ptr2[j]), batch_type(y_ptr2[j]),
+                                                 batch_type(z_ptr2[j]), batch_type(m_ptr2[j]), eps2_vec);
+                    }
+                    // Store the updated accelerations/potentials in the temporary vectors.
+                    res_x_vec.store_aligned(res_x + i);
+                    res_y_vec.store_aligned(res_y + i);
+                    res_z_vec.store_aligned(res_z + i);
+                    res_pot_vec.store_aligned(res_pot + i);
+                }
             }
         } else {
             // Local variables for the scalar computation.
@@ -1588,6 +1950,11 @@ private:
                 for (std::size_t j = 0; j < NDim; ++j) {
                     pos1[j] = p_ptrs[j][i1];
                 }
+                // Load the target mass, but only if we are interested in the potentials.
+                [[maybe_unused]] F m1;
+                if constexpr (Q == 1u || Q == 2u) {
+                    m1 = p_ptrs[NDim][i1];
+                }
                 // Iterate over the particles in the src node.
                 for (size_type i2 = src_begin; i2 < src_end; ++i2) {
                     F dist2(eps2);
@@ -1595,72 +1962,179 @@ private:
                         diffs[j] = m_parts[j][i2] - pos1[j];
                         dist2 = fma_wrap(diffs[j], diffs[j], dist2);
                     }
-                    const auto dist = std::sqrt(dist2), dist3 = dist * dist2, m_dist3 = m_parts[NDim][i2] / dist3;
-                    for (std::size_t j = 0; j < NDim; ++j) {
-                        res_ptrs[j][i1] = fma_wrap(diffs[j], m_dist3, res_ptrs[j][i1]);
+                    const auto dist = std::sqrt(dist2), m2 = m_parts[NDim][i2];
+                    if constexpr (Q == 0u || Q == 2u) {
+                        // Q == 0 or 2: accelerations are requested.
+                        const auto dist3 = dist * dist2, m_dist3 = m2 / dist3;
+                        for (std::size_t j = 0; j < NDim; ++j) {
+                            res_ptrs[j][i1] = fma_wrap(diffs[j], m_dist3, res_ptrs[j][i1]);
+                        }
+                    }
+                    if constexpr (Q == 1u || Q == 2u) {
+                        // Q == 1 or 2: potentials are requested.
+                        // Establish the index of the potential in the result array:
+                        // 0 if only the potentials are requested, NDim otherwise.
+                        constexpr auto pot_idx = static_cast<std::size_t>(Q == 1u ? 0 : NDim);
+                        res_ptrs[pot_idx][i1] = fma_wrap(-m1, m2 / dist, res_ptrs[pot_idx][i1]);
                     }
                 }
             }
         }
     }
-    // Function to compute the acceleration due to the COM of a source node onto a target node. src_idx is the index, in
-    // the tree structure, of the source node, tgt_size the number of particles in the target node, tmp_ptrs are
-    // pointers to the temporary data filled in by the tree_accel_bh_check() function (which will be re-used by this
-    // function), res_ptrs pointers to the output arrays.
-    void tree_accel_bh_com(size_type src_idx, size_type tgt_size, const std::array<F *, NDim + 1u> &tmp_ptrs,
-                           const std::array<F *, NDim> &res_ptrs) const
+    // Function to compute the accelerations/potentials due to the COM of a source node onto a target node. src_idx is
+    // the index, in the tree structure, of the source node, tgt_size the number of particles in the target node,
+    // p_ptrs pointers to the target particles' coordinates/masses, tmp_ptrs are pointers to the temporary data filled
+    // in by the tree_acc_pot_bh_check() function (which will be re-used by this function), res_ptrs pointers to the
+    // output arrays. Q indicates which quantities will be computed (accs, potentials, or both).
+    template <unsigned Q>
+    void tree_acc_pot_bh_com(size_type src_idx, size_type tgt_size, const std::array<const F *, NDim + 1u> &p_ptrs,
+                             const std::array<F *, nvecs_tmp<Q>> &tmp_ptrs,
+                             const std::array<F *, nvecs_res<Q>> &res_ptrs) const
     {
-        // Load locally the mass of the COM of the source node.
+        // Load locally the mass of the source node.
         const auto m_src = get<2>(m_tree[src_idx]);
         if constexpr (simd_enabled && NDim == 3u) {
             using batch_type = xsimd::simd_type<F>;
             constexpr auto batch_size = batch_type::size;
+            // Vector version of the source node mass.
             const batch_type m_src_vec(m_src);
-            const auto tmp_x = tmp_ptrs[0], tmp_y = tmp_ptrs[1], tmp_z = tmp_ptrs[2], tmp_dist3 = tmp_ptrs[3],
-                       res_x = res_ptrs[0], res_y = res_ptrs[1], res_z = res_ptrs[2];
-            for (size_type i = 0; i < tgt_size; i += batch_size) {
-                const auto m_src_dist3_vec = use_fast_inv_sqrt<batch_type>
-                                                 ? m_src_vec * batch_type(tmp_dist3 + i, xsimd::aligned_mode{})
-                                                 : m_src_vec / batch_type(tmp_dist3 + i, xsimd::aligned_mode{}),
-                           xdiff = batch_type(tmp_x + i, xsimd::aligned_mode{}),
-                           ydiff = batch_type(tmp_y + i, xsimd::aligned_mode{}),
-                           zdiff = batch_type(tmp_z + i, xsimd::aligned_mode{});
-                xsimd_fma(xdiff, m_src_dist3_vec, batch_type(res_x + i, xsimd::aligned_mode{}))
-                    .store_aligned(res_x + i);
-                xsimd_fma(ydiff, m_src_dist3_vec, batch_type(res_y + i, xsimd::aligned_mode{}))
-                    .store_aligned(res_y + i);
-                xsimd_fma(zdiff, m_src_dist3_vec, batch_type(res_z + i, xsimd::aligned_mode{}))
-                    .store_aligned(res_z + i);
+            if constexpr (Q == 0u) {
+                // Q == 0, accelerations only.
+                //
+                // Pointers to the temporary coordinate diffs and 1/dist3 values computed in the BH check.
+                const auto [tmp_x, tmp_y, tmp_z, tmp_dist3] = tmp_ptrs;
+                // Pointers to the result arrays.
+                const auto [res_x, res_y, res_z] = res_ptrs;
+                for (size_type i = 0; i < tgt_size; i += batch_size) {
+                    // Compute m_src/dist**3 and load the differences.
+                    const auto m_src_dist3_vec = use_fast_inv_sqrt<batch_type>
+                                                     ? m_src_vec * batch_type(tmp_dist3 + i, xsimd::aligned_mode{})
+                                                     : m_src_vec / batch_type(tmp_dist3 + i, xsimd::aligned_mode{}),
+                               xdiff = batch_type(tmp_x + i, xsimd::aligned_mode{}),
+                               ydiff = batch_type(tmp_y + i, xsimd::aligned_mode{}),
+                               zdiff = batch_type(tmp_z + i, xsimd::aligned_mode{});
+                    // Compute and accumulate the accelerations.
+                    xsimd_fma(xdiff, m_src_dist3_vec, batch_type(res_x + i, xsimd::aligned_mode{}))
+                        .store_aligned(res_x + i);
+                    xsimd_fma(ydiff, m_src_dist3_vec, batch_type(res_y + i, xsimd::aligned_mode{}))
+                        .store_aligned(res_y + i);
+                    xsimd_fma(zdiff, m_src_dist3_vec, batch_type(res_z + i, xsimd::aligned_mode{}))
+                        .store_aligned(res_z + i);
+                }
+            } else if constexpr (Q == 1u) {
+                // Q == 1, potentials only.
+                //
+                // Pointer to the temporary 1/dist values computed in the BH check.
+                const auto tmp_dist = tmp_ptrs[0];
+                // Pointer to the target masses.
+                const auto m_ptr = p_ptrs[3];
+                // Pointer to the result array.
+                const auto res = res_ptrs[0];
+                for (size_type i = 0; i < tgt_size; i += batch_size) {
+                    // Compute m_src/dist.
+                    const auto m_src_dist_vec = use_fast_inv_sqrt<batch_type>
+                                                    ? m_src_vec * batch_type(tmp_dist + i, xsimd::aligned_mode{})
+                                                    : m_src_vec / batch_type(tmp_dist + i, xsimd::aligned_mode{});
+                    // Compute and accumulate the potential.
+                    xsimd_fnma(batch_type(m_ptr + i, xsimd::aligned_mode{}), m_src_dist_vec,
+                               batch_type(res + i, xsimd::aligned_mode{}))
+                        .store_aligned(res + i);
+                }
+            } else {
+                // Q == 2, accelerations and potentials.
+                //
+                // Pointers to the temporary coordinate diffs, 1/dist3 and 1/dist values computed in the BH check.
+                const auto [tmp_x, tmp_y, tmp_z, tmp_dist3, tmp_dist] = tmp_ptrs;
+                // Pointer to the target masses.
+                const auto m_ptr = p_ptrs[3];
+                // Pointers to the result arrays.
+                const auto [res_x, res_y, res_z, res_pot] = res_ptrs;
+                for (size_type i = 0; i < tgt_size; i += batch_size) {
+                    // Compute m_src/dist**3, m_src/dist and load the differences.
+                    const auto m_src_dist3_vec = use_fast_inv_sqrt<batch_type>
+                                                     ? m_src_vec * batch_type(tmp_dist3 + i, xsimd::aligned_mode{})
+                                                     : m_src_vec / batch_type(tmp_dist3 + i, xsimd::aligned_mode{}),
+                               m_src_dist_vec = use_fast_inv_sqrt<batch_type>
+                                                    ? m_src_vec * batch_type(tmp_dist + i, xsimd::aligned_mode{})
+                                                    : m_src_vec / batch_type(tmp_dist + i, xsimd::aligned_mode{}),
+                               xdiff = batch_type(tmp_x + i, xsimd::aligned_mode{}),
+                               ydiff = batch_type(tmp_y + i, xsimd::aligned_mode{}),
+                               zdiff = batch_type(tmp_z + i, xsimd::aligned_mode{});
+                    // Compute and accumulate the accelerations.
+                    xsimd_fma(xdiff, m_src_dist3_vec, batch_type(res_x + i, xsimd::aligned_mode{}))
+                        .store_aligned(res_x + i);
+                    xsimd_fma(ydiff, m_src_dist3_vec, batch_type(res_y + i, xsimd::aligned_mode{}))
+                        .store_aligned(res_y + i);
+                    xsimd_fma(zdiff, m_src_dist3_vec, batch_type(res_z + i, xsimd::aligned_mode{}))
+                        .store_aligned(res_z + i);
+                    // Compute and accumulate the potential.
+                    xsimd_fnma(batch_type(m_ptr + i, xsimd::aligned_mode{}), m_src_dist_vec,
+                               batch_type(res_pot + i, xsimd::aligned_mode{}))
+                        .store_aligned(res_pot + i);
+                }
             }
         } else {
+            // Init the pointer to the target masses, but only if potentials are requested.
+            [[maybe_unused]] const F *m_ptr;
+            if constexpr (Q == 1u || Q == 2u) {
+                m_ptr = p_ptrs[3];
+            }
             for (size_type i = 0; i < tgt_size; ++i) {
-                const auto m_src_dist3 = m_src / tmp_ptrs[NDim][i];
-                for (std::size_t j = 0; j < NDim; ++j) {
-                    res_ptrs[j][i] = fma_wrap(tmp_ptrs[j][i], m_src_dist3, res_ptrs[j][i]);
+                if constexpr (Q == 0u || Q == 2u) {
+                    // Q == 0 or 2: accelerations are requested.
+                    const auto m_src_dist3 = m_src / tmp_ptrs[NDim][i];
+                    for (std::size_t j = 0; j < NDim; ++j) {
+                        res_ptrs[j][i] = fma_wrap(tmp_ptrs[j][i], m_src_dist3, res_ptrs[j][i]);
+                    }
+                }
+                if constexpr (Q == 1u || Q == 2u) {
+                    // Q == 1 or 2: potentials are requested.
+                    // Establish the index of the potential in the result array:
+                    // 0 if only the potentials are requested, NDim otherwise.
+                    constexpr auto pot_idx = static_cast<std::size_t>(Q == 1u ? 0 : NDim);
+                    // Establish the index of the dist values in the temp data:
+                    // 0 if only the potentials are requested, NDim + 1 otherwise.
+                    constexpr auto dist_idx = static_cast<std::size_t>(Q == 1u ? 0 : NDim + 1u);
+                    res_ptrs[pot_idx][i] = fma_wrap(-m_ptr[i], m_src / tmp_ptrs[dist_idx][i], res_ptrs[pot_idx][i]);
                 }
             }
         }
     }
-    // Function to check if a source node satisfies the BH criterion and, possibly, to compute the accelerations due to
-    // that source node. src_idx is the index, in the tree structure, of the source node, theta2 the square of the
-    // opening angle, eps2 the square of the softening length, tgt_size the number of particles in the target node,
-    // p_ptrs pointers to the coordinates/masses of the particles in the target node, res_ptrs pointers to the output
-    // arrays. The return value is the index of the next source node in the tree traversal.
-    size_type tree_accel_bh_check(size_type src_idx, F theta2, F eps2, size_type tgt_size,
-                                  const std::array<const F *, NDim + 1u> &p_ptrs,
-                                  const std::array<F *, NDim> &res_ptrs) const
+    // Function to check if a source node satisfies the BH criterion and, possibly, to compute the
+    // accelerations/potentials due to that source node. src_idx is the index, in the tree structure, of the source
+    // node, theta2 the square of the opening angle, eps2 the square of the softening length, tgt_size the number of
+    // particles in the target node, p_ptrs pointers to the coordinates/masses of the particles in the target node,
+    // res_ptrs pointers to the output arrays. The return value is the index of the next source node in the tree
+    // traversal. Q indicates which quantities will be computed (accs, potentials, or both).
+    template <unsigned Q>
+    size_type tree_acc_pot_bh_check(size_type src_idx, F theta2, F eps2, size_type tgt_size,
+                                    const std::array<const F *, NDim + 1u> &p_ptrs,
+                                    const std::array<F *, nvecs_res<Q>> &res_ptrs) const
     {
         // Temporary vectors to store the data computed during the BH criterion check.
-        // We will re-use this data later in tree_accel_bh_com().
-        auto &tmp_vecs = vec_acc_tmp_vecs();
-        std::array<F *, NDim + 1u> tmp_ptrs;
+        // We will re-use this data later in tree_acc_pot_bh_com().
+        auto &tmp_vecs = acc_pot_tmp_vecs<Q>();
+        static_assert(nvecs_tmp<Q> == std::tuple_size_v<std::remove_reference_t<decltype(tmp_vecs)>>);
+        std::array<F *, nvecs_tmp<Q>> tmp_ptrs;
         // NOTE: the size of the vectors in tgt_tmp_data() might be
         // greater than tgt_size, due to SIMD padding. Fetch the
         // actual size.
         const auto pdata_size = tgt_tmp_data()[0].size();
-        for (std::size_t j = 0; j < NDim + 1u; ++j) {
-            tmp_vecs[j].resize(pdata_size);
-            tmp_ptrs[j] = tmp_vecs[j].data();
+        // Prepare the temporary data.
+        if constexpr (Q == 0u || Q == 2u) {
+            // Q == 0 or 2: accelerations are requested.
+            for (std::size_t j = 0; j < NDim + 1u; ++j) {
+                tmp_vecs[j].resize(pdata_size);
+                tmp_ptrs[j] = tmp_vecs[j].data();
+            }
+        }
+        if constexpr (Q == 1u || Q == 2u) {
+            // Q == 1 or 2: potentials are requested.
+            // Establish the index of the dist values in the temp data:
+            // 0 if only the potentials are requested, NDim + 1 otherwise.
+            constexpr auto dist_idx = static_cast<std::size_t>(Q == 1u ? 0 : NDim + 1u);
+            tmp_vecs[dist_idx].resize(pdata_size);
+            tmp_ptrs[dist_idx] = tmp_vecs[dist_idx].data();
         }
         // Local cache.
         const auto &src_node = m_tree[src_idx];
@@ -1678,31 +2152,93 @@ private:
             // The SIMD-accelerated version.
             using batch_type = xsimd::simd_type<F>;
             constexpr auto batch_size = batch_type::size;
-            const auto x_ptr = p_ptrs[0], y_ptr = p_ptrs[1], z_ptr = p_ptrs[2];
-            const auto tmp_x = tmp_ptrs[0], tmp_y = tmp_ptrs[1], tmp_z = tmp_ptrs[2], tmp_dist3 = tmp_ptrs[3];
             // Splatted vector versions of the scalar variables.
             const batch_type src_dim2_vec(src_dim2), theta2_vec(theta2), eps2_vec(eps2), x_com_vec(com_pos[0]),
                 y_com_vec(com_pos[1]), z_com_vec(com_pos[2]);
-            for (size_type i = 0; i < tgt_size; i += batch_size) {
-                const auto diff_x = x_com_vec - batch_type(x_ptr + i, xsimd::aligned_mode{}),
-                           diff_y = y_com_vec - batch_type(y_ptr + i, xsimd::aligned_mode{}),
-                           diff_z = z_com_vec - batch_type(z_ptr + i, xsimd::aligned_mode{});
-                auto dist2 = diff_x * diff_x + diff_y * diff_y + diff_z * diff_z;
-                if (xsimd::any(src_dim2_vec >= theta2_vec * dist2)) {
-                    // At least one particle in the current batch fails the BH criterion
-                    // check. Mark the bh_flag as false, then break out.
-                    bh_flag = false;
-                    break;
+            // Pointers to the coordinates.
+            const auto [x_ptr, y_ptr, z_ptr, m_ptr] = p_ptrs;
+            (void)m_ptr;
+            if constexpr (Q == 0u) {
+                // Q == 0, accelerations only.
+                //
+                // Pointers to the temporary data.
+                const auto [tmp_x, tmp_y, tmp_z, tmp_dist3] = tmp_ptrs;
+                for (size_type i = 0; i < tgt_size; i += batch_size) {
+                    const auto diff_x = x_com_vec - batch_type(x_ptr + i, xsimd::aligned_mode{}),
+                               diff_y = y_com_vec - batch_type(y_ptr + i, xsimd::aligned_mode{}),
+                               diff_z = z_com_vec - batch_type(z_ptr + i, xsimd::aligned_mode{});
+                    auto dist2 = diff_x * diff_x + diff_y * diff_y + diff_z * diff_z;
+                    if (xsimd::any(src_dim2_vec >= theta2_vec * dist2)) {
+                        // At least one particle in the current batch fails the BH criterion
+                        // check. Mark the bh_flag as false, then break out.
+                        bh_flag = false;
+                        break;
+                    }
+                    // Add the softening length.
+                    dist2 += eps2_vec;
+                    diff_x.store_aligned(tmp_x + i);
+                    diff_y.store_aligned(tmp_y + i);
+                    diff_z.store_aligned(tmp_z + i);
+                    if constexpr (use_fast_inv_sqrt<batch_type>) {
+                        inv_sqrt_3(dist2).store_aligned(tmp_dist3 + i);
+                    } else {
+                        (xsimd_sqrt(dist2) * dist2).store_aligned(tmp_dist3 + i);
+                    }
                 }
-                // Add the softening length.
-                dist2 += eps2_vec;
-                diff_x.store_aligned(tmp_x + i);
-                diff_y.store_aligned(tmp_y + i);
-                diff_z.store_aligned(tmp_z + i);
-                if constexpr (use_fast_inv_sqrt<batch_type>) {
-                    inv_sqrt_3(dist2).store_aligned(tmp_dist3 + i);
-                } else {
-                    (xsimd_sqrt(dist2) * dist2).store_aligned(tmp_dist3 + i);
+            } else if constexpr (Q == 1u) {
+                // Q == 1, potentials only.
+                //
+                // Pointer to the temporary data.
+                const auto tmp = tmp_ptrs[0];
+                for (size_type i = 0; i < tgt_size; i += batch_size) {
+                    const auto diff_x = x_com_vec - batch_type(x_ptr + i, xsimd::aligned_mode{}),
+                               diff_y = y_com_vec - batch_type(y_ptr + i, xsimd::aligned_mode{}),
+                               diff_z = z_com_vec - batch_type(z_ptr + i, xsimd::aligned_mode{});
+                    auto dist2 = diff_x * diff_x + diff_y * diff_y + diff_z * diff_z;
+                    if (xsimd::any(src_dim2_vec >= theta2_vec * dist2)) {
+                        // At least one particle in the current batch fails the BH criterion
+                        // check. Mark the bh_flag as false, then break out.
+                        bh_flag = false;
+                        break;
+                    }
+                    // Add the softening length.
+                    dist2 += eps2_vec;
+                    if constexpr (use_fast_inv_sqrt<batch_type>) {
+                        inv_sqrt(dist2).store_aligned(tmp + i);
+                    } else {
+                        xsimd_sqrt(dist2).store_aligned(tmp + i);
+                    }
+                }
+            } else {
+                // Q == 2, accelerations and potentials.
+                //
+                // Pointers to the temporary data.
+                const auto [tmp_x, tmp_y, tmp_z, tmp_dist3, tmp_dist] = tmp_ptrs;
+                for (size_type i = 0; i < tgt_size; i += batch_size) {
+                    const auto diff_x = x_com_vec - batch_type(x_ptr + i, xsimd::aligned_mode{}),
+                               diff_y = y_com_vec - batch_type(y_ptr + i, xsimd::aligned_mode{}),
+                               diff_z = z_com_vec - batch_type(z_ptr + i, xsimd::aligned_mode{});
+                    auto dist2 = diff_x * diff_x + diff_y * diff_y + diff_z * diff_z;
+                    if (xsimd::any(src_dim2_vec >= theta2_vec * dist2)) {
+                        // At least one particle in the current batch fails the BH criterion
+                        // check. Mark the bh_flag as false, then break out.
+                        bh_flag = false;
+                        break;
+                    }
+                    // Add the softening length.
+                    dist2 += eps2_vec;
+                    diff_x.store_aligned(tmp_x + i);
+                    diff_y.store_aligned(tmp_y + i);
+                    diff_z.store_aligned(tmp_z + i);
+                    if constexpr (use_fast_inv_sqrt<batch_type>) {
+                        const auto inv_dist = inv_sqrt(dist2);
+                        (inv_dist * inv_dist * inv_dist).store_aligned(tmp_dist3 + i);
+                        inv_dist.store_aligned(tmp_dist + i);
+                    } else {
+                        const auto dist = xsimd_sqrt(dist2);
+                        (dist2 * dist).store_aligned(tmp_dist3 + i);
+                        dist.store_aligned(tmp_dist + i);
+                    }
                 }
             }
         } else {
@@ -1710,9 +2246,12 @@ private:
             for (size_type i = 0; i < tgt_size; ++i) {
                 F dist2(0);
                 for (std::size_t j = 0; j < NDim; ++j) {
-                    // Store the differences for later use.
                     const auto diff = com_pos[j] - p_ptrs[j][i];
-                    tmp_ptrs[j][i] = diff;
+                    if constexpr (Q == 0u || Q == 2u) {
+                        // Store the differences for later use, if we are computing
+                        // accelerations.
+                        tmp_ptrs[j][i] = diff;
+                    }
                     dist2 = fma_wrap(diff, diff, dist2);
                 }
                 if (src_dim2 >= theta2 * dist2) {
@@ -1722,17 +2261,28 @@ private:
                     bh_flag = false;
                     break;
                 }
-                // Add the softening length.
+                // Add the softening length and compute the distance.
                 dist2 += eps2;
-                // Store dist3 for later use.
-                // NOTE: in the scalar part, we always store dist3.
-                tmp_ptrs[NDim][i] = std::sqrt(dist2) * dist2;
+                const auto dist = std::sqrt(dist2);
+                if constexpr (Q == 0u || Q == 2u) {
+                    // Q == 0 or 2: accelerations are requested, store dist3.
+                    // NOTE: in the scalar part, we always store dist3.
+                    tmp_ptrs[NDim][i] = dist * dist2;
+                }
+                if constexpr (Q == 1u || Q == 2u) {
+                    // Q == 1 or 2: potentials are requested.
+                    // Establish the index of the dist values in the temp data:
+                    // 0 if only the potentials are requested, NDim + 1 otherwise.
+                    constexpr auto dist_idx = static_cast<std::size_t>(Q == 1u ? 0 : NDim + 1u);
+                    // NOTE: in the scalar part, we always store dist.
+                    tmp_ptrs[dist_idx][i] = dist;
+                }
             }
         }
         if (bh_flag) {
             // The source node satisfies the BH criterion for all the particles of the target node. Add the
             // acceleration due to the com of the source node.
-            tree_accel_bh_com(src_idx, tgt_size, tmp_ptrs, res_ptrs);
+            tree_acc_pot_bh_com<Q>(src_idx, tgt_size, p_ptrs, tmp_ptrs, res_ptrs);
             // We can now skip all the children of the source node.
             return static_cast<size_type>(src_idx + n_children_src + 1u);
         }
@@ -1740,17 +2290,19 @@ private:
         // node, in which case we need to compute all the pairwise interactions.
         if (!n_children_src) {
             // Leaf node.
-            tree_accel_leaf(eps2, src_idx, tgt_size, p_ptrs, res_ptrs);
+            tree_acc_pot_leaf<Q>(eps2, src_idx, tgt_size, p_ptrs, res_ptrs);
         }
         // In any case, we keep traversing the tree moving to the next node in depth-first order.
         return static_cast<size_type>(src_idx + 1u);
     }
-    // Tree traversal for the computation of the accelerations. theta2 is the square of the opening angle,
+    // Tree traversal for the computation of the accelerations/potentials. theta2 is the square of the opening angle,
     // eps2 the square of the softening length, tgt_size the number of particles in the target node, tgt_code its code,
     // p_ptrs are pointers to the coordinates/masses of the particles in the target node, res_ptrs pointers to the
-    // output arrays.
-    void tree_accel(F theta2, F eps2, size_type tgt_size, UInt tgt_code, const std::array<const F *, NDim + 1u> &p_ptrs,
-                    const std::array<F *, NDim> &res_ptrs) const
+    // output arrays. Q indicates which quantities will be computed (accs, potentials, or both).
+    template <unsigned Q>
+    void tree_acc_pot(F theta2, F eps2, size_type tgt_size, UInt tgt_code,
+                      const std::array<const F *, NDim + 1u> &p_ptrs,
+                      const std::array<F *, nvecs_res<Q>> &res_ptrs) const
     {
         assert(!m_tree.empty());
         // Tree level of the target node.
@@ -1770,10 +2322,11 @@ private:
             const auto src_code = get<0>(src_node);
             // Number of children of the source node.
             const auto n_children_src = get<1>(src_node)[2];
-            if (src_code == tgt_code) {
+            if (rakau_unlikely(src_code == tgt_code)) {
                 // If src_code == tgt_code, we are currently visiting the target node.
                 // Compute the self interactions and skip all the children of the target node.
-                tree_accel_self_interactions(eps2, tgt_size, p_ptrs, res_ptrs);
+                // NOTE: mark it as unlikely as we will run into this condition only once per traversal.
+                tree_self_interactions<Q>(eps2, tgt_size, p_ptrs, res_ptrs);
                 src_idx += n_children_src + 1u;
                 continue;
             }
@@ -1795,20 +2348,22 @@ private:
                 continue;
             }
             // The source node is not an ancestor of the target. We need to run the BH criterion check.
-            // The tree_accel_bh_check() function will return the index of the next node in the traversal.
-            src_idx = tree_accel_bh_check(src_idx, theta2, eps2, tgt_size, p_ptrs, res_ptrs);
+            // The tree_acc_pot_bh_check() function will return the index of the next node in the traversal.
+            src_idx = tree_acc_pot_bh_check<Q>(src_idx, theta2, eps2, tgt_size, p_ptrs, res_ptrs);
         }
     }
-    // Top level function for the computation of the accelerations.
-    template <typename It>
-    void vec_accs_impl(const std::array<It, NDim> &out, F theta2, F G, F eps2) const
+    // Top level function for the computation of the accelerations/potentials. out is the array of output iterators,
+    // theta2 the square of the opening angle, G the grav constant, eps2 the square of the softening length. Q indicates
+    // which quantities will be computed (accs, potentials, or both).
+    template <unsigned Q, typename It>
+    void acc_pot_impl(const std::array<It, nvecs_res<Q>> &out, F theta2, F G, F eps2) const
     {
         // NOTE: we will be adding padding to the target node data when SIMD is active,
         // in order to be able to use SIMD instructions on all the particles of the node.
         // The padding data must be crafted so that it does not interfere with the useful
         // calculations. This means that:
         // - we will set the masses to zero so that, when computing the self interactions
-        //   in a target node, the extra accelerations due to the padding data will be zero,
+        //   in a target node, the extra accelerations/potentials due to the padding data will be zero,
         // - for the positions, we must ensure 2 things:
         //   - they must not overlap with any other real particle, in order to avoid singularities
         //     when computing self-interactions in the target node, hence they must be outside the box,
@@ -1837,14 +2392,14 @@ private:
             tbb::blocked_range<decltype(m_crit_nodes.size())>(0u, m_crit_nodes.size()),
             [this, theta2, G, eps2, pad_coord, &out](const auto &range) {
                 // Get references to the local temporary data.
-                auto &tmp_res = vec_acc_tmp_res();
+                auto &tmp_res = acc_pot_tmp_res<Q>();
                 auto &tmp_tgt = tgt_tmp_data();
                 for (auto i = range.begin(); i != range.end(); ++i) {
                     const auto tgt_code = get<0>(m_crit_nodes[i]);
                     const auto tgt_begin = get<1>(m_crit_nodes[i]);
                     const auto tgt_size = static_cast<size_type>(get<2>(m_crit_nodes[i]) - tgt_begin);
                     // Size of the temporary vectors that will be used to store the target node
-                    // data and the total accelerations on its particles. If simd is not enabled, this
+                    // data and the total accelerations/potentials on its particles. If simd is not enabled, this
                     // value will be tgt_size. Otherwise, we add extra padding at the end based on the
                     // simd vector size.
                     const auto pdata_size = [tgt_size]() {
@@ -1866,7 +2421,7 @@ private:
                         }
                     }();
                     // Prepare the temporary vectors containing the result.
-                    for (std::size_t j = 0; j < NDim; ++j) {
+                    for (std::size_t j = 0; j < nvecs_res<Q>; ++j) {
                         // Resize and fill with zeroes (everything, including the padding data).
                         tmp_res[j].resize(pdata_size);
                         std::fill(tmp_res[j].data(), tmp_res[j].data() + pdata_size, F(0));
@@ -1880,41 +2435,42 @@ private:
                         // From tgt_size to pdata_size (the padding values) we insert the padding coordinate.
                         std::fill(tmp_tgt[j].data() + tgt_size, tmp_tgt[j].data() + pdata_size, pad_coord);
                     }
-                    // Copy the masses and set the padding masses to zero.
+                    // Copy the particle masses and set the padding masses to zero.
                     tmp_tgt[NDim].resize(pdata_size);
                     std::copy(m_parts[NDim].data() + tgt_begin, m_parts[NDim].data() + tgt_begin + tgt_size,
                               tmp_tgt[NDim].data());
                     std::fill(tmp_tgt[NDim].data() + tgt_size, tmp_tgt[NDim].data() + pdata_size, F(0));
                     // Prepare arrays of pointers to the temporary data.
-                    std::array<F *, NDim> res_ptrs;
-                    std::array<const F *, NDim + 1u> p_ptrs;
-                    for (std::size_t j = 0; j < NDim; ++j) {
+                    std::array<F *, nvecs_res<Q>> res_ptrs;
+                    for (std::size_t j = 0; j < nvecs_res<Q>; ++j) {
                         res_ptrs[j] = tmp_res[j].data();
+                    }
+                    std::array<const F *, NDim + 1u> p_ptrs;
+                    for (std::size_t j = 0; j < NDim + 1u; ++j) {
                         p_ptrs[j] = tmp_tgt[j].data();
                     }
-                    p_ptrs[NDim] = tmp_tgt[NDim].data();
                     // Do the computation.
-                    tree_accel(theta2, eps2, tgt_size, tgt_code, p_ptrs, res_ptrs);
+                    tree_acc_pot<Q>(theta2, eps2, tgt_size, tgt_code, p_ptrs, res_ptrs);
                     // Multiply by G, if needed.
                     if (G != F(1)) {
-                        for (std::size_t j = 0; j < NDim; ++j) {
+                        for (std::size_t j = 0; j < nvecs_res<Q>; ++j) {
                             auto r_ptr = res_ptrs[j];
                             if constexpr (simd_enabled) {
                                 using batch_type = xsimd::simd_type<F>;
                                 constexpr auto batch_size = batch_type::size;
                                 const batch_type Gvec(G);
-                                for (size_type i = 0; i < tgt_size; i += batch_size) {
-                                    (xsimd::load_aligned(r_ptr + i) * Gvec).store_aligned(r_ptr + i);
+                                for (size_type k = 0; k < tgt_size; k += batch_size) {
+                                    (xsimd::load_aligned(r_ptr + k) * Gvec).store_aligned(r_ptr + k);
                                 }
                             } else {
-                                for (size_type i = 0; i < tgt_size; ++i) {
-                                    *(r_ptr + i) *= G;
+                                for (size_type k = 0; k < tgt_size; ++k) {
+                                    *(r_ptr + k) *= G;
                                 }
                             }
                         }
                     }
                     // Write out the result.
-                    for (std::size_t j = 0; j < NDim; ++j) {
+                    for (std::size_t j = 0; j < nvecs_res<Q>; ++j) {
                         std::copy(
                             res_ptrs[j], res_ptrs[j] + tgt_size,
                             out[j]
@@ -1956,11 +2512,13 @@ private:
                                     + std::to_string(G) + " instead");
         }
     }
-    // Top level dispatcher for the accs functions. It will run a few checks and then invoke vec_accs_impl().
-    template <bool Ordered, typename Output>
-    void accs_dispatch(const Output &out, F theta, F G, F eps) const
+    // Top level dispatcher for the accs/pots functions. It will run a few checks and then invoke acc_pot_impl().
+    // out is the array of output iterators, theta the opening angle, G the grav const, eps the softening length.
+    // Q indicates which quantities will be computed (accs, potentials, or both).
+    template <bool Ordered, unsigned Q, typename It>
+    void acc_pot_dispatch(const std::array<It, nvecs_res<Q>> &out, F theta, F G, F eps) const
     {
-        simple_timer st("vector accs computation");
+        simple_timer st("vector accs/pots computation");
         const auto theta2 = theta * theta, eps2 = eps * eps;
         // Input param check.
         if (!std::isfinite(theta2) || theta2 <= F(0)) {
@@ -1976,49 +2534,50 @@ private:
         if constexpr (Ordered) {
             // Make sure we don't run into overflows when doing a permutated iteration
             // over the iterators in out.
-            using diff_t = typename std::iterator_traits<typename Output::value_type>::difference_type;
+            using diff_t = typename std::iterator_traits<It>::difference_type;
             if (m_parts[0].size() > static_cast<std::make_unsigned_t<diff_t>>(std::numeric_limits<diff_t>::max())) {
-                throw std::overflow_error(
-                    "The number of particles (" + std::to_string(m_parts[0].size())
-                    + ") is too large, and it results in an overflow condition when computing the accelerations");
+                throw std::overflow_error("The number of particles (" + std::to_string(m_parts[0].size())
+                                          + ") is too large, and it results in an overflow condition when computing "
+                                            "the accelerations/potentials");
             }
             using it_t = decltype(boost::make_permutation_iterator(out[0], m_isort.begin()));
-            std::array<it_t, NDim> out_pits;
-            for (std::size_t j = 0; j < NDim; ++j) {
+            std::array<it_t, nvecs_res<Q>> out_pits;
+            for (std::size_t j = 0; j < nvecs_res<Q>; ++j) {
                 out_pits[j] = boost::make_permutation_iterator(out[j], m_isort.begin());
             }
-            // NOTE: we are checking in the vec_accs_impl function that we can index into
+            // NOTE: we are checking in the acc_pot_impl() function that we can index into
             // the permuted iterators without overflows (see the use of boost::numeric_cast()).
-            vec_accs_impl(out_pits, theta2, G, eps2);
+            acc_pot_impl<Q>(out_pits, theta2, G, eps2);
         } else {
-            vec_accs_impl(out, theta2, G, eps2);
+            acc_pot_impl<Q>(out, theta2, G, eps2);
         }
     }
     // Helper overload for an array of vectors. It will prepare the vectors and then
     // call the other overload.
-    template <bool Ordered, typename Allocator>
-    void accs_dispatch(std::array<std::vector<F, Allocator>, NDim> &out, F theta, F G, F eps) const
+    template <bool Ordered, unsigned Q, typename Allocator>
+    void acc_pot_dispatch(std::array<std::vector<F, Allocator>, nvecs_res<Q>> &out, F theta, F G, F eps) const
     {
-        std::array<F *, NDim> out_ptrs;
-        for (std::size_t j = 0; j < NDim; ++j) {
+        std::array<F *, nvecs_res<Q>> out_ptrs;
+        for (std::size_t j = 0; j < nvecs_res<Q>; ++j) {
             out[j].resize(boost::numeric_cast<decltype(out[j].size())>(m_parts[0].size()));
             out_ptrs[j] = out[j].data();
         }
-        accs_dispatch<Ordered>(out_ptrs, theta, G, eps);
+        acc_pot_dispatch<Ordered, Q>(out_ptrs, theta, G, eps);
     }
     // Small helper to turn an init list into an array, in the functions for the computation
-    // of the accelerations.
-    template <typename It>
-    static auto accs_ilist_to_array(std::initializer_list<It> ilist)
+    // of the accelerations/potentials. Q indicates which quantities will be computed (accs,
+    // potentials, or both).
+    template <unsigned Q, typename It>
+    static auto acc_pot_ilist_to_array(std::initializer_list<It> ilist)
     {
-        if (ilist.size() != NDim) {
+        if (ilist.size() != nvecs_res<Q>) {
             throw std::invalid_argument(
                 "An initializer list containing " + std::to_string(ilist.size())
-                + " iterators was used as the output for the computation of the accelerations in a "
-                + std::to_string(NDim) + "-dimensional tree, but a list with " + std::to_string(NDim)
-                + " iterators is required instead (the number of iterators must be equal to the number of dimensions)");
+                + " iterators was used as the output for the computation of the accelerations/potentials in a "
+                + std::to_string(NDim) + "-dimensional tree, but a list with " + std::to_string(nvecs_res<Q>)
+                + " iterators is required instead");
         }
-        std::array<It, NDim> retval;
+        std::array<It, nvecs_res<Q>> retval;
         std::copy(ilist.begin(), ilist.end(), retval.begin());
         return retval;
     }
@@ -2027,46 +2586,107 @@ public:
     template <typename Allocator>
     void accs_u(std::array<std::vector<F, Allocator>, NDim> &out, F theta, F G = F(1), F eps = F(0)) const
     {
-        accs_dispatch<false>(out, theta, G, eps);
+        acc_pot_dispatch<false, 0>(out, theta, G, eps);
     }
     template <typename It>
     void accs_u(const std::array<It, NDim> &out, F theta, F G = F(1), F eps = F(0)) const
     {
-        accs_dispatch<false>(out, theta, G, eps);
+        acc_pot_dispatch<false, 0>(out, theta, G, eps);
     }
     template <typename It>
     void accs_u(std::initializer_list<It> out, F theta, F G = F(1), F eps = F(0)) const
     {
-        accs_u(accs_ilist_to_array(out), theta, G, eps);
+        accs_u(acc_pot_ilist_to_array<0>(out), theta, G, eps);
+    }
+    template <typename Allocator>
+    void pots_u(std::array<std::vector<F, Allocator>, 1> &out, F theta, F G = F(1), F eps = F(0)) const
+    {
+        acc_pot_dispatch<false, 1>(out, theta, G, eps);
+    }
+    template <typename It>
+    void pots_u(const std::array<It, 1> &out, F theta, F G = F(1), F eps = F(0)) const
+    {
+        acc_pot_dispatch<false, 1>(out, theta, G, eps);
+    }
+    template <typename It>
+    void pots_u(std::initializer_list<It> out, F theta, F G = F(1), F eps = F(0)) const
+    {
+        pots_u(acc_pot_ilist_to_array<1>(out), theta, G, eps);
+    }
+    template <typename Allocator>
+    void accs_pots_u(std::array<std::vector<F, Allocator>, NDim + 1u> &out, F theta, F G = F(1), F eps = F(0)) const
+    {
+        acc_pot_dispatch<false, 2>(out, theta, G, eps);
+    }
+    template <typename It>
+    void accs_pots_u(const std::array<It, NDim + 1u> &out, F theta, F G = F(1), F eps = F(0)) const
+    {
+        acc_pot_dispatch<false, 2>(out, theta, G, eps);
+    }
+    template <typename It>
+    void accs_pots_u(std::initializer_list<It> out, F theta, F G = F(1), F eps = F(0)) const
+    {
+        accs_pots_u(acc_pot_ilist_to_array<2>(out), theta, G, eps);
     }
     template <typename Allocator>
     void accs_o(std::array<std::vector<F, Allocator>, NDim> &out, F theta, F G = F(1), F eps = F(0)) const
     {
-        accs_dispatch<true>(out, theta, G, eps);
+        acc_pot_dispatch<true, 0>(out, theta, G, eps);
     }
     template <typename It>
     void accs_o(const std::array<It, NDim> &out, F theta, F G = F(1), F eps = F(0)) const
     {
-        accs_dispatch<true>(out, theta, G, eps);
+        acc_pot_dispatch<true, 0>(out, theta, G, eps);
     }
     template <typename It>
     void accs_o(std::initializer_list<It> out, F theta, F G = F(1), F eps = F(0)) const
     {
-        accs_o(accs_ilist_to_array(out), theta, G, eps);
+        accs_o(acc_pot_ilist_to_array<0>(out), theta, G, eps);
+    }
+    template <typename Allocator>
+    void pots_o(std::array<std::vector<F, Allocator>, 1> &out, F theta, F G = F(1), F eps = F(0)) const
+    {
+        acc_pot_dispatch<true, 1>(out, theta, G, eps);
+    }
+    template <typename It>
+    void pots_o(const std::array<It, 1> &out, F theta, F G = F(1), F eps = F(0)) const
+    {
+        acc_pot_dispatch<true, 1>(out, theta, G, eps);
+    }
+    template <typename It>
+    void pots_o(std::initializer_list<It> out, F theta, F G = F(1), F eps = F(0)) const
+    {
+        pots_o(acc_pot_ilist_to_array<1>(out), theta, G, eps);
+    }
+    template <typename Allocator>
+    void accs_pots_o(std::array<std::vector<F, Allocator>, NDim + 1u> &out, F theta, F G = F(1), F eps = F(0)) const
+    {
+        acc_pot_dispatch<true, 2>(out, theta, G, eps);
+    }
+    template <typename It>
+    void accs_pots_o(const std::array<It, NDim + 1u> &out, F theta, F G = F(1), F eps = F(0)) const
+    {
+        acc_pot_dispatch<true, 2>(out, theta, G, eps);
+    }
+    template <typename It>
+    void accs_pots_o(std::initializer_list<It> out, F theta, F G = F(1), F eps = F(0)) const
+    {
+        accs_pots_o(acc_pot_ilist_to_array<2>(out), theta, G, eps);
     }
 
 private:
-    template <bool Ordered>
-    std::array<F, NDim> exact_acc_impl(size_type orig_idx, F G, F eps) const
+    template <bool Ordered, unsigned Q>
+    auto exact_acc_pot_impl(size_type orig_idx, F G, F eps) const
     {
-        simple_timer st("exact acc computation");
+        simple_timer st("exact acc/pot computation");
         const auto eps2 = eps * eps;
         // Check eps.
         check_eps_eps2(eps, eps2);
         // Check G.
         check_G_const(G);
         const auto size = m_parts[0].size();
-        std::array<F, NDim> retval{}, diffs;
+        std::array<F, nvecs_res<Q>> retval{};
+        std::array<F, NDim> diffs;
         const auto idx = Ordered ? m_ord_ind[orig_idx] : orig_idx;
         for (size_type i = 0; i < size; ++i) {
             if (i == idx) {
@@ -2077,9 +2697,20 @@ private:
                 diffs[j] = m_parts[j][i] - m_parts[j][idx];
                 dist2 = fma_wrap(diffs[j], diffs[j], dist2);
             }
-            const auto dist = std::sqrt(dist2), dist3 = dist * dist2, mG_dist3 = G * m_parts[NDim][i] / dist3;
-            for (std::size_t j = 0; j < NDim; ++j) {
-                retval[j] = fma_wrap(diffs[j], mG_dist3, retval[j]);
+            const auto inv_dist = F(1) / std::sqrt(dist2), Gmi_dist = G * m_parts[NDim][i] * inv_dist;
+            if constexpr (Q == 0u || Q == 2u) {
+                // Q == 0 or 2: accelerations are requested.
+                const auto Gmi_dist3 = inv_dist * inv_dist * Gmi_dist;
+                for (std::size_t j = 0; j < NDim; ++j) {
+                    retval[j] = fma_wrap(diffs[j], Gmi_dist3, retval[j]);
+                }
+            }
+            if constexpr (Q == 1u || Q == 2u) {
+                // Q == 1 or 2: potentials are requested.
+                // Establish the index of the potential in the result array:
+                // 0 if only the potentials are requested, NDim otherwise.
+                constexpr auto pot_idx = static_cast<std::size_t>(Q == 1u ? 0 : NDim);
+                retval[pot_idx] = fma_wrap(-Gmi_dist, m_parts[NDim][idx], retval[pot_idx]);
             }
         }
         return retval;
@@ -2088,11 +2719,27 @@ private:
 public:
     std::array<F, NDim> exact_acc_u(size_type idx, F G = F(1), F eps = F(0)) const
     {
-        return exact_acc_impl<false>(idx, G, eps);
+        return exact_acc_pot_impl<false, 0>(idx, G, eps);
+    }
+    std::array<F, 1> exact_pot_u(size_type idx, F G = F(1), F eps = F(0)) const
+    {
+        return exact_acc_pot_impl<false, 1>(idx, G, eps);
+    }
+    std::array<F, NDim + 1u> exact_acc_pot_u(size_type idx, F G = F(1), F eps = F(0)) const
+    {
+        return exact_acc_pot_impl<false, 2>(idx, G, eps);
     }
     std::array<F, NDim> exact_acc_o(size_type idx, F G = F(1), F eps = F(0)) const
     {
-        return exact_acc_impl<true>(idx, G, eps);
+        return exact_acc_pot_impl<true, 0>(idx, G, eps);
+    }
+    std::array<F, 1> exact_pot_o(size_type idx, F G = F(1), F eps = F(0)) const
+    {
+        return exact_acc_pot_impl<true, 1>(idx, G, eps);
+    }
+    std::array<F, NDim + 1u> exact_acc_pot_o(size_type idx, F G = F(1), F eps = F(0)) const
+    {
+        return exact_acc_pot_impl<true, 2>(idx, G, eps);
     }
 
 private:
@@ -2144,21 +2791,24 @@ public:
 private:
     // After updating the particles' positions, this method must be called
     // to reconstruct the other data members according to the new positions.
-    void refresh()
+    void sync()
     {
+        // Get the number of particles.
         const auto nparts = m_parts[0].size();
-        // First, we need to determine if we need to re-deduce the box size.
-        if (m_size_deduced) {
+        // Re-deduce the box size, if needed.
+        if (m_box_size_deduced) {
             m_box_size = determine_box_size(p_its_u(), nparts);
         }
-        // Second, let's generate the new codes, and a create a vector
-        // for the new indirect sorting of the new codes.
+        // Establish the new codes and re-order the internal data members accordingly.
         // NOTE: this is a slight repetition of some code in the constructor.
         // However, there it makes sense to mix the morton encoding with data movement,
         // while here the data is already in the member vectors. So we cannot really
         // refactor these bits in a common function.
         std::vector<size_type, di_aligned_allocator<size_type>> v_ind;
-        v_ind.resize(boost::numeric_cast<decltype(v_ind.size())>(nparts));
+        // NOTE: we are never changing the number of particles in a tree, thus we are sure
+        // that v_ind's size type can represent nparts (because of the checks
+        // we run in the ctor).
+        v_ind.resize(static_cast<decltype(v_ind.size())>(nparts));
         tbb::parallel_for(tbb::blocked_range<decltype(m_parts[0].size())>(0u, nparts),
                           [this, &v_ind](const auto &range) {
                               std::array<UInt, NDim> tmp_dcoord;
@@ -2195,36 +2845,32 @@ private:
             });
             tg.wait();
         }
-        // Re-construct the tree.
+        // Re-construct the tree. Make sure we empty the tree structures
+        // before doing it.
         m_tree.clear();
+        m_crit_nodes.clear();
         build_tree();
         build_tree_properties();
     }
-    // Implementation of the particles update function.
-    template <bool Ordered, typename Func>
-    void update_particles_impl(Func &&f)
-    {
-        if constexpr (Ordered) {
-            // Apply the functor to the ordered iterators.
-            std::forward<Func>(f)(ord_p_its_impl(*this));
-        } else {
-            // Apply the functor to the unordered iterators.
-            std::forward<Func>(f)(unord_p_its_impl(*this));
-        }
-        // Refresh the tree.
-        refresh();
-    }
-    // Small wrapper around the particle update function that does
-    // some exception-safe error handling.
+    // Invoke the particle update function with an
+    // exception safe wrapper.
     template <bool Ordered, typename Func>
     void update_particles_dispatch(Func &&f)
     {
         simple_timer st("overall update_particles");
         try {
-            update_particles_impl<Ordered>(std::forward<Func>(f));
+            if constexpr (Ordered) {
+                // Apply the functor to the ordered iterators.
+                std::forward<Func>(f)(ord_p_its_impl(*this));
+            } else {
+                // Apply the functor to the unordered iterators.
+                std::forward<Func>(f)(unord_p_its_impl(*this));
+            }
+            // Sync the tree structures.
+            sync();
         } catch (...) {
             // Erase everything before re-throwing.
-            clear_containers();
+            clear();
             throw;
         }
     }
@@ -2244,20 +2890,28 @@ public:
     {
         return m_box_size;
     }
-    bool box_size_deduced() const
+    bool get_box_size_deduced() const
     {
-        return m_size_deduced;
+        return m_box_size_deduced;
+    }
+    size_type get_ncrit() const
+    {
+        return m_ncrit;
+    }
+    size_type get_max_leaf_n() const
+    {
+        return m_max_leaf_n;
     }
 
 private:
     // The size of the domain.
     F m_box_size;
     // Flag to signal if the domain size was deduced or explicitly specified.
-    bool m_size_deduced;
+    bool m_box_size_deduced;
     // The maximum number of particles in a leaf node.
     size_type m_max_leaf_n;
     // Number of particles in a critical node: if the number of particles in
-    // a node is ncrit or less, then we will compute the accelerations on the
+    // a node is ncrit or less, then we will compute the accelerations/potentials on the
     // particles in that node in a vectorised fashion.
     size_type m_ncrit;
     // The particles: NDim coordinates plus masses.
