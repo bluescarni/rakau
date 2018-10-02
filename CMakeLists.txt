@@ -86,7 +86,7 @@ target_link_libraries(rakau INTERFACE Boost::boost xsimd TBB::tbb)
 target_include_directories(rakau INTERFACE
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
     $<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}/include>
-	$<INSTALL_INTERFACE:include>)
+    $<INSTALL_INTERFACE:include>)
 
 # Configure config.hpp.
 configure_file("${CMAKE_CURRENT_SOURCE_DIR}/config.hpp.in" "${CMAKE_CURRENT_BINARY_DIR}/include/rakau/config.hpp" @ONLY)
