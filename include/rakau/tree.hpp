@@ -83,6 +83,12 @@
 #include <rakau/config.hpp>
 #include <rakau/detail/libmorton/morton.h>
 
+#if defined(__HCC__)
+
+#include <rakau/detail/hc_fwd.hpp>
+
+#endif
+
 #if defined(__clang__) || defined(__GNUC__)
 
 #pragma GCC diagnostic pop

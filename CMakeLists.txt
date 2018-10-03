@@ -26,6 +26,12 @@ endif()
 include(YACMACompilerLinkerSettings)
 include(CheckCXXCompilerFlag)
 
+# Detect if we are using hcc.
+if(YACMA_COMPILER_IS_CLANGXX AND "${CMAKE_CXX_COMPILER}" MATCHES "hcc")
+  message(STATUS "hcc compiler detected.")
+  set(RAKAU_COMPILER_IS_HCC TRUE)
+endif()
+
 # Assemble the flags.
 set(RAKAU_CXX_FLAGS_DEBUG ${YACMA_CXX_FLAGS} ${YACMA_CXX_FLAGS_DEBUG})
 set(RAKAU_CXX_FLAGS_RELEASE ${YACMA_CXX_FLAGS})
@@ -87,6 +93,23 @@ target_include_directories(rakau INTERFACE
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
     $<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}/include>
     $<INSTALL_INTERFACE:include>)
+
+if(RAKAU_COMPILER_IS_HCC)
+  set(THREADS_PREFER_PTHREAD_FLAG TRUE)
+  find_package(Threads REQUIRED)
+  unset(THREADS_PREFER_PTHREAD_FLAG)
+  add_library(rakau_hc SHARED "${CMAKE_CURRENT_SOURCE_DIR}/src/rakau_hc.cpp")
+  # Deduce the path to the hcc libraries.
+  get_filename_component(RAKAU_HCC_LIB_DIR "${CMAKE_CXX_COMPILER}/../../lib" ABSOLUTE)
+  message(STATUS "Path to the hcc libraries: ${RAKAU_HCC_LIB_DIR}")
+  set_target_properties(rakau_hc PROPERTIES LINK_FLAGS "-hc -Wl,--rpath=\"${RAKAU_HCC_LIB_DIR}\" -lhc_am -Wl,--no-whole-archive")
+  target_compile_options(rakau_hc PRIVATE "-hc" "-Wno-unused-command-line-argument")
+  target_link_libraries(rakau_hc PRIVATE rakau "${CMAKE_DL_LIBS}" Threads::Threads)
+  target_compile_options(rakau_hc PRIVATE "$<$<CONFIG:DEBUG>:${RAKAU_CXX_FLAGS_DEBUG}>" "$<$<CONFIG:RELEASE>:${RAKAU_CXX_FLAGS_RELEASE}>")
+  set_property(TARGET rakau_hc PROPERTY CXX_STANDARD 17)
+  set_property(TARGET rakau_hc PROPERTY CXX_STANDARD_REQUIRED YES)
+  set_property(TARGET rakau_hc PROPERTY CXX_EXTENSIONS NO)
+endif()
 
 # Configure config.hpp.
 configure_file("${CMAKE_CURRENT_SOURCE_DIR}/config.hpp.in" "${CMAKE_CURRENT_BINARY_DIR}/include/rakau/config.hpp" @ONLY)
