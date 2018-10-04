@@ -95,17 +95,11 @@ target_include_directories(rakau INTERFACE
     $<INSTALL_INTERFACE:include>)
 
 if(RAKAU_COMPILER_IS_HCC)
-  set(THREADS_PREFER_PTHREAD_FLAG TRUE)
-  find_package(Threads REQUIRED)
-  unset(THREADS_PREFER_PTHREAD_FLAG)
   add_library(rakau_hc SHARED "${CMAKE_CURRENT_SOURCE_DIR}/src/rakau_hc.cpp")
-  # Deduce the path to the hcc libraries.
-  get_filename_component(RAKAU_HCC_LIB_DIR "${CMAKE_CXX_COMPILER}/../../lib" ABSOLUTE)
-  message(STATUS "Path to the hcc libraries: ${RAKAU_HCC_LIB_DIR}")
-  set_target_properties(rakau_hc PROPERTIES LINK_FLAGS "-hc -Wl,--rpath=\"${RAKAU_HCC_LIB_DIR}\" -lhc_am -Wl,--no-whole-archive")
-  target_compile_options(rakau_hc PRIVATE "-hc" "-Wno-unused-command-line-argument")
-  target_link_libraries(rakau_hc PRIVATE rakau "${CMAKE_DL_LIBS}" Threads::Threads)
-  target_compile_options(rakau_hc PRIVATE "$<$<CONFIG:DEBUG>:${RAKAU_CXX_FLAGS_DEBUG}>" "$<$<CONFIG:RELEASE>:${RAKAU_CXX_FLAGS_RELEASE}>")
+  set_target_properties(rakau_hc PROPERTIES LINK_FLAGS "-hc")
+  target_compile_options(rakau_hc PRIVATE "$<$<CONFIG:DEBUG>:${RAKAU_CXX_FLAGS_DEBUG}>" "$<$<CONFIG:RELEASE>:${RAKAU_CXX_FLAGS_RELEASE}>"
+    "-hc" "-Wno-unused-command-line-argument")
+  target_link_libraries(rakau_hc PRIVATE rakau)
   set_property(TARGET rakau_hc PROPERTY CXX_STANDARD 17)
   set_property(TARGET rakau_hc PROPERTY CXX_STANDARD_REQUIRED YES)
   set_property(TARGET rakau_hc PROPERTY CXX_EXTENSIONS NO)
