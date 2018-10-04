@@ -1782,7 +1782,7 @@ private:
                         // Q == 1 or 2: potentials are requested.
                         // Establish the index of the potential in the result array:
                         // 0 if only the potentials are requested, NDim otherwise.
-                        constexpr auto pot_idx = static_cast<std::size_t>(Q == 1u ? 0 : NDim);
+                        constexpr auto pot_idx = static_cast<std::size_t>(Q == 1u ? 0u : NDim);
                         // Compute the negated mutual potential.
                         const auto mut_pot = m1 / dist * m2;
                         // Subtract mut_pot from the accumulator for the current particle and from
@@ -1799,7 +1799,7 @@ private:
                     }
                 }
                 if constexpr (Q == 1u || Q == 2u) {
-                    constexpr auto pot_idx = static_cast<std::size_t>(Q == 1u ? 0 : NDim);
+                    constexpr auto pot_idx = static_cast<std::size_t>(Q == 1u ? 0u : NDim);
                     // NOTE: addition, because the value in a1[pot_idx] was already built
                     // as a negative quantity.
                     res_ptrs[pot_idx][i1] += a1[pot_idx];
@@ -1950,7 +1950,7 @@ private:
                         // Q == 1 or 2: potentials are requested.
                         // Establish the index of the potential in the result array:
                         // 0 if only the potentials are requested, NDim otherwise.
-                        constexpr auto pot_idx = static_cast<std::size_t>(Q == 1u ? 0 : NDim);
+                        constexpr auto pot_idx = static_cast<std::size_t>(Q == 1u ? 0u : NDim);
                         res_ptrs[pot_idx][i1] = fma_wrap(-m1, m2 / dist, res_ptrs[pot_idx][i1]);
                     }
                 }
@@ -2067,10 +2067,10 @@ private:
                     // Q == 1 or 2: potentials are requested.
                     // Establish the index of the potential in the result array:
                     // 0 if only the potentials are requested, NDim otherwise.
-                    constexpr auto pot_idx = static_cast<std::size_t>(Q == 1u ? 0 : NDim);
+                    constexpr auto pot_idx = static_cast<std::size_t>(Q == 1u ? 0u : NDim);
                     // Establish the index of the dist values in the temp data:
                     // 0 if only the potentials are requested, NDim + 1 otherwise.
-                    constexpr auto dist_idx = static_cast<std::size_t>(Q == 1u ? 0 : NDim + 1u);
+                    constexpr auto dist_idx = static_cast<std::size_t>(Q == 1u ? 0u : NDim + 1u);
                     res_ptrs[pot_idx][i] = fma_wrap(-m_ptr[i], m_src / tmp_ptrs[dist_idx][i], res_ptrs[pot_idx][i]);
                 }
             }
@@ -2108,7 +2108,7 @@ private:
             // Q == 1 or 2: potentials are requested.
             // Establish the index of the dist values in the temp data:
             // 0 if only the potentials are requested, NDim + 1 otherwise.
-            constexpr auto dist_idx = static_cast<std::size_t>(Q == 1u ? 0 : NDim + 1u);
+            constexpr auto dist_idx = static_cast<std::size_t>(Q == 1u ? 0u : NDim + 1u);
             tmp_vecs[dist_idx].resize(pdata_size);
             tmp_ptrs[dist_idx] = tmp_vecs[dist_idx].data();
         }
@@ -2249,7 +2249,7 @@ private:
                     // Q == 1 or 2: potentials are requested.
                     // Establish the index of the dist values in the temp data:
                     // 0 if only the potentials are requested, NDim + 1 otherwise.
-                    constexpr auto dist_idx = static_cast<std::size_t>(Q == 1u ? 0 : NDim + 1u);
+                    constexpr auto dist_idx = static_cast<std::size_t>(Q == 1u ? 0u : NDim + 1u);
                     // NOTE: in the scalar part, we always store dist.
                     tmp_ptrs[dist_idx][i] = dist;
                 }
@@ -2685,7 +2685,7 @@ private:
                 // Q == 1 or 2: potentials are requested.
                 // Establish the index of the potential in the result array:
                 // 0 if only the potentials are requested, NDim otherwise.
-                constexpr auto pot_idx = static_cast<std::size_t>(Q == 1u ? 0 : NDim);
+                constexpr auto pot_idx = static_cast<std::size_t>(Q == 1u ? 0u : NDim);
                 retval[pot_idx] = fma_wrap(-Gmi_dist, m_parts[NDim][idx], retval[pot_idx]);
             }
         }
