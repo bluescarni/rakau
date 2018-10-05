@@ -12,13 +12,17 @@
 #include <array>
 #include <cstddef>
 
+#include <rakau/detail/tree_fwd.hpp>
+
 namespace rakau
 {
 inline namespace detail
 {
 
-template <typename F, std::size_t NDim, typename UInt>
-void first_hc_function(std::size_t, std::array<F *, 3> &) __attribute__((visibility("default")));
+template <unsigned Q, std::size_t NDim, typename F, typename UInt>
+void acc_pot_impl_hcc(const std::array<F *, tree_nvecs_res<Q, NDim>> &, const tree_cnode_t<F, UInt> *, tree_size_t<F>,
+                      const tree_node_t<NDim, F, UInt> *, tree_size_t<F>, const std::array<const F *, NDim + 1u> &,
+                      tree_size_t<F>, F, F, F) __attribute__((visibility("default")));
 
 } // namespace detail
 } // namespace rakau
