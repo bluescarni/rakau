@@ -2233,7 +2233,7 @@ private:
                 part_ptrs[i] = m_parts[i].data();
             }
             acc_pot_impl_hcc<Q>(out, m_crit_nodes.data(), m_crit_nodes.size(), m_tree.data(), m_tree.size(), part_ptrs,
-                                m_parts[0].size(), theta2, G, eps2);
+                                m_parts[0].size(), theta2, G, eps2, m_ncrit);
             return;
         }
 #endif
