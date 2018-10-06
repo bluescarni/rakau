@@ -208,7 +208,7 @@ inline int tree_acc_pot_bh_check_hcc(TreeView tree_view, int src_idx, F theta2, 
     const auto src_dim2 = std::get<5>(src_node);
     // Compute the distance between target particle and source COM.
     F dist2(0);
-    std::array<F, 3> dist_vec;
+    std::array<F, NDim> dist_vec;
     for (std::size_t j = 0; j < NDim; ++j) {
         const auto diff = com_pos[j] - p_view[j][pidx];
         dist2 = fma(diff, diff, dist2);
