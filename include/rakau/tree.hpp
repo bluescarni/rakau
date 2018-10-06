@@ -1944,7 +1944,7 @@ private:
             // Init the pointer to the target masses, but only if potentials are requested.
             [[maybe_unused]] const F *m_ptr;
             if constexpr (Q == 1u || Q == 2u) {
-                m_ptr = p_ptrs[3];
+                m_ptr = p_ptrs[NDim];
             }
             for (size_type i = 0; i < tgt_size; ++i) {
                 if constexpr (Q == 0u || Q == 2u) {
