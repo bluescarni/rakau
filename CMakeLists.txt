@@ -94,11 +94,15 @@ target_include_directories(rakau INTERFACE
     $<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}/include>
     $<INSTALL_INTERFACE:include>)
 
+set(RAKAU_HC_DEVICE_FLAGS "" CACHE STRING "Flags for device code compilation.")
+mark_as_advanced(RAKAU_HC_DEVICE_FLAGS)
 if(RAKAU_COMPILER_IS_HCC)
+  string(REPLACE " " ";" RAKAU_HC_DEVICE_FLAGS_ "${RAKAU_HC_DEVICE_FLAGS}")
   add_library(rakau_hc SHARED "${CMAKE_CURRENT_SOURCE_DIR}/src/rakau_hc.cpp")
-  set_target_properties(rakau_hc PROPERTIES LINK_FLAGS "-hc")
+  set_target_properties(rakau_hc PROPERTIES LINK_FLAGS "-hc ${RAKAU_HC_DEVICE_FLAGS}")
   target_compile_options(rakau_hc PRIVATE "$<$<CONFIG:DEBUG>:${RAKAU_CXX_FLAGS_DEBUG}>" "$<$<CONFIG:RELEASE>:${RAKAU_CXX_FLAGS_RELEASE}>"
-    "-hc" "-Wno-unused-command-line-argument")
+    "-hc" "-Wno-unused-command-line-argument" "${RAKAU_HC_DEVICE_FLAGS_}")
+  unset(RAKAU_HC_DEVICE_FLAGS_)
   target_link_libraries(rakau_hc PRIVATE rakau)
   set_property(TARGET rakau_hc PROPERTY CXX_STANDARD 17)
   set_property(TARGET rakau_hc PROPERTY CXX_STANDARD_REQUIRED YES)
