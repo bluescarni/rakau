@@ -60,52 +60,6 @@ inline auto t2a(const Tuple &tup)
     return t2a_impl(tup, std::make_index_sequence<std::tuple_size_v<Tuple>>{});
 }
 
-template <unsigned Q, std::size_t NDim, typename F, typename TreeView, typename PView, typename ResArray>
-inline void tree_acc_pot_leaf_hcc(TreeView tree_view, F eps2, int src_idx, int pidx, PView p_view, ResArray &res_array)
-    [[hc]]
-{
-    // Local cache.
-    const auto &src_node = tree_view[src_idx];
-    // Establish the range of the source node.
-    const auto src_begin = static_cast<int>(std::get<1>(src_node)[0]),
-               src_end = static_cast<int>(std::get<1>(src_node)[1]);
-    // Local variables for the scalar computation.
-    std::array<F, NDim> pos1, diffs;
-    // Load the coordinates of the current particle
-    // in the target node.
-    for (std::size_t j = 0; j < NDim; ++j) {
-        pos1[j] = p_view[j][pidx];
-    }
-    // Load the target mass, but only if we are interested in the potentials.
-    [[maybe_unused]] F m1;
-    if constexpr (Q == 1u || Q == 2u) {
-        m1 = p_view[NDim][pidx];
-    }
-    // Iterate over the particles in the src node.
-    for (auto i = src_begin; i < src_end; ++i) {
-        F dist2(eps2);
-        for (std::size_t j = 0; j < NDim; ++j) {
-            diffs[j] = p_view[j][i] - pos1[j];
-            dist2 = fma(diffs[j], diffs[j], dist2);
-        }
-        const auto dist = sqrt(dist2), m2 = p_view[NDim][i];
-        if constexpr (Q == 0u || Q == 2u) {
-            // Q == 0 or 2: accelerations are requested.
-            const auto dist3 = dist * dist2, m_dist3 = m2 / dist3;
-            for (std::size_t j = 0; j < NDim; ++j) {
-                res_array[j] = fma(diffs[j], m_dist3, res_array[j]);
-            }
-        }
-        if constexpr (Q == 1u || Q == 2u) {
-            // Q == 1 or 2: potentials are requested.
-            // Establish the index of the potential in the result array:
-            // 0 if only the potentials are requested, NDim otherwise.
-            constexpr auto pot_idx = static_cast<std::size_t>(Q == 1u ? 0 : NDim);
-            res_array[pot_idx] = fma(-m1, m2 / dist, res_array[pot_idx]);
-        }
-    }
-}
-
 template <unsigned Q, std::size_t NDim, typename F, typename PView, typename ResArray>
 inline void tree_self_interactions_hcc(F eps2, int pidx, int tgt_begin, int tgt_end, PView p_view, ResArray &res_array)
     [[hc]]
@@ -149,16 +103,60 @@ inline void tree_self_interactions_hcc(F eps2, int pidx, int tgt_begin, int tgt_
     }
 }
 
-template <unsigned Q, std::size_t NDim, typename F, typename TreeView, typename PView, typename ResArray>
-inline void tree_acc_pot_bh_com_hcc(TreeView tree_view, F eps2, int src_idx, int pidx, PView p_view,
+template <unsigned Q, std::size_t NDim, typename F, typename SrcNode, typename PView, typename ResArray>
+inline void tree_acc_pot_leaf_hcc(const SrcNode &src_node, F eps2, int src_idx, int pidx, PView p_view,
+                                  ResArray &res_array) [[hc]]
+{
+    // Establish the range of the source node.
+    const auto src_begin = static_cast<int>(std::get<1>(src_node)[0]),
+               src_end = static_cast<int>(std::get<1>(src_node)[1]);
+    // Local variables for the scalar computation.
+    std::array<F, NDim> pos1, diffs;
+    // Load the coordinates of the current particle
+    // in the target node.
+    for (std::size_t j = 0; j < NDim; ++j) {
+        pos1[j] = p_view[j][pidx];
+    }
+    // Load the target mass, but only if we are interested in the potentials.
+    [[maybe_unused]] F m1;
+    if constexpr (Q == 1u || Q == 2u) {
+        m1 = p_view[NDim][pidx];
+    }
+    // Iterate over the particles in the src node.
+    for (auto i = src_begin; i < src_end; ++i) {
+        F dist2(eps2);
+        for (std::size_t j = 0; j < NDim; ++j) {
+            diffs[j] = p_view[j][i] - pos1[j];
+            dist2 = fma(diffs[j], diffs[j], dist2);
+        }
+        const auto dist = sqrt(dist2), m2 = p_view[NDim][i];
+        if constexpr (Q == 0u || Q == 2u) {
+            // Q == 0 or 2: accelerations are requested.
+            const auto dist3 = dist * dist2, m_dist3 = m2 / dist3;
+            for (std::size_t j = 0; j < NDim; ++j) {
+                res_array[j] = fma(diffs[j], m_dist3, res_array[j]);
+            }
+        }
+        if constexpr (Q == 1u || Q == 2u) {
+            // Q == 1 or 2: potentials are requested.
+            // Establish the index of the potential in the result array:
+            // 0 if only the potentials are requested, NDim otherwise.
+            constexpr auto pot_idx = static_cast<std::size_t>(Q == 1u ? 0 : NDim);
+            res_array[pot_idx] = fma(-m1, m2 / dist, res_array[pot_idx]);
+        }
+    }
+}
+
+template <unsigned Q, std::size_t NDim, typename F, typename SrcNode, typename PView, typename ResArray>
+inline void tree_acc_pot_bh_com_hcc(const SrcNode &src_node, F eps2, int src_idx, int pidx, PView p_view,
                                     ResArray &res_array, F dist2, const std::array<F, NDim> &dist_vec) [[hc]]
 {
     // Add the softening length to dist2.
     dist2 += eps2;
-    // Load locally the mass of the source node.
-    const auto m_src = std::get<2>(tree_view[src_idx]);
     // Compute the distance.
     const F dist = sqrt(dist2);
+    // Load locally the mass of the source node.
+    const auto m_src = std::get<2>(src_node);
     if constexpr (Q == 0u || Q == 2u) {
         // Q == 0 or 2: accelerations are requested.
         const auto m_src_dist3 = m_src / (dist * dist2);
@@ -176,12 +174,10 @@ inline void tree_acc_pot_bh_com_hcc(TreeView tree_view, F eps2, int src_idx, int
     }
 }
 
-template <unsigned Q, std::size_t NDim, typename F, typename TreeView, typename PView, typename ResArray>
-inline int tree_acc_pot_bh_check_hcc(TreeView tree_view, int src_idx, F theta2, F eps2, int pidx, PView p_view,
+template <unsigned Q, std::size_t NDim, typename F, typename SrcNode, typename PView, typename ResArray>
+inline int tree_acc_pot_bh_check_hcc(const SrcNode &src_node, int src_idx, F theta2, F eps2, int pidx, PView p_view,
                                      ResArray &res_array) [[hc]]
 {
-    // Local cache.
-    const auto &src_node = tree_view[src_idx];
     // Copy locally the number of children of the source node.
     const auto n_children_src = static_cast<int>(std::get<1>(src_node)[2]);
     // Copy locally the COM coords of the source.
@@ -199,7 +195,7 @@ inline int tree_acc_pot_bh_check_hcc(TreeView tree_view, int src_idx, F theta2, 
     if (src_dim2 < theta2 * dist2) {
         // The source node satisfies the BH criterion for all the particles of the target node. Add the
         // acceleration due to the com of the source node.
-        tree_acc_pot_bh_com_hcc<Q, NDim>(tree_view, eps2, src_idx, pidx, p_view, res_array, dist2, dist_vec);
+        tree_acc_pot_bh_com_hcc<Q, NDim>(src_node, eps2, src_idx, pidx, p_view, res_array, dist2, dist_vec);
         // We can now skip all the children of the source node.
         return src_idx + n_children_src + 1;
     }
@@ -207,7 +203,7 @@ inline int tree_acc_pot_bh_check_hcc(TreeView tree_view, int src_idx, F theta2, 
     // node, in which case we need to compute all the pairwise interactions.
     if (!n_children_src) {
         // Leaf node.
-        tree_acc_pot_leaf_hcc<Q, NDim>(tree_view, eps2, src_idx, pidx, p_view, res_array);
+        tree_acc_pot_leaf_hcc<Q, NDim>(src_node, eps2, src_idx, pidx, p_view, res_array);
     }
     // In any case, we keep traversing the tree moving to the next node in depth-first order.
     return src_idx + 1;
@@ -288,7 +284,7 @@ void acc_pot_impl_hcc(const std::array<F *, tree_nvecs_res<Q, NDim>> &out, const
                 // The source node is not an ancestor of the target. We need to run the BH criterion
                 // check. The tree_acc_pot_bh_check() function will return the index of the next node
                 // in the traversal.
-                src_idx = tree_acc_pot_bh_check_hcc<Q, NDim>(tree_view, src_idx, theta2, eps2, pidx, p_view, res_array);
+                src_idx = tree_acc_pot_bh_check_hcc<Q, NDim>(src_node, src_idx, theta2, eps2, pidx, p_view, res_array);
             }
 
             // Handle the G constant and write out the result.
