@@ -106,9 +106,9 @@ inline void tree_acc_pot_leaf_hcc(TreeView tree_view, F eps2, int src_idx, int p
     }
 }
 
-template <unsigned Q, std::size_t NDim, typename F, typename TreeView, typename PView, typename ResView>
-inline void tree_self_interactions_hcc(TreeView tree_view, F eps2, int pidx, int tgt_begin, int tgt_end, PView p_view,
-                                       ResView res_view) [[hc]]
+template <unsigned Q, std::size_t NDim, typename F, typename PView, typename ResView>
+inline void tree_self_interactions_hcc(F eps2, int pidx, int tgt_begin, int tgt_end, PView p_view, ResView res_view)
+    [[hc]]
 {
     // Temporary vectors to be used in the loops below.
     std::array<F, NDim> diffs, pos;
@@ -122,7 +122,7 @@ inline void tree_self_interactions_hcc(TreeView tree_view, F eps2, int pidx, int
     // (inited to zero).
     std::array<F, tree_nvecs_res<Q, NDim>> a1{};
     // NOTE: setup the loop to avoid computing self interactions on pidx.
-    for (int i = tgt_begin + (tgt_begin == pidx); i < tgt_end; i += 1 + ((i + 1) == pidx)) {
+    for (auto i = tgt_begin + (tgt_begin == pidx); i < tgt_end; i += 1 + ((i + 1) == pidx)) {
         // Determine dist2, dist and dist3.
         F dist2(eps2);
         for (std::size_t j = 0; j < NDim; ++j) {
@@ -212,8 +212,6 @@ inline int tree_acc_pot_bh_check_hcc(TreeView tree_view, int src_idx, F theta2, 
         dist2 = fma(diff, diff, dist2);
         dist_vec[j] = diff;
     }
-    // const F dx = com_pos[0] - p_view[0][pidx], dy = com_pos[1] - p_view[1][pidx], dz = com_pos[2] - p_view[2][pidx];
-    // const F dist2 = dx * dx + dy * dy + dz * dz;
     if (src_dim2 < theta2 * dist2) {
         // The source node satisfies the BH criterion for all the particles of the target node. Add the
         // acceleration due to the com of the source node.
@@ -279,7 +277,7 @@ void acc_pot_impl_hcc(const std::array<F *, tree_nvecs_res<Q, NDim>> &out, const
                 if (src_code == tgt_code) {
                     // If src_code == tgt_code, we are currently visiting the target node.
                     // Compute the self interactions and skip all the children of the target node.
-                    tree_self_interactions_hcc<Q, NDim>(tree_view, eps2, pidx, tgt_begin, tgt_end, p_view, res_view);
+                    tree_self_interactions_hcc<Q, NDim>(eps2, pidx, tgt_begin, tgt_end, p_view, res_view);
                     src_idx += n_children_src + 1;
                     continue;
                 }
@@ -304,6 +302,11 @@ void acc_pot_impl_hcc(const std::array<F *, tree_nvecs_res<Q, NDim>> &out, const
                 // check. The tree_acc_pot_bh_check() function will return the index of the next node
                 // in the traversal.
                 src_idx = tree_acc_pot_bh_check_hcc<Q, NDim>(tree_view, src_idx, theta2, eps2, pidx, p_view, res_view);
+            }
+
+            // Handle the G constant.
+            for (std::size_t j = 0; j < tree_nvecs_res<Q, NDim>; ++j) {
+                res_view[j][pidx] *= G;
             }
         })
         .get();
