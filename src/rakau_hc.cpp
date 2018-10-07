@@ -60,8 +60,8 @@ inline auto t2a(const Tuple &tup)
     return t2a_impl(tup, std::make_index_sequence<std::tuple_size_v<Tuple>>{});
 }
 
-template <unsigned Q, std::size_t NDim, typename F, typename TreeView, typename PView, typename ResView>
-inline void tree_acc_pot_leaf_hcc(TreeView tree_view, F eps2, int src_idx, int pidx, PView p_view, ResView res_view)
+template <unsigned Q, std::size_t NDim, typename F, typename TreeView, typename PView, typename ResArray>
+inline void tree_acc_pot_leaf_hcc(TreeView tree_view, F eps2, int src_idx, int pidx, PView p_view, ResArray &res_array)
     [[hc]]
 {
     // Local cache.
@@ -93,7 +93,7 @@ inline void tree_acc_pot_leaf_hcc(TreeView tree_view, F eps2, int src_idx, int p
             // Q == 0 or 2: accelerations are requested.
             const auto dist3 = dist * dist2, m_dist3 = m2 / dist3;
             for (std::size_t j = 0; j < NDim; ++j) {
-                res_view[j][pidx] = fma(diffs[j], m_dist3, res_view[j][pidx]);
+                res_array[j] = fma(diffs[j], m_dist3, res_array[j]);
             }
         }
         if constexpr (Q == 1u || Q == 2u) {
@@ -101,13 +101,13 @@ inline void tree_acc_pot_leaf_hcc(TreeView tree_view, F eps2, int src_idx, int p
             // Establish the index of the potential in the result array:
             // 0 if only the potentials are requested, NDim otherwise.
             constexpr auto pot_idx = static_cast<std::size_t>(Q == 1u ? 0 : NDim);
-            res_view[pot_idx][pidx] = fma(-m1, m2 / dist, res_view[pot_idx][pidx]);
+            res_array[pot_idx] = fma(-m1, m2 / dist, res_array[pot_idx]);
         }
     }
 }
 
-template <unsigned Q, std::size_t NDim, typename F, typename PView, typename ResView>
-inline void tree_self_interactions_hcc(F eps2, int pidx, int tgt_begin, int tgt_end, PView p_view, ResView res_view)
+template <unsigned Q, std::size_t NDim, typename F, typename PView, typename ResArray>
+inline void tree_self_interactions_hcc(F eps2, int pidx, int tgt_begin, int tgt_end, PView p_view, ResArray &res_array)
     [[hc]]
 {
     // Temporary vectors to be used in the loops below.
@@ -118,9 +118,6 @@ inline void tree_self_interactions_hcc(F eps2, int pidx, int tgt_begin, int tgt_
     }
     // Load the mass of the current particle.
     const auto m1 = p_view[NDim][pidx];
-    // The acceleration/potential vector for the current particle
-    // (inited to zero).
-    std::array<F, tree_nvecs_res<Q, NDim>> a1{};
     // NOTE: setup the loop to avoid computing self interactions on pidx.
     for (auto i = tgt_begin + (tgt_begin == pidx); i < tgt_end; i += 1 + ((i + 1) == pidx)) {
         // Determine dist2, dist and dist3.
@@ -136,7 +133,7 @@ inline void tree_self_interactions_hcc(F eps2, int pidx, int tgt_begin, int tgt_
             const auto dist3 = dist2 * dist, m2_dist3 = m2 / dist3, m1_dist3 = m1 / dist3;
             // Accumulate the accelerations.
             for (std::size_t j = 0; j < NDim; ++j) {
-                a1[j] = fma(m2_dist3, diffs[j], a1[j]);
+                res_array[j] = fma(m2_dist3, diffs[j], res_array[j]);
             }
         }
         if constexpr (Q == 1u || Q == 2u) {
@@ -147,27 +144,14 @@ inline void tree_self_interactions_hcc(F eps2, int pidx, int tgt_begin, int tgt_
             // Compute the negated mutual potential.
             const auto mut_pot = m1 / dist * m2;
             // Subtract mut_pot from the accumulator for the current particle.
-            a1[pot_idx] -= mut_pot;
+            res_array[pot_idx] -= mut_pot;
         }
-    }
-    // Update the acceleration/potential on the first particle
-    // in the temporary storage.
-    if constexpr (Q == 0u || Q == 2u) {
-        for (std::size_t j = 0; j < NDim; ++j) {
-            res_view[j][pidx] += a1[j];
-        }
-    }
-    if constexpr (Q == 1u || Q == 2u) {
-        constexpr auto pot_idx = static_cast<std::size_t>(Q == 1u ? 0u : NDim);
-        // NOTE: addition, because the value in a1[pot_idx] was already built
-        // as a negative quantity.
-        res_view[pot_idx][pidx] += a1[pot_idx];
     }
 }
 
-template <unsigned Q, std::size_t NDim, typename F, typename TreeView, typename PView, typename ResView>
-inline void tree_acc_pot_bh_com_hcc(TreeView tree_view, F eps2, int src_idx, int pidx, PView p_view, ResView res_view,
-                                    F dist2, const std::array<F, NDim> &dist_vec) [[hc]]
+template <unsigned Q, std::size_t NDim, typename F, typename TreeView, typename PView, typename ResArray>
+inline void tree_acc_pot_bh_com_hcc(TreeView tree_view, F eps2, int src_idx, int pidx, PView p_view,
+                                    ResArray &res_array, F dist2, const std::array<F, NDim> &dist_vec) [[hc]]
 {
     // Add the softening length to dist2.
     dist2 += eps2;
@@ -179,7 +163,7 @@ inline void tree_acc_pot_bh_com_hcc(TreeView tree_view, F eps2, int src_idx, int
         // Q == 0 or 2: accelerations are requested.
         const auto m_src_dist3 = m_src / (dist * dist2);
         for (std::size_t j = 0; j < NDim; ++j) {
-            res_view[j][pidx] = fma(dist_vec[j], m_src_dist3, res_view[j][pidx]);
+            res_array[j] = fma(dist_vec[j], m_src_dist3, res_array[j]);
         }
     }
     if constexpr (Q == 1u || Q == 2u) {
@@ -188,13 +172,13 @@ inline void tree_acc_pot_bh_com_hcc(TreeView tree_view, F eps2, int src_idx, int
         // 0 if only the potentials are requested, NDim otherwise.
         constexpr auto pot_idx = static_cast<std::size_t>(Q == 1u ? 0u : NDim);
         // Load the target mass and compute the potential.
-        res_view[pot_idx][pidx] = fma(-p_view[NDim][pidx], m_src / dist, res_view[pot_idx][pidx]);
+        res_array[pot_idx] = fma(-p_view[NDim][pidx], m_src / dist, res_array[pot_idx]);
     }
 }
 
-template <unsigned Q, std::size_t NDim, typename F, typename TreeView, typename PView, typename ResView>
+template <unsigned Q, std::size_t NDim, typename F, typename TreeView, typename PView, typename ResArray>
 inline int tree_acc_pot_bh_check_hcc(TreeView tree_view, int src_idx, F theta2, F eps2, int pidx, PView p_view,
-                                     ResView res_view) [[hc]]
+                                     ResArray &res_array) [[hc]]
 {
     // Local cache.
     const auto &src_node = tree_view[src_idx];
@@ -215,7 +199,7 @@ inline int tree_acc_pot_bh_check_hcc(TreeView tree_view, int src_idx, F theta2, 
     if (src_dim2 < theta2 * dist2) {
         // The source node satisfies the BH criterion for all the particles of the target node. Add the
         // acceleration due to the com of the source node.
-        tree_acc_pot_bh_com_hcc<Q, NDim>(tree_view, eps2, src_idx, pidx, p_view, res_view, dist2, dist_vec);
+        tree_acc_pot_bh_com_hcc<Q, NDim>(tree_view, eps2, src_idx, pidx, p_view, res_array, dist2, dist_vec);
         // We can now skip all the children of the source node.
         return src_idx + n_children_src + 1;
     }
@@ -223,7 +207,7 @@ inline int tree_acc_pot_bh_check_hcc(TreeView tree_view, int src_idx, F theta2, 
     // node, in which case we need to compute all the pairwise interactions.
     if (!n_children_src) {
         // Leaf node.
-        tree_acc_pot_leaf_hcc<Q, NDim>(tree_view, eps2, src_idx, pidx, p_view, res_view);
+        tree_acc_pot_leaf_hcc<Q, NDim>(tree_view, eps2, src_idx, pidx, p_view, res_array);
     }
     // In any case, we keep traversing the tree moving to the next node in depth-first order.
     return src_idx + 1;
@@ -266,6 +250,9 @@ void acc_pot_impl_hcc(const std::array<F *, tree_nvecs_res<Q, NDim>> &out, const
             // Compute the global index in the particles arrays of the current particle.
             const int pidx = tgt_begin + thread_id.local[0];
 
+            // Array of results, inited to zeroes.
+            std::array<F, tree_nvecs_res<Q, NDim>> res_array{};
+
             // Start looping over the source data.
             for (int src_idx = 0; src_idx < tsize;) {
                 // Get a reference to the current source node.
@@ -277,7 +264,7 @@ void acc_pot_impl_hcc(const std::array<F *, tree_nvecs_res<Q, NDim>> &out, const
                 if (src_code == tgt_code) {
                     // If src_code == tgt_code, we are currently visiting the target node.
                     // Compute the self interactions and skip all the children of the target node.
-                    tree_self_interactions_hcc<Q, NDim>(eps2, pidx, tgt_begin, tgt_end, p_view, res_view);
+                    tree_self_interactions_hcc<Q, NDim>(eps2, pidx, tgt_begin, tgt_end, p_view, res_array);
                     src_idx += n_children_src + 1;
                     continue;
                 }
@@ -301,12 +288,12 @@ void acc_pot_impl_hcc(const std::array<F *, tree_nvecs_res<Q, NDim>> &out, const
                 // The source node is not an ancestor of the target. We need to run the BH criterion
                 // check. The tree_acc_pot_bh_check() function will return the index of the next node
                 // in the traversal.
-                src_idx = tree_acc_pot_bh_check_hcc<Q, NDim>(tree_view, src_idx, theta2, eps2, pidx, p_view, res_view);
+                src_idx = tree_acc_pot_bh_check_hcc<Q, NDim>(tree_view, src_idx, theta2, eps2, pidx, p_view, res_array);
             }
 
-            // Handle the G constant.
+            // Handle the G constant and write out the result.
             for (std::size_t j = 0; j < tree_nvecs_res<Q, NDim>; ++j) {
-                res_view[j][pidx] *= G;
+                res_view[j][pidx] = fma(G, res_array[j], res_view[j][pidx]);
             }
         })
         .get();
