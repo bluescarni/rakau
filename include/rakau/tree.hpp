@@ -2203,7 +2203,7 @@ private:
             // shifted down by the difference between tgt_level
             // and src_level. For instance, in an octree,
             // if the target code is 1 000 000 001 000, then tgt_level
-            // is 4, and, src_level is 2, then the shifted code
+            // is 4, and, if src_level is 2, then the shifted code
             // will be 1 000 000.
             const auto s_tgt_code = static_cast<UInt>(tgt_code >> ((tgt_level - src_level) * NDim));
             // Is the source node an ancestor of the target node? It is if the
