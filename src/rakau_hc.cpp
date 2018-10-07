@@ -153,7 +153,7 @@ inline void tree_acc_pot_bh_com_hcc(const SrcNode &src_node, F eps2, int src_idx
 {
     // Add the softening length to dist2.
     dist2 += eps2;
-    // Compute the distance.
+    // Compute the (softened) distance.
     const F dist = sqrt(dist2);
     // Load locally the mass of the source node.
     const auto m_src = std::get<2>(src_node);
@@ -223,6 +223,7 @@ void acc_pot_impl_hcc(const std::array<F *, tree_nvecs_res<Q, NDim>> &out, const
     auto pt = ap2tv(p_parts, boost::numeric_cast<int>(nparts));
     auto rt = ap2tv(out, boost::numeric_cast<int>(nparts));
     // TODO overflow checks on ncrit*ncodes.
+    // TODO checking that no critical node has actually more than ncrit particles.
     hc::parallel_for_each(
         hc::extent<1>(boost::numeric_cast<int>(ncrit * cnodes_size)).tile(boost::numeric_cast<int>(ncrit)),
         [cnodes_view, tree_view, tsize = static_cast<int>(tree_size), pt, rt, theta2, G,
@@ -282,7 +283,7 @@ void acc_pot_impl_hcc(const std::array<F *, tree_nvecs_res<Q, NDim>> &out, const
                     continue;
                 }
                 // The source node is not an ancestor of the target. We need to run the BH criterion
-                // check. The tree_acc_pot_bh_check() function will return the index of the next node
+                // check. The tree_acc_pot_bh_check_hcc() function will return the index of the next node
                 // in the traversal.
                 src_idx = tree_acc_pot_bh_check_hcc<Q, NDim>(src_node, src_idx, theta2, eps2, pidx, p_view, res_array);
             }
