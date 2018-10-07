@@ -121,10 +121,8 @@ inline void tree_self_interactions_hcc(TreeView tree_view, F eps2, int pidx, int
     // The acceleration/potential vector for the current particle
     // (inited to zero).
     std::array<F, tree_nvecs_res<Q, NDim>> a1{};
-    for (int i = tgt_begin; i < tgt_end; ++i) {
-        if (i == pidx) {
-            continue;
-        }
+    // NOTE: setup the loop to avoid computing self interactions on pidx.
+    for (int i = tgt_begin + (tgt_begin == pidx); i < tgt_end; i += 1 + ((i + 1) == pidx)) {
         // Determine dist2, dist and dist3.
         F dist2(eps2);
         for (std::size_t j = 0; j < NDim; ++j) {
