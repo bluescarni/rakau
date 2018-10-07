@@ -258,35 +258,36 @@ void acc_pot_impl_hcc(const std::array<F *, tree_nvecs_res<Q, NDim>> &out, const
                 const auto src_code = std::get<0>(src_node);
                 // Number of children of the source node.
                 const auto n_children_src = static_cast<int>(std::get<1>(src_node)[2]);
-                if (src_code == tgt_code) {
-                    // If src_code == tgt_code, we are currently visiting the target node.
-                    // Compute the self interactions and skip all the children of the target node.
-                    tree_self_interactions_hcc<Q, NDim>(eps2, pidx, tgt_begin, tgt_end, p_view, res_array);
-                    src_idx += n_children_src + 1;
-                    continue;
-                }
                 // Extract the level of the source node.
                 const auto src_level = std::get<4>(src_node);
                 // Compute the shifted target code. This is tgt_code
                 // shifted down by the difference between tgt_level
                 // and src_level. For instance, in an octree,
                 // if the target code is 1 000 000 001 000, then tgt_level
-                // is 4, and, src_level is 2, then the shifted code
+                // is 4, and, if src_level is 2, then the shifted code
                 // will be 1 000 000.
                 const auto s_tgt_code = static_cast<UInt>(tgt_code >> ((tgt_level - src_level) * NDim));
-                // Is the source node an ancestor of the target node? It is if the
-                // shifted target code coincides with the source code.
                 if (s_tgt_code == src_code) {
-                    // If the source node is an ancestor of the target, then we continue the
-                    // depth-first traversal.
-                    ++src_idx;
-                    continue;
+                    // The shifted target code coincides with the source code. This means
+                    // that either the source node is an ancestor of the target node, or it is
+                    // the target node itself. In the former cases, we just have to continue
+                    // the depth-first traversal by setting ++src_idx. In the latter case,
+                    // we want to bump up src_idx by n_children_src + 1 in order to skip
+                    // the target node and all its children. We will compute later the self
+                    // interactions in the target node.
+                    const auto tgt_eq_src_mask = static_cast<unsigned>(-(src_code == tgt_code));
+                    src_idx += 1 + static_cast<int>(static_cast<unsigned>(n_children_src) & tgt_eq_src_mask);
+                } else {
+                    // The source node is not an ancestor of the target. We need to run the BH criterion
+                    // check. The tree_acc_pot_bh_check_hcc() function will return the index of the next node
+                    // in the traversal.
+                    src_idx
+                        = tree_acc_pot_bh_check_hcc<Q, NDim>(src_node, src_idx, theta2, eps2, pidx, p_view, res_array);
                 }
-                // The source node is not an ancestor of the target. We need to run the BH criterion
-                // check. The tree_acc_pot_bh_check_hcc() function will return the index of the next node
-                // in the traversal.
-                src_idx = tree_acc_pot_bh_check_hcc<Q, NDim>(src_node, src_idx, theta2, eps2, pidx, p_view, res_array);
             }
+
+            // Compute the self interactions within the target node.
+            tree_self_interactions_hcc<Q, NDim>(eps2, pidx, tgt_begin, tgt_end, p_view, res_array);
 
             // Handle the G constant and write out the result.
             for (std::size_t j = 0; j < tree_nvecs_res<Q, NDim>; ++j) {
