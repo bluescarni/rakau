@@ -2289,44 +2289,43 @@ private:
         const auto tgt_level = tree_level<NDim>(tgt_code);
         // Total size of the tree.
         const auto tree_size = static_cast<size_type>(m_tree.size());
-        // Index of the current source node.
-        size_type src_idx = 0;
-        while (src_idx < tree_size) {
+        // Start the iteration over the source nodes.
+        for (size_type src_idx = 0; src_idx < tree_size;) {
             // Get a reference to the current source node.
             const auto &src_node = m_tree[src_idx];
             // Extract the code of the source node.
             const auto src_code = get<0>(src_node);
             // Number of children of the source node.
             const auto n_children_src = get<1>(src_node)[2];
-            if (rakau_unlikely(src_code == tgt_code)) {
-                // If src_code == tgt_code, we are currently visiting the target node.
-                // Compute the self interactions and skip all the children of the target node.
-                // NOTE: mark it as unlikely as we will run into this condition only once per traversal.
-                tree_self_interactions<Q>(eps2, tgt_size, p_ptrs, res_ptrs);
-                src_idx += n_children_src + 1u;
-                continue;
-            }
             // Extract the level of the source node.
             const auto src_level = get<4>(src_node);
             // Compute the shifted target code. This is tgt_code
             // shifted down by the difference between tgt_level
             // and src_level. For instance, in an octree,
             // if the target code is 1 000 000 001 000, then tgt_level
-            // is 4, and, src_level is 2, then the shifted code
+            // is 4, and, if src_level is 2, then the shifted code
             // will be 1 000 000.
             const auto s_tgt_code = static_cast<UInt>(tgt_code >> ((tgt_level - src_level) * NDim));
-            // Is the source node an ancestor of the target node? It is if the
-            // shifted target code coincides with the source code.
             if (s_tgt_code == src_code) {
-                // If the source node is an ancestor of the target, then we continue the
-                // depth-first traversal.
-                ++src_idx;
-                continue;
+                // The shifted target code coincides with the source code. This means
+                // that either the source node is an ancestor of the target node, or it is
+                // the target node itself. In the former cases, we just have to continue
+                // the depth-first traversal by setting ++src_idx. In the latter case,
+                // we want to bump up src_idx by n_children_src + 1 in order to skip
+                // the target node and all its children. We will compute later the self
+                // interactions in the target node.
+                const auto tgt_eq_src_mask = static_cast<size_type>(-(src_code == tgt_code));
+                src_idx += 1u + (n_children_src & tgt_eq_src_mask);
+            } else {
+                // The source node is not an ancestor of the target. We need to run the BH criterion
+                // check. The tree_acc_pot_bh_check_hcc() function will return the index of the next node
+                // in the traversal.
+                src_idx = tree_acc_pot_bh_check<Q>(src_idx, theta2, eps2, tgt_size, p_ptrs, res_ptrs);
             }
-            // The source node is not an ancestor of the target. We need to run the BH criterion check.
-            // The tree_acc_pot_bh_check() function will return the index of the next node in the traversal.
-            src_idx = tree_acc_pot_bh_check<Q>(src_idx, theta2, eps2, tgt_size, p_ptrs, res_ptrs);
         }
+
+        // Compute the self interactions within the target node.
+        tree_self_interactions<Q>(eps2, tgt_size, p_ptrs, res_ptrs);
     }
     // Top level function for the computation of the accelerations/potentials. out is the array of output iterators,
     // theta2 the square of the opening angle, G the grav constant, eps2 the square of the softening length. Q indicates
