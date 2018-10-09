@@ -445,8 +445,6 @@ inline constexpr unsigned default_ncrit = 16;
 //   will fail often). It's probably best to start experimenting with such size as a free parameter, check the
 //   performance with various values and then try to understand if there's any heuristic we can deduce from that.
 // - quadrupole moments.
-// - try to see if the hcc-style tree traversal has benefits on intel machines (on an AMD ryzen I could not see
-//   differences).
 template <std::size_t NDim, typename F, typename UInt = std::size_t>
 class tree
 {
