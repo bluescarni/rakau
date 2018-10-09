@@ -465,6 +465,8 @@ public:
     using size_type = typename fp_vector::size_type;
 
 private:
+    // Double check that the size type which was forward-defined
+    // is consistent with the actual size type.
     static_assert(std::is_same_v<size_type, tree_size_t<F>>);
     // The node type:
     // - code,

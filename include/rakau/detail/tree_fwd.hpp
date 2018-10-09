@@ -49,6 +49,10 @@ template <typename T>
 inline constexpr bool dependent_false_v = dependent_false<T>::value;
 
 // Size type for the tree class.
+// NOTE: strictly speaking, we have a different allocator
+// type in the definition of the particle vectors in the
+// tree class. We check in the tree class that the real size
+// type is consistent with this size type.
 template <typename F>
 using tree_size_t = typename std::vector<F>::size_type;
 
