@@ -36,23 +36,6 @@
 #include <utility>
 #include <vector>
 
-// We use the BitScanReverse(64) intrinsic in the implementation of clz(), but
-// only if we are *not* on clang-cl: there, we can use GCC-style intrinsics.
-// https://msdn.microsoft.com/en-us/library/fbxyd7zd.aspx
-#if !defined(__clang__) && defined(_MSC_VER)
-
-#include <intrin.h>
-
-#if _WIN64
-
-#pragma intrinsic(_BitScanReverse64)
-
-#endif
-
-#pragma intrinsic(_BitScanReverse)
-
-#endif
-
 #include <boost/iterator/permutation_iterator.hpp>
 #include <boost/numeric/conversion/cast.hpp>
 
@@ -90,6 +73,7 @@
 #endif
 
 #include <rakau/detail/simd.hpp>
+#include <rakau/detail/tree_fwd.hpp>
 
 // likely/unlikely macros, for those compilers known to support them.
 #if defined(__clang__) || defined(__GNUC__) || defined(__INTEL_COMPILER)
@@ -109,15 +93,6 @@ namespace rakau
 
 inline namespace detail
 {
-
-// Dependent false for static_assert in if constexpr.
-// http://en.cppreference.com/w/cpp/language/if#Constexpr_If
-template <typename T>
-struct dependent_false : std::false_type {
-};
-
-template <typename T>
-inline constexpr bool dependent_false_v = dependent_false<T>::value;
 
 class simple_timer
 {
@@ -227,91 +202,6 @@ struct morton_encoder<2, std::uint32_t> {
         return libmorton::m2D_e_sLUT<std::uint32_t, std::uint32_t>(std::uint32_t(x), std::uint32_t(y));
     }
 };
-
-// Computation of the cbits value (number of bits to use
-// in the morton encoding for each coordinate).
-template <typename UInt, std::size_t NDim>
-constexpr auto compute_cbits_v()
-{
-    constexpr unsigned nbits = std::numeric_limits<UInt>::digits;
-    static_assert(nbits > NDim, "The number of bits must be greater than the number of dimensions.");
-    return static_cast<unsigned>(nbits / NDim - !(nbits % NDim));
-}
-
-template <typename UInt, std::size_t NDim>
-inline constexpr unsigned cbits_v = compute_cbits_v<UInt, NDim>();
-
-// clz wrapper. n must be a nonzero unsigned integral.
-template <typename UInt>
-inline unsigned clz(UInt n)
-{
-    static_assert(std::is_integral_v<UInt> && std::is_unsigned_v<UInt>);
-    assert(n);
-#if defined(__clang__) || defined(__GNUC__)
-    // Implementation using GCC's and clang's builtins.
-    if constexpr (std::is_same_v<UInt, unsigned>) {
-        return static_cast<unsigned>(__builtin_clz(n));
-    } else if constexpr (std::is_same_v<UInt, unsigned long>) {
-        return static_cast<unsigned>(__builtin_clzl(n));
-    } else if constexpr (std::is_same_v<UInt, unsigned long long>) {
-        return static_cast<unsigned>(__builtin_clzll(n));
-    } else {
-        // In this case we are dealing with an unsigned integral type which
-        // is not wider than unsigned int. Let's compute the result with n cast
-        // to unsigned int first.
-        const auto ret_u = static_cast<unsigned>(__builtin_clz(static_cast<unsigned>(n)));
-        // We must now subtract the number of extra bits that unsigned
-        // has over UInt.
-        constexpr auto extra_nbits
-            = static_cast<unsigned>(std::numeric_limits<unsigned>::digits - std::numeric_limits<UInt>::digits);
-        return ret_u - extra_nbits;
-    }
-#elif defined(_MSC_VER)
-    // Implementation using MSVC's intrinsics.
-    unsigned long index;
-    if constexpr (std::is_same_v<UInt, unsigned long long>) {
-#if _WIN64
-        // On 64-bit builds, we have a specific intrinsic for 64-bit ints.
-        _BitScanReverse64(&index, n);
-        return 63u - static_cast<unsigned>(index);
-#else
-        // On 32-bit builds, we split the computation in two parts.
-        if (n >> 32) {
-            // The high half of n contains something. The total bsr
-            // will be the bsr of the high half augmented by 32 bits.
-            _BitScanReverse(&index, static_cast<unsigned long>(n >> 32));
-            return static_cast<unsigned>(31u - index);
-        } else {
-            // The high half of n does not contain anything. Only
-            // the low half contributes to the bsr.
-            _BitScanReverse(&index, static_cast<unsigned long>(n));
-            return static_cast<unsigned>(63u - index);
-        }
-#endif
-    } else {
-        _BitScanReverse(&index, static_cast<unsigned long>(n));
-        return static_cast<unsigned>(std::numeric_limits<UInt>::digits) - 1u - static_cast<unsigned>(index);
-    }
-#else
-    static_assert(dependent_false_v<UInt>, "No clz() implementation is available on this platform.");
-#endif
-}
-
-// Small helper to get the tree level of a nodal code.
-template <std::size_t NDim, typename UInt>
-inline unsigned tree_level(UInt n)
-{
-#if !defined(NDEBUG)
-    constexpr unsigned cbits = cbits_v<UInt, NDim>;
-#endif
-    constexpr unsigned ndigits = std::numeric_limits<UInt>::digits;
-    assert(n);
-    assert(!((ndigits - 1u - clz(n)) % NDim));
-    auto retval = static_cast<unsigned>((ndigits - 1u - clz(n)) / NDim);
-    assert(cbits >= retval);
-    assert((cbits - retval) * NDim < ndigits);
-    return retval;
-}
 
 // Small function to compare nodal codes.
 template <std::size_t NDim, typename UInt>
@@ -575,6 +465,7 @@ public:
     using size_type = typename fp_vector::size_type;
 
 private:
+    static_assert(std::is_same_v<size_type, tree_size_t<F>>);
     // The node type:
     // - code,
     // - [node_start, node_end, n_children], where:
@@ -584,11 +475,11 @@ private:
     // - COM coordinates,
     // - node level,
     // - square of the edge of the node.
-    using node_type = std::tuple<UInt, std::array<size_type, 3>, F, std::array<F, NDim>, unsigned, F>;
+    using node_type = tree_node_t<NDim, F, UInt>;
     // The tree type.
     using tree_type = std::vector<node_type, di_aligned_allocator<node_type>>;
     // The critical node descriptor type (nodal code and particle range).
-    using cnode_type = std::tuple<UInt, size_type, size_type>;
+    using cnode_type = tree_cnode_t<F, UInt>;
     // List of critical nodes.
     using cnode_list_type = std::vector<cnode_type, di_aligned_allocator<cnode_type>>;
     // Small helper to get the square of the dimension of a node at the tree level node_level.
@@ -1485,13 +1376,7 @@ private:
     // Q == 1 -> potentials only, 1 vector
     // Q == 2 -> accs + pots, NDim + 1 vectors
     template <unsigned Q>
-    static constexpr std::size_t compute_nvecs_res()
-    {
-        static_assert(Q <= 2u);
-        return static_cast<std::size_t>(Q == 0u ? NDim : (Q == 1u ? 1u : NDim + 1u));
-    }
-    template <unsigned Q>
-    static constexpr std::size_t nvecs_res = compute_nvecs_res<Q>();
+    static constexpr std::size_t nvecs_res = tree_nvecs_res<Q, NDim>;
     // Temporary storage to accumulate the accelerations/potentials induced on the
     // particles of a critical node. Data in here will be copied to
     // the output arrays after the accelerations/potentials from all the other
