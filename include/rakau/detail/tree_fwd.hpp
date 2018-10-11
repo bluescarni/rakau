@@ -34,6 +34,8 @@
 
 #endif
 
+#include <rakau/detail/di_aligned_allocator.hpp>
+
 namespace rakau
 {
 inline namespace detail
@@ -49,12 +51,11 @@ template <typename T>
 inline constexpr bool dependent_false_v = dependent_false<T>::value;
 
 // Size type for the tree class.
-// NOTE: strictly speaking, we have a different allocator
-// type in the definition of the particle vectors in the
-// tree class. We check in the tree class that the real size
-// type is consistent with this size type.
+// NOTE: strictly speaking, the allocator we use in the tree may have a different
+// alignment than zero. However, I don't think there's any way the size type
+// of std::vector can depend on the actual alignment value.
 template <typename F>
-using tree_size_t = typename std::vector<F>::size_type;
+using tree_size_t = typename std::vector<F, di_aligned_allocator<F, 0>>::size_type;
 
 // Tree node.
 template <std::size_t NDim, typename F, typename UInt>
@@ -83,11 +84,11 @@ constexpr auto compute_cbits_v()
 {
     constexpr unsigned nbits = std::numeric_limits<UInt>::digits;
     static_assert(nbits > NDim, "The number of bits must be greater than the number of dimensions.");
-    return static_cast<unsigned>(nbits / NDim - !(nbits % NDim));
+    return static_cast<UInt>(nbits / NDim - !(nbits % NDim));
 }
 
 template <typename UInt, std::size_t NDim>
-inline constexpr unsigned cbits_v = compute_cbits_v<UInt, NDim>();
+inline constexpr auto cbits_v = compute_cbits_v<UInt, NDim>();
 
 // clz wrapper. n must be a nonzero unsigned integral.
 template <typename UInt>
@@ -150,18 +151,18 @@ inline unsigned clz(UInt n)
 
 // Small helper to get the tree level of a nodal code.
 template <std::size_t NDim, typename UInt>
-inline unsigned tree_level(UInt n)
+inline UInt tree_level(UInt n)
 #if defined(__HCC_ACCELERATOR__)
     [[hc]]
 #endif
 {
 #if !defined(NDEBUG)
-    constexpr unsigned cbits = cbits_v<UInt, NDim>;
+    constexpr auto cbits = cbits_v<UInt, NDim>;
 #endif
-    constexpr unsigned ndigits = std::numeric_limits<UInt>::digits;
+    constexpr auto ndigits = static_cast<unsigned>(std::numeric_limits<UInt>::digits);
     assert(n);
     assert(!((ndigits - 1u - clz(n)) % NDim));
-    auto retval = static_cast<unsigned>((ndigits - 1u - clz(n)) / NDim);
+    auto retval = static_cast<UInt>((ndigits - 1u - clz(n)) / NDim);
     assert(cbits >= retval);
     assert((cbits - retval) * NDim < ndigits);
     return retval;

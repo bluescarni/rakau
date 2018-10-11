@@ -26,7 +26,6 @@
 #include <iostream>
 #include <iterator>
 #include <limits>
-#include <new>
 #include <numeric>
 #include <stdexcept>
 #include <string>
@@ -78,6 +77,7 @@
 
 #endif
 
+#include <rakau/detail/di_aligned_allocator.hpp>
 #include <rakau/detail/simd.hpp>
 #include <rakau/detail/tree_fwd.hpp>
 
@@ -213,7 +213,7 @@ struct morton_encoder<2, std::uint32_t> {
 template <std::size_t NDim, typename UInt>
 inline bool node_compare(UInt n1, UInt n2)
 {
-    constexpr unsigned cbits = cbits_v<UInt, NDim>;
+    constexpr auto cbits = cbits_v<UInt, NDim>;
     const auto tl1 = tree_level<NDim>(n1);
     const auto tl2 = tree_level<NDim>(n2);
     const auto s_n1 = n1 << ((cbits - tl1) * NDim);
@@ -266,83 +266,6 @@ inline void checked_uinc(std::atomic<T> &out, T add)
         throw std::overflow_error("Overflow in the addition of two unsigned integral values");
     }
 }
-
-// A trivial allocator that supports custom alignment and does
-// default-initialisation instead of value-initialisation.
-template <typename T, std::size_t Alignment = 0>
-struct di_aligned_allocator {
-    // Alignment must be either zero or:
-    // - not less than the natural alignment of T,
-    // - a power of 2.
-    static_assert(
-        !Alignment || (Alignment >= alignof(T) && (Alignment & (Alignment - 1u)) == 0u),
-        "Invalid alignment value: the alignment must be a power of 2 and not less than the natural alignment of T.");
-    // value_type must always be present.
-    using value_type = T;
-    // Make sure the size_type is consistent with the size type returned
-    // by malloc() and friends.
-    using size_type = std::size_t;
-    // NOTE: rebind is needed because we have a non-type template parameter, which
-    // prevents the automatic implementation of rebind from working.
-    // http://en.cppreference.com/w/cpp/concept/Allocator#cite_note-1
-    template <typename U>
-    struct rebind {
-        using other = di_aligned_allocator<U, Alignment>;
-    };
-    // Allocation.
-    T *allocate(size_type n) const
-    {
-        // Total size in bytes. This is prevented from being too large
-        // by the default implementation of max_size().
-        const auto size = n * sizeof(T);
-        void *retval;
-        if constexpr (Alignment == 0u) {
-            retval = std::malloc(size);
-        } else {
-            // For use in std::aligned_alloc, the size must be a multiple of the alignment.
-            // http://en.cppreference.com/w/cpp/memory/c/aligned_alloc
-            // A null pointer will be returned if invalid Alignment and/or size are supplied,
-            // or if the allocation fails.
-            // NOTE: some early versions of GCC put aligned_alloc in the root namespace rather
-            // than std, so let's try to workaround.
-            using namespace std;
-            retval = aligned_alloc(Alignment, size);
-        }
-        if (!retval) {
-            // Throw on failure.
-            throw std::bad_alloc{};
-        }
-        return static_cast<T *>(retval);
-    }
-    // Deallocation.
-    void deallocate(T *ptr, size_type) const
-    {
-        std::free(ptr);
-    }
-    // Trivial comparison operators.
-    friend bool operator==(const di_aligned_allocator &, const di_aligned_allocator &)
-    {
-        return true;
-    }
-    friend bool operator!=(const di_aligned_allocator &, const di_aligned_allocator &)
-    {
-        return false;
-    }
-    // The construction function.
-    template <typename U, typename... Args>
-    void construct(U *p, Args &&... args) const
-    {
-        if constexpr (sizeof...(args) == 0u) {
-            // When no construction arguments are supplied, do default
-            // initialisation rather than value initialisation.
-            ::new (static_cast<void *>(p)) U;
-        } else {
-            // This is the standard std::allocator implementation.
-            // http://en.cppreference.com/w/cpp/memory/allocator/construct
-            ::new (static_cast<void *>(p)) U(std::forward<Args>(args)...);
-        }
-    }
-};
 
 // Scalar FMA wrappers.
 inline float fma_wrap(float x, float y, float z)
@@ -460,7 +383,7 @@ class tree
     static_assert(std::is_integral_v<UInt> && std::is_unsigned_v<UInt>,
                   "The type UInt must be a C++ unsigned integral type.");
     // cbits shortcut.
-    static constexpr unsigned cbits = cbits_v<UInt, NDim>;
+    static constexpr auto cbits = cbits_v<UInt, NDim>;
     // simd_enabled shortcut.
     static constexpr bool simd_enabled = simd_enabled_v<F>;
     // Main vector type for storing floating-point values. It uses custom alignment to enable
@@ -468,12 +391,12 @@ class tree
     using fp_vector = std::vector<F, di_aligned_allocator<F, XSIMD_DEFAULT_ALIGNMENT>>;
 
 public:
-    using size_type = typename fp_vector::size_type;
+    using size_type = tree_size_t<F>;
 
 private:
-    // Double check that the size type which was forward-defined
-    // is consistent with the actual size type.
-    static_assert(std::is_same_v<size_type, tree_size_t<F>>);
+    // Consistency check: the size type which was forward-defined
+    // is the same as the actual size type.
+    static_assert(std::is_same_v<size_type, typename fp_vector::size_type>);
     // The node type:
     // - code,
     // - [node_start, node_end, n_children], where:
@@ -491,7 +414,7 @@ private:
     // List of critical nodes.
     using cnode_list_type = std::vector<cnode_type, di_aligned_allocator<cnode_type>>;
     // Small helper to get the square of the dimension of a node at the tree level node_level.
-    F get_sqr_node_dim(unsigned node_level) const
+    F get_sqr_node_dim(UInt node_level) const
     {
         const auto tmp = m_box_size / static_cast<F>(UInt(1) << node_level);
         return tmp * tmp;
@@ -504,7 +427,7 @@ private:
     // NOTE: here and elsewhere the use of [[maybe_unused]] is a bit random, as we use to suppress
     // GCC warnings which also look rather random (e.g., it complains about some unused
     // arguments but not others).
-    template <unsigned ParentLevel, typename CIt>
+    template <UInt ParentLevel, typename CIt>
     size_type build_tree_ser_impl(tree_type &tree, cnode_list_type &crit_nodes, [[maybe_unused]] UInt parent_code,
                                   [[maybe_unused]] CIt begin, [[maybe_unused]] CIt end, bool crit_ancestor)
     {
@@ -617,10 +540,10 @@ private:
     // constructed and added to the 'trees' container via build_tree_ser_impl(). The particles in the children nodes
     // have codes in the [begin, end) range. crit_nodes is the global list of lists of critical nodes, crit_ancestor a
     // flag signalling if the parent node or one of its ancestors is a critical node.
-    template <unsigned ParentLevel, typename Out, typename CritNodes, typename CIt>
+    template <UInt ParentLevel, typename Out, typename CritNodes, typename CIt>
     size_type build_tree_par_impl(Out &trees, CritNodes &crit_nodes, [[maybe_unused]] UInt parent_code,
                                   [[maybe_unused]] CIt begin, [[maybe_unused]] CIt end,
-                                  [[maybe_unused]] unsigned split_level, [[maybe_unused]] bool crit_ancestor)
+                                  [[maybe_unused]] UInt split_level, [[maybe_unused]] bool crit_ancestor)
     {
         if constexpr (ParentLevel < cbits) {
             assert(tree_level<NDim>(parent_code) == ParentLevel);
@@ -727,16 +650,16 @@ private:
         // on a 16-core machine and 3 dimensions, this results in split_level == 2: we are
         // switching to serial subtree building at the second level where we have up to
         // 64 nodes.
-        const unsigned split_level = [] {
+        const auto split_level = [] {
             if (const auto hc = std::thread::hardware_concurrency(); hc) {
                 // NOTE: use UInt in the shift, as we now that UInt won't
                 // overflow thanks to the checks in cbits.
                 const auto tmp = std::log(hc) / std::log(UInt(1) << NDim);
                 // Make sure we don't return zero on single-core machines.
-                return std::max(1u, boost::numeric_cast<unsigned>(std::ceil(tmp)));
+                return std::max(UInt(1u), boost::numeric_cast<UInt>(std::ceil(tmp)));
             }
             // Just return 1 if hardware_concurrency is not working.
-            return 1u;
+            return UInt(1u);
         }();
         // Vector of partial trees. This will eventually contain a sequence of single-node trees
         // and subtrees. A subtree starts with a node and contains all of its children, ordered
