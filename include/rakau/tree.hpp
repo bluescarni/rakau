@@ -2128,7 +2128,7 @@ private:
                 src_idx += 1u + (n_children_src & tgt_eq_src_mask);
             } else {
                 // The source node is not an ancestor of the target. We need to run the BH criterion
-                // check. The tree_acc_pot_bh_check_hcc() function will return the index of the next node
+                // check. The tree_acc_pot_bh_check() function will return the index of the next node
                 // in the traversal.
                 src_idx = tree_acc_pot_bh_check<Q>(src_idx, theta2, eps2, tgt_size, p_ptrs, res_ptrs);
             }
