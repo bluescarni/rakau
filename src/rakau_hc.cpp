@@ -298,7 +298,7 @@ void acc_pot_impl_hcc(const std::array<F *, tree_nvecs_res<Q, NDim>> &out, const
     for (auto &v : t2a(rt)) {
         v.synchronize();
     }
-} // namespace detail
+}
 
 // Explicit instantiations.
 #define RAKAU_HC_EXPLICIT_INST(Q, NDim, F, UInt)                                                                       \
