@@ -26,7 +26,6 @@
 #include <iostream>
 #include <iterator>
 #include <limits>
-#include <new>
 #include <numeric>
 #include <stdexcept>
 #include <string>
@@ -72,6 +71,7 @@
 
 #endif
 
+#include <rakau/detail/di_aligned_allocator.hpp>
 #include <rakau/detail/simd.hpp>
 #include <rakau/detail/tree_fwd.hpp>
 
@@ -261,83 +261,6 @@ inline void checked_uinc(std::atomic<T> &out, T add)
     }
 }
 
-// A trivial allocator that supports custom alignment and does
-// default-initialisation instead of value-initialisation.
-template <typename T, std::size_t Alignment = 0>
-struct di_aligned_allocator {
-    // Alignment must be either zero or:
-    // - not less than the natural alignment of T,
-    // - a power of 2.
-    static_assert(
-        !Alignment || (Alignment >= alignof(T) && (Alignment & (Alignment - 1u)) == 0u),
-        "Invalid alignment value: the alignment must be a power of 2 and not less than the natural alignment of T.");
-    // value_type must always be present.
-    using value_type = T;
-    // Make sure the size_type is consistent with the size type returned
-    // by malloc() and friends.
-    using size_type = std::size_t;
-    // NOTE: rebind is needed because we have a non-type template parameter, which
-    // prevents the automatic implementation of rebind from working.
-    // http://en.cppreference.com/w/cpp/concept/Allocator#cite_note-1
-    template <typename U>
-    struct rebind {
-        using other = di_aligned_allocator<U, Alignment>;
-    };
-    // Allocation.
-    T *allocate(size_type n) const
-    {
-        // Total size in bytes. This is prevented from being too large
-        // by the default implementation of max_size().
-        const auto size = n * sizeof(T);
-        void *retval;
-        if constexpr (Alignment == 0u) {
-            retval = std::malloc(size);
-        } else {
-            // For use in std::aligned_alloc, the size must be a multiple of the alignment.
-            // http://en.cppreference.com/w/cpp/memory/c/aligned_alloc
-            // A null pointer will be returned if invalid Alignment and/or size are supplied,
-            // or if the allocation fails.
-            // NOTE: some early versions of GCC put aligned_alloc in the root namespace rather
-            // than std, so let's try to workaround.
-            using namespace std;
-            retval = aligned_alloc(Alignment, size);
-        }
-        if (!retval) {
-            // Throw on failure.
-            throw std::bad_alloc{};
-        }
-        return static_cast<T *>(retval);
-    }
-    // Deallocation.
-    void deallocate(T *ptr, size_type) const
-    {
-        std::free(ptr);
-    }
-    // Trivial comparison operators.
-    friend bool operator==(const di_aligned_allocator &, const di_aligned_allocator &)
-    {
-        return true;
-    }
-    friend bool operator!=(const di_aligned_allocator &, const di_aligned_allocator &)
-    {
-        return false;
-    }
-    // The construction function.
-    template <typename U, typename... Args>
-    void construct(U *p, Args &&... args) const
-    {
-        if constexpr (sizeof...(args) == 0u) {
-            // When no construction arguments are supplied, do default
-            // initialisation rather than value initialisation.
-            ::new (static_cast<void *>(p)) U;
-        } else {
-            // This is the standard std::allocator implementation.
-            // http://en.cppreference.com/w/cpp/memory/allocator/construct
-            ::new (static_cast<void *>(p)) U(std::forward<Args>(args)...);
-        }
-    }
-};
-
 // Scalar FMA wrappers.
 inline float fma_wrap(float x, float y, float z)
 {
@@ -462,12 +385,12 @@ class tree
     using fp_vector = std::vector<F, di_aligned_allocator<F, XSIMD_DEFAULT_ALIGNMENT>>;
 
 public:
-    using size_type = typename fp_vector::size_type;
+    using size_type = tree_size_t<F>;
 
 private:
-    // Double check that the size type which was forward-defined
-    // is consistent with the actual size type.
-    static_assert(std::is_same_v<size_type, tree_size_t<F>>);
+    // Consistency check: the size type which was forward-defined
+    // is the same as the actual size type.
+    static_assert(std::is_same_v<size_type, typename fp_vector::size_type>);
     // The node type:
     // - code,
     // - [node_start, node_end, n_children], where:
