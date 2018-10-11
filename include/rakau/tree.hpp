@@ -207,7 +207,7 @@ struct morton_encoder<2, std::uint32_t> {
 template <std::size_t NDim, typename UInt>
 inline bool node_compare(UInt n1, UInt n2)
 {
-    constexpr unsigned cbits = cbits_v<UInt, NDim>;
+    constexpr auto cbits = cbits_v<UInt, NDim>;
     const auto tl1 = tree_level<NDim>(n1);
     const auto tl2 = tree_level<NDim>(n2);
     const auto s_n1 = n1 << ((cbits - tl1) * NDim);
@@ -377,7 +377,7 @@ class tree
     static_assert(std::is_integral_v<UInt> && std::is_unsigned_v<UInt>,
                   "The type UInt must be a C++ unsigned integral type.");
     // cbits shortcut.
-    static constexpr unsigned cbits = cbits_v<UInt, NDim>;
+    static constexpr auto cbits = cbits_v<UInt, NDim>;
     // simd_enabled shortcut.
     static constexpr bool simd_enabled = simd_enabled_v<F>;
     // Main vector type for storing floating-point values. It uses custom alignment to enable
@@ -408,7 +408,7 @@ private:
     // List of critical nodes.
     using cnode_list_type = std::vector<cnode_type, di_aligned_allocator<cnode_type>>;
     // Small helper to get the square of the dimension of a node at the tree level node_level.
-    F get_sqr_node_dim(unsigned node_level) const
+    F get_sqr_node_dim(UInt node_level) const
     {
         const auto tmp = m_box_size / static_cast<F>(UInt(1) << node_level);
         return tmp * tmp;
@@ -421,7 +421,7 @@ private:
     // NOTE: here and elsewhere the use of [[maybe_unused]] is a bit random, as we use to suppress
     // GCC warnings which also look rather random (e.g., it complains about some unused
     // arguments but not others).
-    template <unsigned ParentLevel, typename CIt>
+    template <UInt ParentLevel, typename CIt>
     size_type build_tree_ser_impl(tree_type &tree, cnode_list_type &crit_nodes, [[maybe_unused]] UInt parent_code,
                                   [[maybe_unused]] CIt begin, [[maybe_unused]] CIt end, bool crit_ancestor)
     {
@@ -534,10 +534,10 @@ private:
     // constructed and added to the 'trees' container via build_tree_ser_impl(). The particles in the children nodes
     // have codes in the [begin, end) range. crit_nodes is the global list of lists of critical nodes, crit_ancestor a
     // flag signalling if the parent node or one of its ancestors is a critical node.
-    template <unsigned ParentLevel, typename Out, typename CritNodes, typename CIt>
+    template <UInt ParentLevel, typename Out, typename CritNodes, typename CIt>
     size_type build_tree_par_impl(Out &trees, CritNodes &crit_nodes, [[maybe_unused]] UInt parent_code,
                                   [[maybe_unused]] CIt begin, [[maybe_unused]] CIt end,
-                                  [[maybe_unused]] unsigned split_level, [[maybe_unused]] bool crit_ancestor)
+                                  [[maybe_unused]] UInt split_level, [[maybe_unused]] bool crit_ancestor)
     {
         if constexpr (ParentLevel < cbits) {
             assert(tree_level<NDim>(parent_code) == ParentLevel);
@@ -644,16 +644,16 @@ private:
         // on a 16-core machine and 3 dimensions, this results in split_level == 2: we are
         // switching to serial subtree building at the second level where we have up to
         // 64 nodes.
-        const unsigned split_level = [] {
+        const auto split_level = [] {
             if (const auto hc = std::thread::hardware_concurrency(); hc) {
                 // NOTE: use UInt in the shift, as we now that UInt won't
                 // overflow thanks to the checks in cbits.
                 const auto tmp = std::log(hc) / std::log(UInt(1) << NDim);
                 // Make sure we don't return zero on single-core machines.
-                return std::max(1u, boost::numeric_cast<unsigned>(std::ceil(tmp)));
+                return std::max(UInt(1u), boost::numeric_cast<UInt>(std::ceil(tmp)));
             }
             // Just return 1 if hardware_concurrency is not working.
-            return 1u;
+            return UInt(1u);
         }();
         // Vector of partial trees. This will eventually contain a sequence of single-node trees
         // and subtrees. A subtree starts with a node and contains all of its children, ordered

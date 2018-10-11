@@ -94,9 +94,9 @@ TEST_CASE("acceleration accuracy")
             // These numbers are, of course, totally arbitrary, based
             // on the fact that 'double' is actually double-precision,
             // and derived experimentally.
-            REQUIRE(tot_max_x_diff < fp_type(1E-10));
-            REQUIRE(tot_max_y_diff < fp_type(1E-10));
-            REQUIRE(tot_max_z_diff < fp_type(1E-10));
+            REQUIRE(tot_max_x_diff < fp_type(5E-10));
+            REQUIRE(tot_max_y_diff < fp_type(5E-10));
+            REQUIRE(tot_max_z_diff < fp_type(5E-10));
         }
     });
 }
