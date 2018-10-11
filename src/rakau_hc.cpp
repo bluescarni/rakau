@@ -141,7 +141,7 @@ inline void tree_acc_pot_leaf_hcc(const SrcNode &src_node, F eps2, int src_idx, 
             // Q == 1 or 2: potentials are requested.
             // Establish the index of the potential in the result array:
             // 0 if only the potentials are requested, NDim otherwise.
-            constexpr auto pot_idx = static_cast<std::size_t>(Q == 1u ? 0 : NDim);
+            constexpr auto pot_idx = static_cast<std::size_t>(Q == 1u ? 0u : NDim);
             res_array[pot_idx] = fma(-m1, m2 / dist, res_array[pot_idx]);
         }
     }
@@ -251,7 +251,7 @@ void acc_pot_impl_hcc(const std::array<F *, tree_nvecs_res<Q, NDim>> &out, const
             std::array<F, tree_nvecs_res<Q, NDim>> res_array{};
 
             // Start looping over the source data.
-            for (int src_idx = 0; src_idx < tsize;) {
+            for (auto src_idx = 0; src_idx < tsize;) {
                 // Get a reference to the current source node.
                 const auto &src_node = tree_view[src_idx];
                 // Extract the code of the source node.
