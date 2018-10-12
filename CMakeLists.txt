@@ -26,12 +26,6 @@ endif()
 include(YACMACompilerLinkerSettings)
 include(CheckCXXCompilerFlag)
 
-# Detect if we are using hcc.
-if(YACMA_COMPILER_IS_CLANGXX AND "${CMAKE_CXX_COMPILER}" MATCHES "hcc")
-  message(STATUS "hcc compiler detected.")
-  set(RAKAU_COMPILER_IS_HCC TRUE)
-endif()
-
 # Assemble the flags.
 set(RAKAU_CXX_FLAGS_DEBUG ${YACMA_CXX_FLAGS} ${YACMA_CXX_FLAGS_DEBUG})
 set(RAKAU_CXX_FLAGS_RELEASE ${YACMA_CXX_FLAGS})
@@ -94,9 +88,9 @@ target_include_directories(rakau INTERFACE
     $<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}/include>
     $<INSTALL_INTERFACE:include>)
 
-set(RAKAU_HC_DEVICE_FLAGS "" CACHE STRING "Flags for device code compilation.")
-mark_as_advanced(RAKAU_HC_DEVICE_FLAGS)
-if(RAKAU_COMPILER_IS_HCC)
+if(YACMA_COMPILER_IS_HCC)
+  set(RAKAU_HC_DEVICE_FLAGS "" CACHE STRING "Flags for device code compilation.")
+  mark_as_advanced(RAKAU_HC_DEVICE_FLAGS)
   string(REPLACE " " ";" RAKAU_HC_DEVICE_FLAGS_ "${RAKAU_HC_DEVICE_FLAGS}")
   add_library(rakau_hc SHARED "${CMAKE_CURRENT_SOURCE_DIR}/src/rakau_hc.cpp")
   set_target_properties(rakau_hc PROPERTIES LINK_FLAGS "-hc ${RAKAU_HC_DEVICE_FLAGS}")

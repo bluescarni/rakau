@@ -1,7 +1,7 @@
 function(ADD_RAKAU_TESTCASE arg1)
   add_executable(${arg1} ${arg1}.cpp)
   target_link_libraries(${arg1} rakau)
-  if(RAKAU_COMPILER_IS_HCC)
+  if(YACMA_COMPILER_IS_HCC)
     target_link_libraries(${arg1} rakau_hc)
   endif()
   target_compile_options(${arg1} PRIVATE "$<$<CONFIG:DEBUG>:${RAKAU_CXX_FLAGS_DEBUG}>" "$<$<CONFIG:RELEASE>:${RAKAU_CXX_FLAGS_RELEASE}>")
