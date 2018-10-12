@@ -2149,150 +2149,161 @@ private:
     template <unsigned Q, typename It>
     void acc_pot_impl(const std::array<It, nvecs_res<Q>> &out, F theta2, F G, F eps2) const
     {
-#if defined(__HCC__)
-        if constexpr (std::is_same_v<It, F *> && NDim == 3u
-                      && std::is_same_v<UInt, std::size_t> && !std::is_same_v<F, long double>) {
-            std::array<const F *, NDim + 1u> part_ptrs;
-            for (std::size_t i = 0; i < NDim + 1u; ++i) {
-                part_ptrs[i] = m_parts[i].data();
+        auto cpu_run = [&]() {
+            // NOTE: we will be adding padding to the target node data when SIMD is active,
+            // in order to be able to use SIMD instructions on all the particles of the node.
+            // The padding data must be crafted so that it does not interfere with the useful
+            // calculations. This means that:
+            // - we will set the masses to zero so that, when computing the self interactions
+            //   in a target node, the extra accelerations/potentials due to the padding data will be zero,
+            // - for the positions, we must ensure 2 things:
+            //   - they must not overlap with any other real particle, in order to avoid singularities
+            //     when computing self-interactions in the target node, hence they must be outside the box,
+            //   - the distance of the padding particles from any point of the box must be large enough so
+            //     that they never fail the BH criterion check, which fails when node_dim >= theta * dist.
+            //     The maximum node_dim is the box size b_size, and thus we must ensure that
+            //     dist > b_size / theta for the padding particles.
+            //
+            // The strategy is that we put the padding particles at coordinates (M, M, ...), with M to
+            // be determined. The upper right corner of the box, with coordinates (b_size/2, b_size/2, ...)
+            // will be the closest point of the box to the padding particles, and the corner-particles distance
+            // will be sqrt(NDim * (M - b_size/2)**2), which simplifies to sqrt(NDim) / 2 * (2*M - b_size).
+            // Now we require this distance to be large enough to always satisfy the BH criterion (as written
+            // above), that is, sqrt(NDim) / 2 * (2*M - b_size) > b_size / theta, which yields the requirement
+            // M > b_size / (theta * sqrt(NDim)) + b_size / 2.
+            const auto M = m_box_size / (std::sqrt(theta2) * std::sqrt(F(NDim))) + m_box_size / F(2);
+            // NOTE: M is mathematically always >= m_box_size / F(2), which puts it on the top right
+            // corner of the box for theta2 == inf. To make it completely safe with respect to the requirement
+            // of avoiding singularities in the self interaction routine, we double it.
+            const auto pad_coord = M * F(2);
+            if (!std::isfinite(pad_coord)) {
+                throw std::invalid_argument(
+                    "The calculation of the SIMD padding coordinate produced the non-finite value "
+                    + std::to_string(pad_coord));
             }
-            acc_pot_impl_hcc<Q>(out, m_crit_nodes.data(), m_crit_nodes.size(), m_tree.data(), m_tree.size(), part_ptrs,
-                                m_parts[0].size(), theta2, G, eps2, m_ncrit);
-            return;
-        }
-#endif
-        // NOTE: we will be adding padding to the target node data when SIMD is active,
-        // in order to be able to use SIMD instructions on all the particles of the node.
-        // The padding data must be crafted so that it does not interfere with the useful
-        // calculations. This means that:
-        // - we will set the masses to zero so that, when computing the self interactions
-        //   in a target node, the extra accelerations/potentials due to the padding data will be zero,
-        // - for the positions, we must ensure 2 things:
-        //   - they must not overlap with any other real particle, in order to avoid singularities
-        //     when computing self-interactions in the target node, hence they must be outside the box,
-        //   - the distance of the padding particles from any point of the box must be large enough so
-        //     that they never fail the BH criterion check, which fails when node_dim >= theta * dist.
-        //     The maximum node_dim is the box size b_size, and thus we must ensure that
-        //     dist > b_size / theta for the padding particles.
-        //
-        // The strategy is that we put the padding particles at coordinates (M, M, ...), with M to
-        // be determined. The upper right corner of the box, with coordinates (b_size/2, b_size/2, ...)
-        // will be the closest point of the box to the padding particles, and the corner-particles distance
-        // will be sqrt(NDim * (M - b_size/2)**2), which simplifies to sqrt(NDim) / 2 * (2*M - b_size).
-        // Now we require this distance to be large enough to always satisfy the BH criterion (as written
-        // above), that is, sqrt(NDim) / 2 * (2*M - b_size) > b_size / theta, which yields the requirement
-        // M > b_size / (theta * sqrt(NDim)) + b_size / 2.
-        const auto M = m_box_size / (std::sqrt(theta2) * std::sqrt(F(NDim))) + m_box_size / F(2);
-        // NOTE: M is mathematically always >= m_box_size / F(2), which puts it on the top right
-        // corner of the box for theta2 == inf. To make it completely safe with respect to the requirement
-        // of avoiding singularities in the self interaction routine, we double it.
-        const auto pad_coord = M * F(2);
-        if (!std::isfinite(pad_coord)) {
-            throw std::invalid_argument("The calculation of the SIMD padding coordinate produced the non-finite value "
-                                        + std::to_string(pad_coord));
-        }
-        tbb::parallel_for(
-            tbb::blocked_range<decltype(m_crit_nodes.size())>(0u, m_crit_nodes.size()),
-            [this, theta2, G, eps2, pad_coord, &out](const auto &range) {
-                // Get references to the local temporary data.
-                auto &tmp_res = acc_pot_tmp_res<Q>();
-                auto &tmp_tgt = tgt_tmp_data();
-                for (auto i = range.begin(); i != range.end(); ++i) {
-                    const auto tgt_code = get<0>(m_crit_nodes[i]);
-                    const auto tgt_begin = get<1>(m_crit_nodes[i]);
-                    const auto tgt_size = static_cast<size_type>(get<2>(m_crit_nodes[i]) - tgt_begin);
-                    // Size of the temporary vectors that will be used to store the target node
-                    // data and the total accelerations/potentials on its particles. If simd is not enabled, this
-                    // value will be tgt_size. Otherwise, we add extra padding at the end based on the
-                    // simd vector size.
-                    const auto pdata_size = [tgt_size]() {
-                        if constexpr (simd_enabled) {
-                            using batch_type = xsimd::simd_type<F>;
-                            constexpr auto batch_size = batch_type::size;
-                            static_assert(batch_size);
-                            // NOTE: we will need batch_size - 1 extra elements at the end of the
-                            // temp vectors, to ensure we can load/store a simd vector starting from
-                            // the last element.
-                            if ((batch_size - 1u) > (std::numeric_limits<size_type>::max() - tgt_size)) {
-                                throw std::overflow_error("The number of particles in a critical node ("
-                                                          + std::to_string(tgt_size)
-                                                          + ") is too large, and it results in an overflow condition");
-                            }
-                            return static_cast<size_type>(tgt_size + (batch_size - 1u));
-                        } else {
-                            return tgt_size;
-                        }
-                    }();
-                    // Prepare the temporary vectors containing the result.
-                    for (std::size_t j = 0; j < nvecs_res<Q>; ++j) {
-                        // Resize and fill with zeroes (everything, including the padding data).
-                        tmp_res[j].resize(pdata_size);
-                        std::fill(tmp_res[j].data(), tmp_res[j].data() + pdata_size, F(0));
-                    }
-                    // Prepare the temporary vectors containing the target node's data.
-                    for (std::size_t j = 0; j < NDim; ++j) {
-                        tmp_tgt[j].resize(pdata_size);
-                        // From 0 to tgt_size we copy the actual node coordinates.
-                        std::copy(m_parts[j].data() + tgt_begin, m_parts[j].data() + tgt_begin + tgt_size,
-                                  tmp_tgt[j].data());
-                        // From tgt_size to pdata_size (the padding values) we insert the padding coordinate.
-                        std::fill(tmp_tgt[j].data() + tgt_size, tmp_tgt[j].data() + pdata_size, pad_coord);
-                    }
-                    // Copy the particle masses and set the padding masses to zero.
-                    tmp_tgt[NDim].resize(pdata_size);
-                    std::copy(m_parts[NDim].data() + tgt_begin, m_parts[NDim].data() + tgt_begin + tgt_size,
-                              tmp_tgt[NDim].data());
-                    std::fill(tmp_tgt[NDim].data() + tgt_size, tmp_tgt[NDim].data() + pdata_size, F(0));
-                    // Prepare arrays of pointers to the temporary data.
-                    std::array<F *, nvecs_res<Q>> res_ptrs;
-                    for (std::size_t j = 0; j < nvecs_res<Q>; ++j) {
-                        res_ptrs[j] = tmp_res[j].data();
-                    }
-                    std::array<const F *, NDim + 1u> p_ptrs;
-                    for (std::size_t j = 0; j < NDim + 1u; ++j) {
-                        p_ptrs[j] = tmp_tgt[j].data();
-                    }
-                    // Do the computation.
-                    tree_acc_pot<Q>(theta2, eps2, tgt_size, tgt_code, p_ptrs, res_ptrs);
-                    // Multiply by G, if needed.
-                    if (G != F(1)) {
-                        for (std::size_t j = 0; j < nvecs_res<Q>; ++j) {
-                            auto r_ptr = res_ptrs[j];
+            tbb::parallel_for(
+                tbb::blocked_range<decltype(m_crit_nodes.size())>(0u, m_crit_nodes.size()),
+                [this, theta2, G, eps2, pad_coord, &out](const auto &range) {
+                    // Get references to the local temporary data.
+                    auto &tmp_res = acc_pot_tmp_res<Q>();
+                    auto &tmp_tgt = tgt_tmp_data();
+                    for (auto i = range.begin(); i != range.end(); ++i) {
+                        const auto tgt_code = get<0>(m_crit_nodes[i]);
+                        const auto tgt_begin = get<1>(m_crit_nodes[i]);
+                        const auto tgt_size = static_cast<size_type>(get<2>(m_crit_nodes[i]) - tgt_begin);
+                        // Size of the temporary vectors that will be used to store the target node
+                        // data and the total accelerations/potentials on its particles. If simd is not enabled, this
+                        // value will be tgt_size. Otherwise, we add extra padding at the end based on the
+                        // simd vector size.
+                        const auto pdata_size = [tgt_size]() {
                             if constexpr (simd_enabled) {
                                 using batch_type = xsimd::simd_type<F>;
                                 constexpr auto batch_size = batch_type::size;
-                                const batch_type Gvec(G);
-                                for (size_type k = 0; k < tgt_size; k += batch_size) {
-                                    (xsimd::load_aligned(r_ptr + k) * Gvec).store_aligned(r_ptr + k);
+                                static_assert(batch_size);
+                                // NOTE: we will need batch_size - 1 extra elements at the end of the
+                                // temp vectors, to ensure we can load/store a simd vector starting from
+                                // the last element.
+                                if ((batch_size - 1u) > (std::numeric_limits<size_type>::max() - tgt_size)) {
+                                    throw std::overflow_error(
+                                        "The number of particles in a critical node (" + std::to_string(tgt_size)
+                                        + ") is too large, and it results in an overflow condition");
                                 }
+                                return static_cast<size_type>(tgt_size + (batch_size - 1u));
                             } else {
-                                for (size_type k = 0; k < tgt_size; ++k) {
-                                    *(r_ptr + k) *= G;
+                                return tgt_size;
+                            }
+                        }();
+                        // Prepare the temporary vectors containing the result.
+                        for (std::size_t j = 0; j < nvecs_res<Q>; ++j) {
+                            // Resize and fill with zeroes (everything, including the padding data).
+                            tmp_res[j].resize(pdata_size);
+                            std::fill(tmp_res[j].data(), tmp_res[j].data() + pdata_size, F(0));
+                        }
+                        // Prepare the temporary vectors containing the target node's data.
+                        for (std::size_t j = 0; j < NDim; ++j) {
+                            tmp_tgt[j].resize(pdata_size);
+                            // From 0 to tgt_size we copy the actual node coordinates.
+                            std::copy(m_parts[j].data() + tgt_begin, m_parts[j].data() + tgt_begin + tgt_size,
+                                      tmp_tgt[j].data());
+                            // From tgt_size to pdata_size (the padding values) we insert the padding coordinate.
+                            std::fill(tmp_tgt[j].data() + tgt_size, tmp_tgt[j].data() + pdata_size, pad_coord);
+                        }
+                        // Copy the particle masses and set the padding masses to zero.
+                        tmp_tgt[NDim].resize(pdata_size);
+                        std::copy(m_parts[NDim].data() + tgt_begin, m_parts[NDim].data() + tgt_begin + tgt_size,
+                                  tmp_tgt[NDim].data());
+                        std::fill(tmp_tgt[NDim].data() + tgt_size, tmp_tgt[NDim].data() + pdata_size, F(0));
+                        // Prepare arrays of pointers to the temporary data.
+                        std::array<F *, nvecs_res<Q>> res_ptrs;
+                        for (std::size_t j = 0; j < nvecs_res<Q>; ++j) {
+                            res_ptrs[j] = tmp_res[j].data();
+                        }
+                        std::array<const F *, NDim + 1u> p_ptrs;
+                        for (std::size_t j = 0; j < NDim + 1u; ++j) {
+                            p_ptrs[j] = tmp_tgt[j].data();
+                        }
+                        // Do the computation.
+                        tree_acc_pot<Q>(theta2, eps2, tgt_size, tgt_code, p_ptrs, res_ptrs);
+                        // Multiply by G, if needed.
+                        if (G != F(1)) {
+                            for (std::size_t j = 0; j < nvecs_res<Q>; ++j) {
+                                auto r_ptr = res_ptrs[j];
+                                if constexpr (simd_enabled) {
+                                    using batch_type = xsimd::simd_type<F>;
+                                    constexpr auto batch_size = batch_type::size;
+                                    const batch_type Gvec(G);
+                                    for (size_type k = 0; k < tgt_size; k += batch_size) {
+                                        (xsimd::load_aligned(r_ptr + k) * Gvec).store_aligned(r_ptr + k);
+                                    }
+                                } else {
+                                    for (size_type k = 0; k < tgt_size; ++k) {
+                                        *(r_ptr + k) *= G;
+                                    }
                                 }
                             }
                         }
+                        // Write out the result.
+                        for (std::size_t j = 0; j < nvecs_res<Q>; ++j) {
+                            std::copy(res_ptrs[j], res_ptrs[j] + tgt_size,
+                                      out[j]
+                                          + boost::numeric_cast<typename std::iterator_traits<It>::difference_type>(
+                                                tgt_begin));
+                        }
                     }
-                    // Write out the result.
-                    for (std::size_t j = 0; j < nvecs_res<Q>; ++j) {
-                        std::copy(
-                            res_ptrs[j], res_ptrs[j] + tgt_size,
-                            out[j]
-                                + boost::numeric_cast<typename std::iterator_traits<It>::difference_type>(tgt_begin));
-                    }
-                }
 #if defined(RAKAU_WITH_SIMD_COUNTERS)
-                // For the current thread, add the thread local counters
-                // to the global atomic ones, then reset them.
-                simd_fma_counter += simd_fma_counter_tl;
-                simd_fma_counter_tl = 0;
+                    // For the current thread, add the thread local counters
+                    // to the global atomic ones, then reset them.
+                    simd_fma_counter += simd_fma_counter_tl;
+                    simd_fma_counter_tl = 0;
 
-                simd_sqrt_counter += simd_sqrt_counter_tl;
-                simd_sqrt_counter_tl = 0;
+                    simd_sqrt_counter += simd_sqrt_counter_tl;
+                    simd_sqrt_counter_tl = 0;
 
-                simd_rsqrt_counter += simd_rsqrt_counter_tl;
-                simd_rsqrt_counter_tl = 0;
+                    simd_rsqrt_counter += simd_rsqrt_counter_tl;
+                    simd_rsqrt_counter_tl = 0;
 #endif
-            });
+                });
+        };
+#if defined(__HCC__)
+        if constexpr (std::is_same_v<It, F *> && NDim == 3u
+                      && std::is_same_v<UInt, std::size_t> && !std::is_same_v<F, long double>) {
+            const auto nparts = m_parts[0].size();
+            if (m_ncrit <= nparts) {
+                std::array<const F *, NDim + 1u> part_ptrs;
+                for (std::size_t i = 0; i < NDim + 1u; ++i) {
+                    part_ptrs[i] = m_parts[i].data();
+                }
+                acc_pot_impl_hcc<Q>(out, m_tree.data(), m_tree.size(), part_ptrs, m_codes.data(), nparts, theta2, G,
+                                    eps2, m_ncrit);
+            } else {
+                cpu_run();
+            }
+        } else {
+            cpu_run();
+        }
+#else
+        cpu_run();
+#endif
     }
     // Small helper to check the value of the softening length and its square.
     // Used more than once, hence factored out.
