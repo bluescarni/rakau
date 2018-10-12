@@ -2073,7 +2073,7 @@ private:
         }
         if (bh_flag) {
             // The source node satisfies the BH criterion for all the particles of the target node. Add the
-            // acceleration due to the com of the source node.
+            // interaction due to the com of the source node.
             tree_acc_pot_bh_com<Q>(src_idx, tgt_size, p_ptrs, tmp_ptrs, res_ptrs);
             // We can now skip all the children of the source node.
             return static_cast<size_type>(src_idx + n_children_src + 1u);
