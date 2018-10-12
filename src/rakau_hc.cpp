@@ -104,8 +104,7 @@ inline void tree_self_interactions_hcc(F eps2, int pidx, int tgt_begin, int tgt_
 }
 
 template <unsigned Q, std::size_t NDim, typename F, typename SrcNode, typename PView, typename ResArray>
-inline void tree_acc_pot_leaf_hcc(const SrcNode &src_node, F eps2, int src_idx, int pidx, PView p_view,
-                                  ResArray &res_array) [[hc]]
+inline void tree_acc_pot_leaf_hcc(const SrcNode &src_node, F eps2, int pidx, PView p_view, ResArray &res_array) [[hc]]
 {
     // Establish the range of the source node.
     const auto src_begin = static_cast<int>(std::get<1>(src_node)[0]),
@@ -148,8 +147,8 @@ inline void tree_acc_pot_leaf_hcc(const SrcNode &src_node, F eps2, int src_idx, 
 }
 
 template <unsigned Q, std::size_t NDim, typename F, typename SrcNode, typename PView, typename ResArray>
-inline void tree_acc_pot_bh_com_hcc(const SrcNode &src_node, F eps2, int src_idx, int pidx, PView p_view,
-                                    ResArray &res_array, F dist2, const std::array<F, NDim> &dist_vec) [[hc]]
+inline void tree_acc_pot_bh_com_hcc(const SrcNode &src_node, F eps2, int pidx, PView p_view, ResArray &res_array,
+                                    F dist2, const std::array<F, NDim> &dist_vec) [[hc]]
 {
     // Add the softening length to dist2.
     dist2 += eps2;
@@ -195,7 +194,7 @@ inline int tree_acc_pot_bh_check_hcc(const SrcNode &src_node, int src_idx, F the
     if (src_dim2 < theta2 * dist2) {
         // The source node satisfies the BH criterion for all the particles of the target node. Add the
         // acceleration due to the com of the source node.
-        tree_acc_pot_bh_com_hcc<Q, NDim>(src_node, eps2, src_idx, pidx, p_view, res_array, dist2, dist_vec);
+        tree_acc_pot_bh_com_hcc<Q, NDim>(src_node, eps2, pidx, p_view, res_array, dist2, dist_vec);
         // We can now skip all the children of the source node.
         return src_idx + n_children_src + 1;
     }
@@ -203,7 +202,7 @@ inline int tree_acc_pot_bh_check_hcc(const SrcNode &src_node, int src_idx, F the
     // node, in which case we need to compute all the pairwise interactions.
     if (!n_children_src) {
         // Leaf node.
-        tree_acc_pot_leaf_hcc<Q, NDim>(src_node, eps2, src_idx, pidx, p_view, res_array);
+        tree_acc_pot_leaf_hcc<Q, NDim>(src_node, eps2, pidx, p_view, res_array);
     }
     // In any case, we keep traversing the tree moving to the next node in depth-first order.
     return src_idx + 1;
@@ -215,7 +214,6 @@ void acc_pot_impl_hcc(const std::array<F *, tree_nvecs_res<Q, NDim>> &out, const
                       const std::array<const F *, NDim + 1u> &p_parts, tree_size_t<F> nparts, F theta2, F G, F eps2,
                       tree_size_t<F> ncrit)
 {
-    using size_type = tree_size_t<F>;
     hc::array_view<const tree_node_t<NDim, F, UInt>, 1> tree_view(boost::numeric_cast<int>(tree_size), tree);
     hc::array_view<const tree_cnode_t<F, UInt>, 1> cnodes_view(boost::numeric_cast<int>(cnodes_size), cnodes);
     // Turn the input particles data and the result buffers into tuples of views, for use
@@ -281,8 +279,7 @@ void acc_pot_impl_hcc(const std::array<F *, tree_nvecs_res<Q, NDim>> &out, const
                     // The source node is not an ancestor of the target. We need to run the BH criterion
                     // check. The tree_acc_pot_bh_check_hcc() function will return the index of the next node
                     // in the traversal.
-                    src_idx
-                        = tree_acc_pot_bh_check_hcc<Q, NDim>(src_node, src_idx, theta2, eps2, pidx, p_view, res_array);
+                    src_idx = tree_acc_pot_bh_check_hcc<Q, NDim>(src_node, theta2, eps2, pidx, p_view, res_array);
                 }
             }
 
