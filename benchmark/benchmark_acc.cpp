@@ -94,12 +94,15 @@ int main(int argc, char **argv)
 
     // auto parts = get_uniform_particles<3>(nparts, bsize);
     auto parts = get_plummer_sphere(nparts, bsize);
-    tree<3, float> t(bsize,
-                     {parts.begin() + nparts, parts.begin() + 2 * nparts, parts.begin() + 3 * nparts, parts.begin()},
-                     nparts, max_leaf_n, ncrit);
+    tree<3, float, std::uint32_t> t(
+        bsize, {parts.begin() + nparts, parts.begin() + 2 * nparts, parts.begin() + 3 * nparts, parts.begin()}, nparts,
+        max_leaf_n, ncrit);
     std::cout << t << '\n';
     std::array<std::vector<float>, 3> accs;
-    t.accs_u(accs, 0.75f);
+    for (auto &_ : accs) {
+        _.resize(nparts);
+    }
+    t.accs_new({accs[0].data(), accs[1].data(), accs[2].data()}, 0.75f);
     std::cout << accs[0][t.ord_ind()[idx]] << ", " << accs[1][t.ord_ind()[idx]] << ", " << accs[2][t.ord_ind()[idx]]
               << '\n';
     auto eacc = t.exact_acc_u(t.ord_ind()[idx]);
