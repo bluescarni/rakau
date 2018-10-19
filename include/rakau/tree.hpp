@@ -2470,7 +2470,11 @@ public:
         constexpr auto batch_size = fp_batch_type::size;
         static_assert(batch_size == c_batch_type::size);
 
-        const auto theta2 = fp_batch_type(theta * theta);
+        const auto theta2 = fp_batch_type(theta * theta), eps2 = fp_batch_type(eps * eps);
+
+        static thread_local fp_vector dist2_tmp;
+        dist2_tmp.resize(m_ncrit);
+        auto dist2_ptr = dist2_tmp.data();
 
         const auto nparts = m_parts[0].size(), tree_size = static_cast<size_type>(m_tree.size());
 
@@ -2508,7 +2512,7 @@ public:
 
                 bool bh_flag = true;
 
-                for (size_type j = i; j < i + (m_ncrit - rem_simd_blocks) && bh_flag; j += batch_size) {
+                for (size_type j = i; (j < i + (m_ncrit - rem_simd_blocks)) && bh_flag; j += batch_size) {
                     // Initialise the x, y, z components for the acceleration on the current batch.
                     fp_batch_type res_x(F(0)), res_y(F(0)), res_z(F(0));
 
@@ -2541,7 +2545,7 @@ public:
                     // the particle, otherwise we will run into infinities below.
                     const auto subtract_p = ancestor_node && !unitary_leaf_node;
 
-                    if (xsimd::any(subtract_p)) {
+                    if (rakau_unlikely(xsimd::any(subtract_p))) {
                         const auto sub_mass = xsimd::select(_mm256_castsi256_ps(subtract_p), mass, fp_batch_type(F(0))),
                                    new_node_mass = node_mass - sub_mass, rec_new_node_mass = F(1) / new_node_mass;
 
@@ -2554,19 +2558,16 @@ public:
                     const auto diff_x = com_pos_x - pos_x, diff_y = com_pos_y - pos_y, diff_z = com_pos_z - pos_z;
                     auto dist2 = diff_x * diff_x + diff_y * diff_y + diff_z * diff_z;
 
-                    // if (xsimd::all(!xsimd::batch_bool<float, 8>(_mm256_castsi256_ps(unitary_leaf_node))
-                    //                && src_dim2 < theta2 * dist2)) {
-                    //     src_idx += n_children_src + 1;
-                    // } else {
-                    //     ++src_idx;
-                    // }
-
                     bh_flag = bh_flag
                               && xsimd::all(!xsimd::batch_bool<float, 8>(_mm256_castsi256_ps(unitary_leaf_node))
                                             && src_dim2 < theta2 * dist2);
+
+                    dist2.store_aligned(dist2_ptr + (j - i));
                 }
 
                 if (bh_flag) {
+                    // dist2 += eps2;
+
                     src_idx += n_children_src + 1;
                 } else {
                     ++src_idx;
