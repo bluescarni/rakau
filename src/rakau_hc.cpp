@@ -140,20 +140,19 @@ void acc_pot_impl_hcc(const std::array<F *, tree_nvecs_res<Q, NDim>> &out, const
                 const bool ancestor_node = s_p_code == src_code;
                 // Determine if we are in the leaf node of the target particle, and if
                 // the leaf node has only the particle itself.
-                const bool unitary_leaf_node = ancestor_node && (src_end - src_begin) == 1;
+                const bool unitary_tgt_leaf_node = ancestor_node && (src_end - src_begin) == 1;
                 // If we are dealing with an ancestor node, normally we will have to
                 // subtract from it the target particle, otherwise we will have
                 // self interactions involving the target particle. The only exception
                 // is if we are in the leaf node of the target particle and the leaf
                 // node contains only that particle. In such case, we will not subtract
                 // the particle, otherwise we will run into infinities below.
-                const bool subtract_p = ancestor_node && !unitary_leaf_node;
+                const bool subtract_p = ancestor_node && !unitary_tgt_leaf_node;
 
                 // Do the particle subtraction, which will update the COM position and the total mass of the node.
-                const F sub_mass = subtract_p * p_mass, new_node_mass = node_mass - sub_mass,
-                        rec_new_node_mass = F(1) / new_node_mass;
+                const F sub_mass = subtract_p * p_mass, new_node_mass = node_mass - sub_mass;
                 for (std::size_t j = 0; j < NDim; ++j) {
-                    com_pos[j] = (com_pos[j] * node_mass - sub_mass * p_pos[j]) * rec_new_node_mass;
+                    com_pos[j] = (com_pos[j] * node_mass - sub_mass * p_pos[j]) / new_node_mass;
                 }
                 // Don't forget to update the node mass as well.
                 node_mass = new_node_mass;
@@ -168,7 +167,8 @@ void acc_pot_impl_hcc(const std::array<F *, tree_nvecs_res<Q, NDim>> &out, const
                     dist2 += diff * diff;
                     dist_vec[j] = diff;
                 }
-                if (!unitary_leaf_node && src_dim2 < theta2 * dist2) {
+                // Now let's run the BH check on *all* the target particles in the same wavefront.
+                if (hc::__all(!unitary_tgt_leaf_node && src_dim2 < theta2 * dist2)) {
                     // We are not in a leaf node containing only the target particle,
                     // and the source node satisfies the BH criterion for the target
                     // particle. We will then add the (approximated) contribution of the source node
@@ -196,13 +196,18 @@ void acc_pot_impl_hcc(const std::array<F *, tree_nvecs_res<Q, NDim>> &out, const
                     // We can now skip all the children of the source node.
                     src_idx += n_children_src + 1;
                 } else {
-                    // The source node is either a unitary leaf node or it does not satisfy the BH criterion.
+                    // The source node is either the unitary leaf node containing the target particle or it does not
+                    // satisfy the BH criterion.
                     if (!n_children_src) {
-                        // We are in a leaf node, possibly containing the target particle. Compute all
-                        // the interactions with the target particle, taking care of avoiding self interactions.
-                        for (auto i = src_begin + (src_begin == pidx); i < src_end; i = (i + 1) + ((i + 1) == pidx)) {
-                            // Init the distance with the softening.
-                            dist2 = eps2;
+                        // We are in a leaf node. Compute all the interactions with the target particle.
+                        for (auto i = src_begin; i < src_end; ++i) {
+                            // Test if the current particle of the source leaf node coincides
+                            // with the target particle.
+                            const bool is_tgt_particle = pidx == i;
+                            // Init the distance with the softening, plus add some extra
+                            // softening if i is the target particle. This will avoid
+                            // infinites when dividing by the distance below.
+                            dist2 = eps2 + is_tgt_particle;
                             for (std::size_t j = 0; j < NDim; ++j) {
                                 const auto diff = p_view[j][i] - p_pos[j];
                                 dist2 += diff * diff;
@@ -214,6 +219,8 @@ void acc_pot_impl_hcc(const std::array<F *, tree_nvecs_res<Q, NDim>> &out, const
                                 // Q == 0 or 2: accelerations are requested.
                                 const auto m_i_dist3 = m_i / (dist * dist2);
                                 for (std::size_t j = 0; j < NDim; ++j) {
+                                    // NOTE: if i == pidx, then dist_vec will be a vector
+                                    // of zeroes and res_array will not be modified.
                                     res_array[j] += dist_vec[j] * m_i_dist3;
                                 }
                             }
@@ -222,7 +229,10 @@ void acc_pot_impl_hcc(const std::array<F *, tree_nvecs_res<Q, NDim>> &out, const
                                 // Establish the index of the potential in the result array:
                                 // 0 if only the potentials are requested, NDim otherwise.
                                 constexpr auto pot_idx = static_cast<std::size_t>(Q == 1u ? 0u : NDim);
-                                res_array[pot_idx] -= p_mass * m_i / dist;
+                                // NOTE: for the potential, we need an extra multiplication by
+                                // !is_tgt_particle to set the rhs to zero in case i == pidx (for
+                                // the accelerations, the same effect was achieved via dist_vec).
+                                res_array[pot_idx] -= !is_tgt_particle * p_mass * m_i / dist;
                             }
                         }
                     }
