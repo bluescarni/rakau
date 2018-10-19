@@ -314,20 +314,21 @@ inline constexpr bool use_fast_inv_sqrt =
 
 // Default values for the max_leaf_n and ncrit tree parameters.
 // These are determined experimentally from benchmarks on various systems.
+
+// NOTE: a value of 8 might get *slightly* better performance on the
+// acc/pot computations, but it results in a tree twice as big.
+inline constexpr unsigned default_max_leaf_n = 16;
+
 // NOTE: so far we have tested only on x86 systems, where it seems for
 // everything but AVX512 a good combination is 128, 16. For AVX512, 256
 // seems to work better than 128.
-inline constexpr unsigned default_max_leaf_n =
+inline constexpr unsigned default_ncrit =
 #if defined(XSIMD_X86_INSTR_SET) && XSIMD_X86_INSTR_SET >= XSIMD_X86_AVX512_VERSION
     256
 #else
     128
 #endif
     ;
-
-// NOTE: a value of 8 might get *slightly* better performance on the
-// acc/pot computations, but it results in a tree twice as big.
-inline constexpr unsigned default_ncrit = 16;
 
 } // namespace detail
 
