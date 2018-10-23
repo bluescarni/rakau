@@ -72,7 +72,7 @@ void acc_pot_impl_hcc(const std::array<F *, tree_nvecs_res<Q, NDim>> &out, const
     auto pt = ap2tv(p_parts, boost::numeric_cast<int>(nparts));
     auto rt = ap2tv(out, boost::numeric_cast<int>(nparts));
     hc::parallel_for_each(
-        hc::extent<1>(boost::numeric_cast<int>(nparts)).tile(boost::numeric_cast<int>(ncrit)),
+        hc::extent<1>(boost::numeric_cast<int>(nparts)).tile(__HSA_WAVEFRONT_SIZE__),
         [
             tree_view, tree_size = static_cast<int>(tree_size), nparts = static_cast<int>(nparts), pt, codes_view, rt,
             theta2, G,
@@ -99,7 +99,7 @@ void acc_pot_impl_hcc(const std::array<F *, tree_nvecs_res<Q, NDim>> &out, const
             for (std::size_t j = 0; j < NDim; ++j) {
                 p_pos[j] = p_view[j][pidx];
             }
-            const F p_mass = p_view[NDim][pidx];
+            const auto p_mass = p_view[NDim][pidx];
 
             // Temporary arrays that will be used in the loop.
             std::array<F, NDim> dist_vec, com_pos;
@@ -132,35 +132,29 @@ void acc_pot_impl_hcc(const std::array<F *, tree_nvecs_res<Q, NDim>> &out, const
                 // top bit and then shifted down according to the level of the source node, so that
                 // the top 1 bits of s_p_code and src_code are at the same position.
                 const auto s_p_code = static_cast<UInt>(s_p_code_init >> ((cbits_v<UInt, NDim> - src_level) * NDim));
-                // Determine if the source node is an ancestor of the leaf node of the
-                // target particle. It is if the code of the source node and the shifted
-                // particle code coincide.
-                // NOTE: according to this test, the leaf node of the target particle
-                // is also considered an ancestor.
-                const bool ancestor_node = s_p_code == src_code;
-                // Determine if we are in the leaf node of the target particle, and if
-                // the leaf node has only the particle itself.
-                const bool unitary_tgt_leaf_node = ancestor_node && (src_end - src_begin) == 1;
-                // If we are dealing with an ancestor node, normally we will have to
-                // subtract from it the target particle, otherwise we will have
-                // self interactions involving the target particle. The only exception
-                // is if we are in the leaf node of the target particle and the leaf
-                // node contains only that particle. In such case, we will not subtract
-                // the particle, otherwise we will run into infinities below.
-                const bool subtract_p = ancestor_node && !unitary_tgt_leaf_node;
-
-                // Do the particle subtraction, which will update the COM position and the total mass of the node.
-                const F sub_mass = subtract_p * p_mass, new_node_mass = node_mass - sub_mass;
-                for (std::size_t j = 0; j < NDim; ++j) {
-                    com_pos[j] = (com_pos[j] * node_mass - sub_mass * p_pos[j]) / new_node_mass;
+                // We need now to determine if the source node contains the target particle.
+                // If it does, in all but one specific case we will have to correct
+                // the source node COM coordinates & mass with the removal of the target particle.
+                // The only exception is if the source node contains *only* the target particle,
+                // in which case we want to avoid the correction because it would result in
+                // infinities.
+                //
+                // The check s_p_code == src_code tells us if the source node contains the target
+                // particle. The check (src_end - src_begin) != 1 tells us that the source node
+                // contains other particles in addition to the target particle.
+                if (s_p_code == src_code && (src_end - src_begin) != 1) {
+                    // Update the COM position.
+                    const auto new_node_mass = node_mass - p_mass;
+                    for (std::size_t j = 0; j < NDim; ++j) {
+                        com_pos[j] = (com_pos[j] * node_mass - p_mass * p_pos[j]) / new_node_mass;
+                    }
+                    // Don't forget to update the node mass as well.
+                    node_mass = new_node_mass;
                 }
-                // Don't forget to update the node mass as well.
-                node_mass = new_node_mass;
 
                 // Compute the distance between target particle and source COM.
-                // NOTE: in case we are in the leaf node of the target particle and
-                // the leaf node contains only that particle, then dist2 will be zero
-                // (or very close to it).
+                // NOTE: if we are in a source node which contains only the target particle,
+                // then dist2 and dist_vec will be zero.
                 F dist2(0);
                 for (std::size_t j = 0; j < NDim; ++j) {
                     const auto diff = com_pos[j] - p_pos[j];
@@ -168,7 +162,9 @@ void acc_pot_impl_hcc(const std::array<F *, tree_nvecs_res<Q, NDim>> &out, const
                     dist_vec[j] = diff;
                 }
                 // Now let's run the BH check on *all* the target particles in the same wavefront.
-                if (hc::__all(!unitary_tgt_leaf_node && src_dim2 < theta2 * dist2)) {
+                // NOTE: if we are in a source node which contains only the target particle,
+                // then dist2 will have been set to zero above and the check always fails.
+                if (hc::__all(src_dim2 < theta2 * dist2)) {
                     // We are not in a leaf node containing only the target particle,
                     // and the source node satisfies the BH criterion for the target
                     // particle. We will then add the (approximated) contribution of the source node
@@ -177,7 +173,7 @@ void acc_pot_impl_hcc(const std::array<F *, tree_nvecs_res<Q, NDim>> &out, const
                     // Start by adding the softening.
                     dist2 += eps2;
                     // Compute the (softened) distance.
-                    const F dist = sqrt(dist2);
+                    const auto dist = sqrt(dist2);
                     if constexpr (Q == 0u || Q == 2u) {
                         // Q == 0 or 2: accelerations are requested.
                         const auto node_mass_dist3 = node_mass / (dist * dist2);
@@ -196,10 +192,14 @@ void acc_pot_impl_hcc(const std::array<F *, tree_nvecs_res<Q, NDim>> &out, const
                     // We can now skip all the children of the source node.
                     src_idx += n_children_src + 1;
                 } else {
-                    // The source node is either the unitary leaf node containing the target particle or it does not
-                    // satisfy the BH criterion.
+                    // Either the source node fails the BH criterion, or we are in a source node which
+                    // contains only the target particle.
                     if (!n_children_src) {
                         // We are in a leaf node. Compute all the interactions with the target particle.
+                        // NOTE: if we are in a source node which contains only the target particle,
+                        // then the loop will have just 1 iteration and the use of the is_tgt_particle
+                        // variable will ensure that all interactions of the particle with itself
+                        // amount to zero.
                         for (auto i = src_begin; i < src_end; ++i) {
                             // Test if the current particle of the source leaf node coincides
                             // with the target particle.
@@ -236,8 +236,8 @@ void acc_pot_impl_hcc(const std::array<F *, tree_nvecs_res<Q, NDim>> &out, const
                             }
                         }
                     }
-                    // In any case, we keep traversing the tree moving to the next node in depth-first
-                    // order.
+                    // In any case, we keep traversing the tree moving to the next node
+                    // in depth-first order.
                     ++src_idx;
                 }
             }
