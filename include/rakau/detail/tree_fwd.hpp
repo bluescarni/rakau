@@ -59,7 +59,7 @@ using tree_size_t = typename std::vector<F, di_aligned_allocator<F, 0>>::size_ty
 
 // Tree node.
 template <std::size_t NDim, typename F, typename UInt>
-using tree_node_t = std::tuple<UInt, std::array<tree_size_t<F>, 3>, F, std::array<F, NDim>, unsigned, F>;
+using tree_node_t = std::tuple<UInt, std::array<tree_size_t<F>, 3>, F, std::array<F, NDim>, UInt, F>;
 
 // Critical node.
 template <typename F, typename UInt>
