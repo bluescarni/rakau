@@ -102,7 +102,7 @@ void acc_pot_impl_hcc(const std::array<F *, tree_nvecs_res<Q, NDim>> &out, const
             const auto p_mass = p_view[NDim][pidx];
 
             // Temporary arrays that will be used in the loop.
-            std::array<F, NDim> dist_vec, com_pos;
+            F dist_vec[NDim], props[NDim + 1u];
 
             // Add a 1 bit just above the highest possible bit position for the particle code.
             // This value is used in the loop, we precompute it here.
@@ -113,20 +113,19 @@ void acc_pot_impl_hcc(const std::array<F *, tree_nvecs_res<Q, NDim>> &out, const
                 // Get a reference to the current source node, and cache locally a few quantities.
                 const auto &src_node = tree_view[src_idx];
                 // Code of the source node.
-                const auto src_code = std::get<0>(src_node);
+                const auto src_code = src_node.code;
                 // Range of the source node.
-                const auto src_begin = static_cast<int>(std::get<1>(src_node)[0]),
-                           src_end = static_cast<int>(std::get<1>(src_node)[1]);
+                const auto src_begin = static_cast<int>(src_node.begin), src_end = static_cast<int>(src_node.end);
                 // Number of children of the source node.
-                const auto n_children_src = static_cast<int>(std::get<1>(src_node)[2]);
-                // Total mass in the source node.
-                auto node_mass = std::get<2>(src_node);
-                // Position of the centre of mass of the source node.
-                com_pos = std::get<3>(src_node);
+                const auto n_children_src = static_cast<int>(src_node.n_children);
+                // Node properties.
+                for (std::size_t j = 0; j < NDim + 1u; ++j) {
+                    props[j] = src_node.props[j];
+                }
                 // Level of the source node.
-                const auto src_level = std::get<4>(src_node);
+                const auto src_level = src_node.level;
                 // Square of the dimension of the source node.
-                const auto src_dim2 = std::get<5>(src_node);
+                const auto src_dim2 = src_node.dim2;
 
                 // Compute the shifted particle code. This is the particle code with one extra
                 // top bit and then shifted down according to the level of the source node, so that
@@ -144,12 +143,12 @@ void acc_pot_impl_hcc(const std::array<F *, tree_nvecs_res<Q, NDim>> &out, const
                 // contains other particles in addition to the target particle.
                 if (s_p_code == src_code && (src_end - src_begin) != 1) {
                     // Update the COM position.
-                    const auto new_node_mass = node_mass - p_mass;
+                    const auto new_node_mass = props[NDim] - p_mass;
                     for (std::size_t j = 0; j < NDim; ++j) {
-                        com_pos[j] = (com_pos[j] * node_mass - p_mass * p_pos[j]) / new_node_mass;
+                        props[j] = (props[j] * props[NDim] - p_mass * p_pos[j]) / new_node_mass;
                     }
                     // Don't forget to update the node mass as well.
-                    node_mass = new_node_mass;
+                    props[NDim] = new_node_mass;
                 }
 
                 // Compute the distance between target particle and source COM.
@@ -157,7 +156,7 @@ void acc_pot_impl_hcc(const std::array<F *, tree_nvecs_res<Q, NDim>> &out, const
                 // then dist2 and dist_vec will be zero.
                 F dist2(0);
                 for (std::size_t j = 0; j < NDim; ++j) {
-                    const auto diff = com_pos[j] - p_pos[j];
+                    const auto diff = props[j] - p_pos[j];
                     dist2 += diff * diff;
                     dist_vec[j] = diff;
                 }
@@ -176,7 +175,7 @@ void acc_pot_impl_hcc(const std::array<F *, tree_nvecs_res<Q, NDim>> &out, const
                     const auto dist = sqrt(dist2);
                     if constexpr (Q == 0u || Q == 2u) {
                         // Q == 0 or 2: accelerations are requested.
-                        const auto node_mass_dist3 = node_mass / (dist * dist2);
+                        const auto node_mass_dist3 = props[NDim] / (dist * dist2);
                         for (std::size_t j = 0; j < NDim; ++j) {
                             res_array[j] += dist_vec[j] * node_mass_dist3;
                         }
@@ -187,7 +186,7 @@ void acc_pot_impl_hcc(const std::array<F *, tree_nvecs_res<Q, NDim>> &out, const
                         // 0 if only the potentials are requested, NDim otherwise.
                         constexpr auto pot_idx = static_cast<std::size_t>(Q == 1u ? 0u : NDim);
                         // Add the potential due to the node.
-                        res_array[pot_idx] -= p_mass * node_mass / dist;
+                        res_array[pot_idx] -= p_mass * props[NDim] / dist;
                     }
                     // We can now skip all the children of the source node.
                     src_idx += n_children_src + 1;
