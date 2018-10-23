@@ -2501,14 +2501,15 @@ public:
 
                 bool bh_flag = true;
 
-                for (size_type j = i; (j < i + (m_ncrit - rem_simd_blocks)) && bh_flag; j += batch_size) {
+                for (size_type j = i; (j < i + (m_ncrit - rem_simd_blocks)); j += batch_size) {
                     // Initialise the x, y, z components for the acceleration on the current batch.
                     fp_batch_type res_x(F(0)), res_y(F(0)), res_z(F(0));
 
                     // Load the current batch's positions, masses and codes.
                     const auto pos_x = xsimd::load_aligned(x_ptr + j), pos_y = xsimd::load_aligned(y_ptr + j),
-                               pos_z = xsimd::load_aligned(z_ptr + j), mass = xsimd::load_aligned(m_ptr + j);
-                    const auto codes = xsimd::load_aligned(codes_ptr + j);
+                               pos_z = xsimd::load_aligned(z_ptr + j);
+
+#if 0
 
                     // Add a 1 bit just above the highest possible bit position for the particle codes.
                     const auto s_p_codes_init = codes | c_batch_type(UInt(1) << (cbits_v<UInt, NDim> * NDim));
@@ -2543,19 +2544,40 @@ public:
                         com_pos_z = (com_pos_z * node_mass - sub_mass * pos_z) * rec_new_node_mass;
                         node_mass = new_node_mass;
                     }
+#endif
 
                     const auto diff_x = com_pos_x - pos_x, diff_y = com_pos_y - pos_y, diff_z = com_pos_z - pos_z;
                     auto dist2 = diff_x * diff_x + diff_y * diff_y + diff_z * diff_z;
 
-                    bh_flag = bh_flag
-                              && xsimd::all(!xsimd::batch_bool<float, 8>(_mm256_castsi256_ps(unitary_leaf_node))
-                                            && src_dim2 < theta2 * dist2);
+                    bh_flag = bh_flag && xsimd::all(src_dim2 < theta2 * dist2);
 
-                    dist2.store_aligned(dist2_ptr + (j - i));
+                    // dist2.store_aligned(dist2_ptr + (j - i));
+                    if (bh_flag) {
+                        (xsimd_sqrt(dist2) * dist2).store_aligned(dist2_ptr + i);
+                    }
                 }
 
                 if (bh_flag) {
-                    // dist2 += eps2;
+                    for (size_type j = i; j < i + (m_ncrit - rem_simd_blocks); j += batch_size) {
+                        const auto pos_x = xsimd::load_aligned(x_ptr + j), pos_y = xsimd::load_aligned(y_ptr + j),
+                                   pos_z = xsimd::load_aligned(z_ptr + j);
+                        const auto mass = xsimd::load_aligned(m_ptr + j);
+
+                        const auto codes = xsimd::load_aligned(codes_ptr + j);
+                        const auto s_p_codes_init = codes | c_batch_type(UInt(1) << (cbits_v<UInt, NDim> * NDim));
+                        const auto s_p_codes = s_p_codes_init >> c_batch_type((cbits_v<UInt, NDim> - src_level) * NDim);
+                        if (xsimd::any(s_p_codes == c_batch_type(src_code)) && (src_end - src_begin) != 1) {
+                            const auto sub_mass
+                                = xsimd::select(_mm256_castsi256_ps(s_p_codes == c_batch_type(src_code)), mass,
+                                                fp_batch_type(F(0))),
+                                new_node_mass = node_mass - sub_mass, rec_new_node_mass = F(1) / new_node_mass;
+
+                            com_pos_x = (com_pos_x * node_mass - sub_mass * pos_x) * rec_new_node_mass;
+                            com_pos_y = (com_pos_y * node_mass - sub_mass * pos_y) * rec_new_node_mass;
+                            com_pos_z = (com_pos_z * node_mass - sub_mass * pos_z) * rec_new_node_mass;
+                            node_mass = new_node_mass;
+                        }
+                    }
 
                     src_idx += n_children_src + 1;
                 } else {
