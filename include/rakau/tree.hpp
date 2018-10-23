@@ -2484,21 +2484,20 @@ public:
                 // Get a reference to the current source node, and cache locally a few quantities.
                 const auto &src_node = tree_ptr[src_idx];
                 // Code of the source node.
-                const auto src_code = std::get<0>(src_node);
+                const auto src_code = src_node.code;
                 // Range of the source node.
-                const auto src_begin = std::get<1>(src_node)[0], src_end = std::get<1>(src_node)[1];
+                const auto src_begin = src_node.begin, src_end = src_node.end;
                 // Number of children of the source node.
-                const auto n_children_src = std::get<1>(src_node)[2];
-                // Total mass in the source node.
-                auto node_mass = fp_batch_type(std::get<2>(src_node));
+                const auto n_children_src = src_node.n_children;
                 // Position of the centre of mass of the source node.
-                auto com_pos_x = fp_batch_type(std::get<3>(src_node)[0]),
-                     com_pos_y = fp_batch_type(std::get<3>(src_node)[1]),
-                     com_pos_z = fp_batch_type(std::get<3>(src_node)[2]);
+                auto com_pos_x = fp_batch_type(src_node.props[0]), com_pos_y = fp_batch_type(src_node.props[1]),
+                     com_pos_z = fp_batch_type(src_node.props[2]);
+                // Total mass in the source node.
+                auto node_mass = fp_batch_type(src_node.props[3]);
                 // Level of the source node.
-                const auto src_level = std::get<4>(src_node);
+                const auto src_level = src_node.level;
                 // Square of the dimension of the source node.
-                const auto src_dim2 = fp_batch_type(std::get<5>(src_node));
+                const auto src_dim2 = fp_batch_type(src_node.dim2);
 
                 bool bh_flag = true;
 
