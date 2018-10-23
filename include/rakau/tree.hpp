@@ -2276,8 +2276,11 @@ private:
                 });
         };
 #if defined(__HCC__)
-        if constexpr (std::is_same_v<It, F *> && NDim == 3u
-                      && std::is_same_v<UInt, std::size_t> && !std::is_same_v<F, long double>) {
+        if constexpr (NDim == 3u
+                      && std::conjunction_v<
+                             std::is_same<It, F *>,
+                             std::disjunction<std::is_same<UInt, std::uint64_t>, std::is_same<UInt, std::uint32_t>>,
+                             std::negation<std::is_same<F, long double>>>) {
             const auto nparts = m_parts[0].size();
             if (m_ncrit <= nparts) {
                 std::array<const F *, NDim + 1u> part_ptrs;

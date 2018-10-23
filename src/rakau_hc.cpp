@@ -1,5 +1,6 @@
 #include <array>
 #include <cstddef>
+#include <cstdint>
 #include <tuple>
 #include <utility>
 
@@ -258,13 +259,21 @@ void acc_pot_impl_hcc(const std::array<F *, tree_nvecs_res<Q, NDim>> &out, const
         const std::array<F *, tree_nvecs_res<Q, NDim>> &, const tree_node_t<NDim, F, UInt> *, tree_size_t<F>,          \
         const std::array<const F *, NDim + 1u> &, const UInt *, tree_size_t<F>, F, F, F, tree_size_t<F>)
 
-RAKAU_HC_EXPLICIT_INST(0, 3, float, std::size_t);
-RAKAU_HC_EXPLICIT_INST(1, 3, float, std::size_t);
-RAKAU_HC_EXPLICIT_INST(2, 3, float, std::size_t);
+RAKAU_HC_EXPLICIT_INST(0, 3, float, std::uint64_t);
+RAKAU_HC_EXPLICIT_INST(1, 3, float, std::uint64_t);
+RAKAU_HC_EXPLICIT_INST(2, 3, float, std::uint64_t);
 
-RAKAU_HC_EXPLICIT_INST(0, 3, double, std::size_t);
-RAKAU_HC_EXPLICIT_INST(1, 3, double, std::size_t);
-RAKAU_HC_EXPLICIT_INST(2, 3, double, std::size_t);
+RAKAU_HC_EXPLICIT_INST(0, 3, double, std::uint64_t);
+RAKAU_HC_EXPLICIT_INST(1, 3, double, std::uint64_t);
+RAKAU_HC_EXPLICIT_INST(2, 3, double, std::uint64_t);
+
+RAKAU_HC_EXPLICIT_INST(0, 3, float, std::uint32_t);
+RAKAU_HC_EXPLICIT_INST(1, 3, float, std::uint32_t);
+RAKAU_HC_EXPLICIT_INST(2, 3, float, std::uint32_t);
+
+RAKAU_HC_EXPLICIT_INST(0, 3, double, std::uint32_t);
+RAKAU_HC_EXPLICIT_INST(1, 3, double, std::uint32_t);
+RAKAU_HC_EXPLICIT_INST(2, 3, double, std::uint32_t);
 
 #undef RAKAU_HC_EXPLICIT_INST
 
