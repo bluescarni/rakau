@@ -2460,123 +2460,110 @@ public:
         constexpr auto batch_size = fp_batch_type::size;
         static_assert(batch_size == c_batch_type::size);
 
+        // As block size, take m_ncrit and round it up to a value that divides
+        // batch_size exactly.
+        const auto crit_block_size
+            = static_cast<size_type>(m_ncrit + ((m_ncrit % batch_size) ? (batch_size - m_ncrit % batch_size) : 0u));
+        // Splat out theta2 and eps2.
         const auto theta2 = fp_batch_type(theta * theta), eps2 = fp_batch_type(eps * eps);
 
-        static thread_local fp_vector dist2_tmp;
-        dist2_tmp.resize(m_ncrit);
-        auto dist2_ptr = dist2_tmp.data();
+        // Prepare the temporary arrays.
+        fp_vector dist2_tmp;
+        std::array<fp_vector, NDim> diff_tmp, res_vec;
+        for (std::size_t j = 0; j < NDim; ++j) {
+            diff_tmp[j].resize(crit_block_size);
+            res_vec[j].resize(crit_block_size);
+        }
+        dist2_tmp.resize(crit_block_size);
+        // Extract pointers to them.
+        auto dist2_ptr = dist2_tmp.data(), diff_x_ptr = diff_tmp[0].data(), diff_y_ptr = diff_tmp[1].data(),
+             diff_z_ptr = diff_tmp[2].data(), res_x_ptr = res_vec[0].data(), res_y_ptr = res_vec[1].data(),
+             res_z_ptr = res_vec[2].data();
 
         const auto nparts = m_parts[0].size(), tree_size = static_cast<size_type>(m_tree.size());
-
-        const auto n_crit_blocks = static_cast<size_type>(nparts / m_ncrit),
-                   rem_crit_blocks = static_cast<size_type>(nparts % m_ncrit),
-                   n_simd_blocks = static_cast<size_type>(m_ncrit / batch_size),
-                   rem_simd_blocks = static_cast<size_type>(m_ncrit % batch_size);
 
         const auto x_ptr = m_parts[0].data(), y_ptr = m_parts[1].data(), z_ptr = m_parts[2].data(),
                    m_ptr = m_parts[3].data();
         const auto codes_ptr = m_codes.data();
         const auto tree_ptr = m_tree.data();
 
-        for (size_type i = 0; i < nparts - rem_crit_blocks; i += m_ncrit) {
+        // Loop over the critical blocks.
+        for (size_type i = 0; i < nparts - static_cast<size_type>(nparts % crit_block_size); i += crit_block_size) {
+            // Empty the temporary result vectors.
+            for (std::size_t j = 0; j < NDim; ++j) {
+                std::fill(res_vec[j].begin(), res_vec[j].end(), F(0));
+            }
             // Loop over the tree.
             for (size_type src_idx = 0; src_idx < tree_size;) {
                 // Get a reference to the current source node, and cache locally a few quantities.
                 const auto &src_node = tree_ptr[src_idx];
-                // Code of the source node.
-                const auto src_code = src_node.code;
-                // Range of the source node.
-                const auto src_begin = src_node.begin, src_end = src_node.end;
                 // Number of children of the source node.
                 const auto n_children_src = src_node.n_children;
                 // Position of the centre of mass of the source node.
-                auto com_pos_x = fp_batch_type(src_node.props[0]), com_pos_y = fp_batch_type(src_node.props[1]),
-                     com_pos_z = fp_batch_type(src_node.props[2]);
-                // Total mass in the source node.
-                auto node_mass = fp_batch_type(src_node.props[3]);
-                // Level of the source node.
-                const auto src_level = src_node.level;
+                const auto com_pos_x = fp_batch_type(src_node.props[0]), com_pos_y = fp_batch_type(src_node.props[1]),
+                           com_pos_z = fp_batch_type(src_node.props[2]);
                 // Square of the dimension of the source node.
                 const auto src_dim2 = fp_batch_type(src_node.dim2);
 
                 bool bh_flag = true;
 
-                for (size_type j = i; (j < i + (m_ncrit - rem_simd_blocks)); j += batch_size) {
-                    // Initialise the x, y, z components for the acceleration on the current batch.
-                    fp_batch_type res_x(F(0)), res_y(F(0)), res_z(F(0));
-
-                    // Load the current batch's positions, masses and codes.
+                for (size_type j = i; (j < i + crit_block_size) && bh_flag; j += batch_size) {
+                    // Load the current batch's positions.
                     const auto pos_x = xsimd::load_aligned(x_ptr + j), pos_y = xsimd::load_aligned(y_ptr + j),
                                pos_z = xsimd::load_aligned(z_ptr + j);
 
-#if 0
-
-                    // Add a 1 bit just above the highest possible bit position for the particle codes.
-                    const auto s_p_codes_init = codes | c_batch_type(UInt(1) << (cbits_v<UInt, NDim> * NDim));
-
-                    // Compute the shifted particle code. This is the particle code with one extra
-                    // top bit and then shifted down according to the level of the source node, so that
-                    // the top 1 bits of s_p_code and src_code are at the same position.
-                    const auto s_p_codes = s_p_codes_init >> c_batch_type((cbits_v<UInt, NDim> - src_level) * NDim);
-                    // Determine if the source node is an ancestor of the leaf node of the
-                    // target particle. It is if the code of the source node and the shifted
-                    // particle code coincide.
-                    // NOTE: according to this test, the leaf node of the target particle
-                    // is also considered an ancestor.
-                    const auto ancestor_node = s_p_codes == c_batch_type(src_code);
-                    // Determine if we are in the leaf node of the target particle, and if
-                    // the leaf node has only the particle itself.
-                    const auto unitary_leaf_node = ancestor_node && (src_end - src_begin) == 1;
-                    // If we are dealing with an ancestor node, normally we will have to
-                    // subtract from it the target particle, otherwise we will have
-                    // self interactions involving the target particle. The only exception
-                    // is if we are in the leaf node of the target particle and the leaf
-                    // node contains only that particle. In such case, we will not subtract
-                    // the particle, otherwise we will run into infinities below.
-                    const auto subtract_p = ancestor_node && !unitary_leaf_node;
-
-                    if (rakau_unlikely(xsimd::any(subtract_p))) {
-                        const auto sub_mass = xsimd::select(_mm256_castsi256_ps(subtract_p), mass, fp_batch_type(F(0))),
-                                   new_node_mass = node_mass - sub_mass, rec_new_node_mass = F(1) / new_node_mass;
-
-                        com_pos_x = (com_pos_x * node_mass - sub_mass * pos_x) * rec_new_node_mass;
-                        com_pos_y = (com_pos_y * node_mass - sub_mass * pos_y) * rec_new_node_mass;
-                        com_pos_z = (com_pos_z * node_mass - sub_mass * pos_z) * rec_new_node_mass;
-                        node_mass = new_node_mass;
-                    }
-#endif
-
-                    const auto diff_x = com_pos_x - pos_x, diff_y = com_pos_y - pos_y, diff_z = com_pos_z - pos_z;
-                    auto dist2 = diff_x * diff_x + diff_y * diff_y + diff_z * diff_z;
+                    const auto diff_x = com_pos_x - pos_x, diff_y = com_pos_y - pos_y, diff_z = com_pos_z - pos_z,
+                               dist2 = diff_x * diff_x + diff_y * diff_y + diff_z * diff_z;
 
                     bh_flag = bh_flag && xsimd::all(src_dim2 < theta2 * dist2);
 
-                    // dist2.store_aligned(dist2_ptr + (j - i));
-                    if (bh_flag) {
-                        (xsimd_sqrt(dist2) * dist2).store_aligned(dist2_ptr + i);
-                    }
+                    dist2.store_aligned(dist2_ptr + (j - i));
+                    diff_x.store_aligned(diff_x_ptr + (j - i));
+                    diff_y.store_aligned(diff_y_ptr + (j - i));
+                    diff_z.store_aligned(diff_z_ptr + (j - i));
                 }
 
                 if (bh_flag) {
-                    for (size_type j = i; j < i + (m_ncrit - rem_simd_blocks); j += batch_size) {
-                        const auto pos_x = xsimd::load_aligned(x_ptr + j), pos_y = xsimd::load_aligned(y_ptr + j),
-                                   pos_z = xsimd::load_aligned(z_ptr + j);
-                        const auto mass = xsimd::load_aligned(m_ptr + j);
+                    const auto src_level = src_node.level;
+                    const auto src_code = c_batch_type(src_node.code);
+                    const auto non_unitary_node = (src_node.end - src_node.begin) != 1u;
+                    const auto orig_node_mass = fp_batch_type(src_node.props[NDim]);
+                    for (size_type j = i; j < i + crit_block_size; j += batch_size) {
+                        auto node_mass = orig_node_mass;
+
+                        // Recover the diff vectors.
+                        auto diff_x = xsimd::load_aligned(diff_x_ptr + (j - i)),
+                             diff_y = xsimd::load_aligned(diff_y_ptr + (j - i)),
+                             diff_z = xsimd::load_aligned(diff_z_ptr + (j - i)),
+                             dist2 = xsimd::load_aligned(dist2_ptr + (j - i));
 
                         const auto codes = xsimd::load_aligned(codes_ptr + j);
                         const auto s_p_codes_init = codes | c_batch_type(UInt(1) << (cbits_v<UInt, NDim> * NDim));
                         const auto s_p_codes = s_p_codes_init >> c_batch_type((cbits_v<UInt, NDim> - src_level) * NDim);
-                        if (xsimd::any(s_p_codes == c_batch_type(src_code)) && (src_end - src_begin) != 1) {
-                            const auto sub_mass
-                                = xsimd::select(_mm256_castsi256_ps(s_p_codes == c_batch_type(src_code)), mass,
-                                                fp_batch_type(F(0))),
-                                new_node_mass = node_mass - sub_mass, rec_new_node_mass = F(1) / new_node_mass;
 
-                            com_pos_x = (com_pos_x * node_mass - sub_mass * pos_x) * rec_new_node_mass;
-                            com_pos_y = (com_pos_y * node_mass - sub_mass * pos_y) * rec_new_node_mass;
-                            com_pos_z = (com_pos_z * node_mass - sub_mass * pos_z) * rec_new_node_mass;
+                        const auto ancestor_flags = s_p_codes == src_code;
+
+                        if (xsimd::any(ancestor_flags) && non_unitary_node) {
+                            const auto mass = xsimd::load_aligned(m_ptr + j);
+                            const auto sub_mass
+                                = xsimd::select(_mm256_castsi256_ps(ancestor_flags), mass, fp_batch_type(F(0))),
+                                new_node_mass = node_mass - sub_mass, mass_factor = node_mass / new_node_mass;
+                            diff_x *= mass_factor;
+                            diff_y *= mass_factor;
+                            diff_z *= mass_factor;
+                            dist2 = diff_x * diff_x + diff_y * diff_y + diff_z * diff_z;
                             node_mass = new_node_mass;
                         }
+
+                        dist2 += eps2;
+                        const auto m_dist3 = node_mass / (xsimd_sqrt(dist2) * dist2);
+
+                        xsimd_fma(diff_x, m_dist3, xsimd::load_aligned(res_x_ptr + (j - i)))
+                            .store_aligned(res_x_ptr + (j - i));
+                        xsimd_fma(diff_y, m_dist3, xsimd::load_aligned(res_y_ptr + (j - i)))
+                            .store_aligned(res_y_ptr + (j - i));
+                        xsimd_fma(diff_z, m_dist3, xsimd::load_aligned(res_z_ptr + (j - i)))
+                            .store_aligned(res_z_ptr + (j - i));
                     }
 
                     src_idx += n_children_src + 1;
