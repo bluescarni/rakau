@@ -92,11 +92,11 @@ void acc_pot_impl_hcc(const std::array<F *, tree_nvecs_res<Q, NDim>> &out, const
             auto res_view = t2a(rt);
 
             // Array of results, inited to zeroes.
-            std::array<F, tree_nvecs_res<Q, NDim>> res_array{};
+            F res_array[tree_nvecs_res<Q, NDim>]{};
 
             // Load the particle code, position and mass.
             const auto p_code = codes_view[pidx];
-            std::array<F, NDim> p_pos;
+            F p_pos[NDim];
             for (std::size_t j = 0; j < NDim; ++j) {
                 p_pos[j] = p_view[j][pidx];
             }
