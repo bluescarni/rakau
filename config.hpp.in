@@ -15,6 +15,7 @@
 #define RAKAU_VERSION_MAJOR @rakau_VERSION_MAJOR@
 #define RAKAU_VERSION_MINOR @rakau_VERSION_MINOR@
 @RAKAU_DISABLE_RSQRT@
+@RAKAU_ENABLE_CUDA@
 // clang-format on
 // End of defines instantiated by CMake.
 

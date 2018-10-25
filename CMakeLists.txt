@@ -18,9 +18,15 @@ endif()
 option(RAKAU_BUILD_TESTS "Build unit tests." OFF)
 option(RAKAU_BUILD_BENCHMARKS "Build benchmarks." OFF)
 option(RAKAU_ENABLE_RSQRT "Enable the use of rsqrt intrinsics." ON)
+option(RAKAU_WITH_CUDA "Enable support for CUDA." OFF)
 
 if(NOT RAKAU_ENABLE_RSQRT)
   set(RAKAU_DISABLE_RSQRT "#define RAKAU_DISABLE_RSQRT")
+endif()
+
+if(RAKAU_WITH_CUDA)
+  set(RAKAU_ENABLE_CUDA "#define RAKAU_WITH_CUDA")
+  enable_language(CUDA)
 endif()
 
 include(YACMACompilerLinkerSettings)

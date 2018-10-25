@@ -47,6 +47,8 @@
 
 #include <xsimd/xsimd.hpp>
 
+#include <rakau/config.hpp>
+
 // Let's disable a few compiler warnings emitted by the libmorton code.
 #if defined(__clang__) || defined(__GNUC__)
 
@@ -62,8 +64,13 @@
 
 #endif
 
-#include <rakau/config.hpp>
 #include <rakau/detail/libmorton/morton.h>
+
+#if defined(__clang__) || defined(__GNUC__)
+
+#pragma GCC diagnostic pop
+
+#endif
 
 #if defined(__HCC__)
 
@@ -71,9 +78,9 @@
 
 #endif
 
-#if defined(__clang__) || defined(__GNUC__)
+#if defined(RAKAU_WITH_CUDA)
 
-#pragma GCC diagnostic pop
+#include <rakau/detail/cuda_fwd.hpp>
 
 #endif
 
@@ -2289,6 +2296,26 @@ private:
                 }
                 acc_pot_impl_hcc<Q>(out, m_tree.data(), m_tree.size(), part_ptrs, m_codes.data(), nparts, theta2, G,
                                     eps2, m_ncrit);
+            } else {
+                cpu_run();
+            }
+        } else {
+            cpu_run();
+        }
+#elif defined(RAKAU_WITH_CUDA)
+        if constexpr (NDim == 3u
+                      && std::conjunction_v<
+                             std::is_same<It, F *>,
+                             std::disjunction<std::is_same<UInt, std::uint64_t>, std::is_same<UInt, std::uint32_t>>,
+                             std::negation<std::is_same<F, long double>>>) {
+            const auto nparts = m_parts[0].size();
+            if (m_ncrit <= nparts) {
+                std::array<const F *, NDim + 1u> part_ptrs;
+                for (std::size_t i = 0; i < NDim + 1u; ++i) {
+                    part_ptrs[i] = m_parts[i].data();
+                }
+                acc_pot_impl_cuda<Q>(out, m_tree.data(), m_tree.size(), part_ptrs, m_codes.data(), nparts, theta2, G,
+                                     eps2, m_ncrit);
             } else {
                 cpu_run();
             }
