@@ -2504,59 +2504,50 @@ public:
                            com_pos_z = fp_batch_type(src_node.props[2]);
                 // Square of the dimension of the source node.
                 const auto src_dim2 = fp_batch_type(src_node.dim2);
+                const auto src_code = c_batch_type(src_node.code);
+                const auto node_mass = fp_batch_type(src_node.props[NDim]);
+                const auto cracco = c_batch_type(UInt(1) << (cbits_v<UInt, NDim> * NDim));
+                const auto buppo = c_batch_type((cbits_v<UInt, NDim> - src_node.level) * NDim);
 
                 bool bh_flag = true;
 
-                for (size_type j = i; (j < i + crit_block_size) && bh_flag; j += batch_size) {
-                    // Load the current batch's positions.
+                for (size_type j = i; j < i + crit_block_size; j += batch_size) {
                     const auto pos_x = xsimd::load_aligned(x_ptr + j), pos_y = xsimd::load_aligned(y_ptr + j),
                                pos_z = xsimd::load_aligned(z_ptr + j);
 
-                    const auto diff_x = com_pos_x - pos_x, diff_y = com_pos_y - pos_y, diff_z = com_pos_z - pos_z,
-                               dist2 = diff_x * diff_x + diff_y * diff_y + diff_z * diff_z;
+                    const auto diff_x = com_pos_x - pos_x, diff_y = com_pos_y - pos_y, diff_z = com_pos_z - pos_z;
+                    auto dist2 = diff_x * diff_x + diff_y * diff_y + diff_z * diff_z;
 
-                    bh_flag = bh_flag && xsimd::all(src_dim2 < theta2 * dist2);
+                    const bool cond2 = xsimd::all(src_dim2 < theta2 * dist2);
 
-                    dist2.store_aligned(dist2_ptr + (j - i));
+                    const auto codes = xsimd::load_aligned(codes_ptr + j);
+                    const auto s_p_codes_init = codes | cracco;
+                    const auto s_p_codes = s_p_codes_init >> buppo;
+
+                    const bool cond1 = xsimd::all(s_p_codes != src_code);
+
+                    bh_flag = bh_flag && cond1 && cond2;
+
+                    if (!bh_flag) {
+                        break;
+                    }
+
+                    dist2 += eps2;
+                    (xsimd_sqrt(dist2) * dist2).store_aligned(dist2_ptr + (j - i));
                     diff_x.store_aligned(diff_x_ptr + (j - i));
                     diff_y.store_aligned(diff_y_ptr + (j - i));
                     diff_z.store_aligned(diff_z_ptr + (j - i));
                 }
 
                 if (bh_flag) {
-                    const auto src_level = src_node.level;
-                    const auto src_code = c_batch_type(src_node.code);
-                    const auto non_unitary_node = (src_node.end - src_node.begin) != 1u;
-                    const auto orig_node_mass = fp_batch_type(src_node.props[NDim]);
                     for (size_type j = i; j < i + crit_block_size; j += batch_size) {
-                        auto node_mass = orig_node_mass;
-
                         // Recover the diff vectors.
                         auto diff_x = xsimd::load_aligned(diff_x_ptr + (j - i)),
                              diff_y = xsimd::load_aligned(diff_y_ptr + (j - i)),
                              diff_z = xsimd::load_aligned(diff_z_ptr + (j - i)),
                              dist2 = xsimd::load_aligned(dist2_ptr + (j - i));
 
-                        const auto codes = xsimd::load_aligned(codes_ptr + j);
-                        const auto s_p_codes_init = codes | c_batch_type(UInt(1) << (cbits_v<UInt, NDim> * NDim));
-                        const auto s_p_codes = s_p_codes_init >> c_batch_type((cbits_v<UInt, NDim> - src_level) * NDim);
-
-                        const auto ancestor_flags = s_p_codes == src_code;
-
-                        if (xsimd::any(ancestor_flags) && non_unitary_node) {
-                            const auto mass = xsimd::load_aligned(m_ptr + j);
-                            const auto sub_mass
-                                = xsimd::select(_mm256_castsi256_ps(ancestor_flags), mass, fp_batch_type(F(0))),
-                                new_node_mass = node_mass - sub_mass, mass_factor = node_mass / new_node_mass;
-                            diff_x *= mass_factor;
-                            diff_y *= mass_factor;
-                            diff_z *= mass_factor;
-                            dist2 = diff_x * diff_x + diff_y * diff_y + diff_z * diff_z;
-                            node_mass = new_node_mass;
-                        }
-
-                        dist2 += eps2;
-                        const auto m_dist3 = node_mass / (xsimd_sqrt(dist2) * dist2);
+                        const auto m_dist3 = node_mass / dist2;
 
                         xsimd_fma(diff_x, m_dist3, xsimd::load_aligned(res_x_ptr + (j - i)))
                             .store_aligned(res_x_ptr + (j - i));
