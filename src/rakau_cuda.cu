@@ -48,9 +48,11 @@ private:
 };
 
 template <unsigned Q, std::size_t NDim, typename F, typename UInt>
-__global__ void acc_pot_kernel(F *(&res_ptrs)[tree_nvecs_res<Q, NDim>], const F *(&parts_ptrs)[NDim + 1u],
-                               const UInt *codes, const int nparts, const tree_node_t<NDim, F, UInt> *tree_ptr,
-                               const int tree_size, const F theta2, const F G, const F eps2)
+__global__ void acc_pot_kernel(F *__restrict__ res_x, F *__restrict__ res_y, F *__restrict__ res_z,
+                               const F *__restrict__ ptr_x, const F *__restrict__ ptr_y, const F *__restrict__ ptr_z,
+                               const F *__restrict__ ptr_mass, const UInt *__restrict__ codes, const int nparts,
+                               const tree_node_t<NDim, F, UInt> *__restrict__ tree_ptr, const int tree_size,
+                               const F theta2, const F G, const F eps2)
 {
     int pidx = blockIdx.x * blockDim.x + threadIdx.x;
     if (pidx >= nparts) {
@@ -59,23 +61,16 @@ __global__ void acc_pot_kernel(F *(&res_ptrs)[tree_nvecs_res<Q, NDim>], const F 
         return;
     }
 
-    // Array of results, inited to zeroes.
-    F res_array[sizeof(res_ptrs) / sizeof(F *)]{};
+    // Results, inited to zero.
+    F r_x = 0, r_y = 0, r_z = 0;
 
     // Load the particle code, position and mass.
-    const auto p_code = codes[pidx];
-    F p_pos[NDim];
-    for (std::size_t j = 0; j < NDim; ++j) {
-        p_pos[j] = parts_ptrs[j][pidx];
-    }
-    const auto p_mass = parts_ptrs[NDim][pidx];
-
-    // Temporary arrays that will be used in the loop.
-    F dist_vec[NDim], props[NDim + 1u];
+    const auto code = codes[pidx];
+    const auto x = ptr_x[pidx], y = ptr_y[pidx], z = ptr_z[pidx], mass = ptr_mass[pidx];
 
     // Add a 1 bit just above the highest possible bit position for the particle code.
     // This value is used in the loop, we precompute it here.
-    const auto s_p_code_init = static_cast<UInt>(p_code | (UInt(1) << (cbits_v<UInt, NDim> * NDim)));
+    const auto s_p_code_init = static_cast<UInt>(code | (UInt(1) << (cbits_v<UInt, NDim> * NDim)));
 
     // Loop over the tree.
     for (auto src_idx = 0; src_idx < tree_size;) {
@@ -88,9 +83,8 @@ __global__ void acc_pot_kernel(F *(&res_ptrs)[tree_nvecs_res<Q, NDim>], const F 
         // Number of children of the source node.
         const auto n_children_src = static_cast<int>(src_node.n_children);
         // Node properties.
-        for (std::size_t j = 0; j < NDim + 1u; ++j) {
-            props[j] = src_node.props[j];
-        }
+        auto node_x = src_node.props[0], node_y = src_node.props[1], node_z = src_node.props[2],
+             node_mass = src_node.props[3];
         // Level of the source node.
         const auto src_level = src_node.level;
         // Square of the dimension of the source node.
@@ -112,23 +106,19 @@ __global__ void acc_pot_kernel(F *(&res_ptrs)[tree_nvecs_res<Q, NDim>], const F 
         // contains other particles in addition to the target particle.
         if (s_p_code == src_code && (src_end - src_begin) != 1) {
             // Update the COM position.
-            const auto new_node_mass = props[NDim] - p_mass;
-            for (std::size_t j = 0; j < NDim; ++j) {
-                props[j] = (props[j] * props[NDim] - p_mass * p_pos[j]) / new_node_mass;
-            }
+            const auto new_node_mass = node_mass - mass;
+            node_x = (node_x * node_mass - mass * x) / new_node_mass;
+            node_y = (node_y * node_mass - mass * y) / new_node_mass;
+            node_z = (node_z * node_mass - mass * z) / new_node_mass;
             // Don't forget to update the node mass as well.
-            props[NDim] = new_node_mass;
+            node_mass = new_node_mass;
         }
 
         // Compute the distance between target particle and source COM.
         // NOTE: if we are in a source node which contains only the target particle,
         // then dist2 and dist_vec will be zero.
-        F dist2(0);
-        for (std::size_t j = 0; j < NDim; ++j) {
-            const auto diff = props[j] - p_pos[j];
-            dist2 += diff * diff;
-            dist_vec[j] = diff;
-        }
+        F diff_x = node_x - x, diff_y = node_y - y, diff_z = node_z - z,
+          dist2 = diff_x * diff_x + diff_y * diff_y + diff_z * diff_z;
         // Now let's run the BH check on *all* the target particles in the same wavefront.
         // NOTE: if we are in a source node which contains only the target particle,
         // then dist2 will have been set to zero above and the check always fails.
@@ -142,10 +132,10 @@ __global__ void acc_pot_kernel(F *(&res_ptrs)[tree_nvecs_res<Q, NDim>], const F 
             dist2 += eps2;
             // Compute the (softened) distance.
             const auto dist = sqrt(dist2);
-            const auto node_mass_dist3 = props[NDim] / (dist * dist2);
-            for (std::size_t j = 0; j < NDim; ++j) {
-                res_array[j] += dist_vec[j] * node_mass_dist3;
-            }
+            const auto node_mass_dist3 = node_mass / (dist * dist2);
+            r_x += diff_x * node_mass_dist3;
+            r_y += diff_y * node_mass_dist3;
+            r_z += diff_z * node_mass_dist3;
             // We can now skip all the children of the source node.
             src_idx += n_children_src + 1;
         } else {
@@ -165,20 +155,17 @@ __global__ void acc_pot_kernel(F *(&res_ptrs)[tree_nvecs_res<Q, NDim>], const F 
                     // softening if i is the target particle. This will avoid
                     // infinites when dividing by the distance below.
                     dist2 = eps2 + is_tgt_particle;
-                    for (std::size_t j = 0; j < NDim; ++j) {
-                        const auto diff = parts_ptrs[j][i] - p_pos[j];
-                        dist2 += diff * diff;
-                        dist_vec[j] = diff;
-                    }
+                    diff_x = ptr_x[i] - x;
+                    diff_y = ptr_y[i] - y;
+                    diff_z = ptr_z[i] - z;
+                    dist2 += diff_x * diff_x + diff_y * diff_y + diff_z * diff_z;
                     // Compute the distance, load the current source mass.
-                    const auto dist = sqrt(dist2), m_i = parts_ptrs[NDim][i];
+                    const auto dist = sqrt(dist2), m_i = ptr_mass[i];
                     // Q == 0 or 2: accelerations are requested.
                     const auto m_i_dist3 = m_i / (dist * dist2);
-                    for (std::size_t j = 0; j < NDim; ++j) {
-                        // NOTE: if i == pidx, then dist_vec will be a vector
-                        // of zeroes and res_array will not be modified.
-                        res_array[j] += dist_vec[j] * m_i_dist3;
-                    }
+                    r_x += diff_x * m_i_dist3;
+                    r_y += diff_y * m_i_dist3;
+                    r_z += diff_z * m_i_dist3;
                 }
             }
             // In any case, we keep traversing the tree moving to the next node
@@ -188,9 +175,9 @@ __global__ void acc_pot_kernel(F *(&res_ptrs)[tree_nvecs_res<Q, NDim>], const F 
     }
 
     // Handle the G constant and write out the result.
-    for (std::size_t j = 0; j < tree_nvecs_res<Q, NDim>; ++j) {
-        res_ptrs[j][pidx] = G * res_array[j];
-    }
+    res_x[pidx] = G * r_x;
+    res_y[pidx] = G * r_y;
+    res_z[pidx] = G * r_z;
 } // namespace detail
 
 template <unsigned Q, std::size_t NDim, typename F, typename UInt>
@@ -225,12 +212,12 @@ void acc_pot_impl_cuda(const std::array<F *, tree_nvecs_res<Q, NDim>> &out, cons
     const UInt *codes_ptr = codes_arr.get();
 
     // TODO overflow checks on ints?
-    acc_pot_kernel<Q, NDim, F, UInt>
-        <<<(nparts + 31u) / 32u, 32u>>>(res_ptrs, parts_ptrs, codes_ptr, boost::numeric_cast<int>(nparts), tree_ptr,
-                                        boost::numeric_cast<int>(tree_size), theta2, G, eps2);
+    acc_pot_kernel<Q, NDim, F, UInt><<<(nparts + 31u) / 32u, 32u>>>(
+        res_ptrs[0], res_ptrs[1], res_ptrs[2], parts_ptrs[0], parts_ptrs[1], parts_ptrs[2], parts_ptrs[3], codes_ptr,
+        boost::numeric_cast<int>(nparts), tree_ptr, boost::numeric_cast<int>(tree_size), theta2, G, eps2);
 
     for (std::size_t j = 0; j < tree_nvecs_res<Q, NDim>; ++j) {
-        ::cudaMemcpy(res_ptrs[j], out[j], sizeof(F) * nparts, ::cudaMemcpyDeviceToHost);
+        ::cudaMemcpy(out[j], res_ptrs[j], sizeof(F) * nparts, ::cudaMemcpyDeviceToHost);
     }
 }
 
