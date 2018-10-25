@@ -2303,7 +2303,7 @@ private:
             cpu_run();
         }
 #elif defined(RAKAU_WITH_CUDA)
-        if constexpr (NDim == 3u
+        if constexpr (NDim == 3u && Q == 0u
                       && std::conjunction_v<
                              std::is_same<It, F *>,
                              std::disjunction<std::is_same<UInt, std::uint64_t>, std::is_same<UInt, std::uint32_t>>,

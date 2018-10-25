@@ -12,6 +12,7 @@
 #include <cstddef>
 #include <cstdlib>
 #include <new>
+#include <type_traits>
 #include <utility>
 
 namespace rakau
@@ -49,7 +50,7 @@ struct di_aligned_allocator {
         // by the default implementation of max_size().
         const auto size = n * sizeof(T);
         void *retval;
-        if constexpr (Alignment == 0u) {
+        if (Alignment == 0u) {
             retval = std::malloc(size);
         } else {
             // For use in std::aligned_alloc, the size must be a multiple of the alignment.
@@ -82,18 +83,19 @@ struct di_aligned_allocator {
         return false;
     }
     // The construction function.
-    template <typename U, typename... Args>
+    template <typename U, typename... Args, std::enable_if_t<sizeof...(Args) == 0u, int> = 0>
     void construct(U *p, Args &&... args) const
     {
-        if constexpr (sizeof...(args) == 0u) {
-            // When no construction arguments are supplied, do default
-            // initialisation rather than value initialisation.
-            ::new (static_cast<void *>(p)) U;
-        } else {
-            // This is the standard std::allocator implementation.
-            // http://en.cppreference.com/w/cpp/memory/allocator/construct
-            ::new (static_cast<void *>(p)) U(std::forward<Args>(args)...);
-        }
+        // When no construction arguments are supplied, do default
+        // initialisation rather than value initialisation.
+        ::new (static_cast<void *>(p)) U;
+    }
+    template <typename U, typename... Args, std::enable_if_t<sizeof...(Args) != 0u, int> = 0>
+    void construct(U *p, Args &&... args) const
+    {
+        // This is the standard std::allocator implementation.
+        // http://en.cppreference.com/w/cpp/memory/allocator/construct
+        ::new (static_cast<void *>(p)) U(std::forward<Args>(args)...);
     }
 };
 

@@ -109,6 +109,12 @@ if(YACMA_COMPILER_IS_HCC)
   set_property(TARGET rakau_hc PROPERTY CXX_EXTENSIONS NO)
 endif()
 
+if(RAKAU_WITH_CUDA)
+  add_library(rakau_cuda SHARED "${CMAKE_CURRENT_SOURCE_DIR}/src/rakau_cuda.cu")
+  target_compile_features(rakau_cuda PRIVATE cxx_std_14)
+  target_link_libraries(rakau_cuda PRIVATE rakau)
+endif()
+
 # Configure config.hpp.
 configure_file("${CMAKE_CURRENT_SOURCE_DIR}/config.hpp.in" "${CMAKE_CURRENT_BINARY_DIR}/include/rakau/config.hpp" @ONLY)
 
