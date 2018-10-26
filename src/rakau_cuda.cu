@@ -70,9 +70,9 @@ __global__ void acc_pot_kernel(F *__restrict__ res_x, F *__restrict__ res_y, F *
     // Results, inited to zero.
     F r_x = 0, r_y = 0, r_z = 0;
 
-    // Load the particle code, position and mass.
+    // Load the particle code and position.
     const auto code = codes[pidx];
-    const auto x = ptr_x[pidx], y = ptr_y[pidx], z = ptr_z[pidx], mass = ptr_mass[pidx];
+    const auto x = ptr_x[pidx], y = ptr_y[pidx], z = ptr_z[pidx];
 
     const auto s_p_code_init = static_cast<UInt>(code | (UInt(1) << (cbits_v<UInt, NDim> * NDim)));
 
@@ -166,7 +166,7 @@ void cuda_acc_pot_impl(const std::array<F *, tree_nvecs_res<Q, NDim>> &out, cons
 
 // Explicit instantiations.
 #define RAKAU_CUDA_EXPLICIT_INST(Q, NDim, F, UInt)                                                                     \
-    template void cuda_pot_impl_cuda<Q, NDim, F, UInt>(                                                                \
+    template void cuda_acc_pot_impl<Q, NDim, F, UInt>(                                                                 \
         const std::array<F *, tree_nvecs_res<Q, NDim>> &, const tree_node_t<NDim, F, UInt> *, tree_size_t<F>,          \
         const std::array<const F *, NDim + 1u> &, const UInt *, tree_size_t<F>, F, F, F, tree_size_t<F>)
 
