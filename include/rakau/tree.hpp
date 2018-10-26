@@ -47,6 +47,14 @@
 
 #include <xsimd/xsimd.hpp>
 
+#include <rakau/config.hpp>
+#include <rakau/detail/di_aligned_allocator.hpp>
+#if defined(__HCC__)
+#include <rakau/detail/hc_fwd.hpp>
+#endif
+#include <rakau/detail/simd.hpp>
+#include <rakau/detail/tree_fwd.hpp>
+
 // Let's disable a few compiler warnings emitted by the libmorton code.
 #if defined(__clang__) || defined(__GNUC__)
 
@@ -62,24 +70,13 @@
 
 #endif
 
-#include <rakau/config.hpp>
 #include <rakau/detail/libmorton/morton.h>
-
-#if defined(__HCC__)
-
-#include <rakau/detail/hc_fwd.hpp>
-
-#endif
 
 #if defined(__clang__) || defined(__GNUC__)
 
 #pragma GCC diagnostic pop
 
 #endif
-
-#include <rakau/detail/di_aligned_allocator.hpp>
-#include <rakau/detail/simd.hpp>
-#include <rakau/detail/tree_fwd.hpp>
 
 // likely/unlikely macros, for those compilers known to support them.
 #if defined(__clang__) || defined(__GNUC__) || defined(__INTEL_COMPILER)
