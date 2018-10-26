@@ -2280,14 +2280,14 @@ private:
                       && std::conjunction_v<
                              std::is_same<It, F *>,
                              std::disjunction<std::is_same<UInt, std::uint64_t>, std::is_same<UInt, std::uint32_t>>,
-                             std::negation<std::is_same<F, long double>>>) {
+                             std::disjunction<std::is_same<F, float>, std::is_same<F, double>>>) {
             const auto nparts = m_parts[0].size();
-            if (m_ncrit <= nparts) {
+            if (nparts >= hcc_min_size()) {
                 std::array<const F *, NDim + 1u> part_ptrs;
                 for (std::size_t i = 0; i < NDim + 1u; ++i) {
                     part_ptrs[i] = m_parts[i].data();
                 }
-                acc_pot_impl_hcc<Q>(out, m_tree.data(), m_tree.size(), part_ptrs, m_codes.data(), nparts, theta2, G,
+                hcc_acc_pot_impl<Q>(out, m_tree.data(), m_tree.size(), part_ptrs, m_codes.data(), nparts, theta2, G,
                                     eps2, m_ncrit);
             } else {
                 cpu_run();
