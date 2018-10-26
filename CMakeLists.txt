@@ -76,7 +76,13 @@ endif()
 add_library(rakau INTERFACE)
 
 # Find Boost.
+if (RAKAU_BUILD_BENCHMARKS)
+  set(_RAKAU_BOOST_COMPONENTS program_options)
+else()
+  set(_RAKAU_BOOST_COMPONENTS)
+endif()
 include(RakauFindBoost)
+unset(_RAKAU_BOOST_COMPONENTS)
 
 # Find xsimd.
 # NOTE: we have some AVX512 code in here, so require xsimd at least version 5.
