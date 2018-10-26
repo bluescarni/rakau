@@ -16,6 +16,12 @@ namespace rakau
 inline namespace detail
 {
 
+// Minimum number of particles needed for running the cuda implementation.
+unsigned cuda_min_size()
+{
+    return 1000u;
+}
+
 template <typename T>
 auto make_scoped_cu_array(std::size_t n)
 {
@@ -68,122 +74,59 @@ __global__ void acc_pot_kernel(F *__restrict__ res_x, F *__restrict__ res_y, F *
     const auto code = codes[pidx];
     const auto x = ptr_x[pidx], y = ptr_y[pidx], z = ptr_z[pidx], mass = ptr_mass[pidx];
 
-    // Add a 1 bit just above the highest possible bit position for the particle code.
-    // This value is used in the loop, we precompute it here.
     const auto s_p_code_init = static_cast<UInt>(code | (UInt(1) << (cbits_v<UInt, NDim> * NDim)));
 
-    // Loop over the tree.
     for (auto src_idx = 0; src_idx < tree_size;) {
-        // Get a reference to the current source node, and cache locally a few quantities.
         const auto &src_node = tree_ptr[src_idx];
-        // Code of the source node.
         const auto src_code = src_node.code;
-        // Range of the source node.
         const auto src_begin = static_cast<int>(src_node.begin), src_end = static_cast<int>(src_node.end);
-        // Number of children of the source node.
         const auto n_children_src = static_cast<int>(src_node.n_children);
-        // Node properties.
         auto node_x = src_node.props[0], node_y = src_node.props[1], node_z = src_node.props[2],
              node_mass = src_node.props[3];
-        // Level of the source node.
         const auto src_level = src_node.level;
-        // Square of the dimension of the source node.
         const auto src_dim2 = src_node.dim2;
 
-        // Compute the shifted particle code. This is the particle code with one extra
-        // top bit and then shifted down according to the level of the source node, so that
-        // the top 1 bits of s_p_code and src_code are at the same position.
-        const auto s_p_code = static_cast<UInt>(s_p_code_init >> ((cbits_v<UInt, NDim> - src_level) * NDim));
-        // We need now to determine if the source node contains the target particle.
-        // If it does, in all but one specific case we will have to correct
-        // the source node COM coordinates & mass with the removal of the target particle.
-        // The only exception is if the source node contains *only* the target particle,
-        // in which case we want to avoid the correction because it would result in
-        // infinities.
-        //
-        // The check s_p_code == src_code tells us if the source node contains the target
-        // particle. The check (src_end - src_begin) != 1 tells us that the source node
-        // contains other particles in addition to the target particle.
-        if (s_p_code == src_code && (src_end - src_begin) != 1) {
-            // Update the COM position.
-            const auto new_node_mass = node_mass - mass;
-            node_x = (node_x * node_mass - mass * x) / new_node_mass;
-            node_y = (node_y * node_mass - mass * y) / new_node_mass;
-            node_z = (node_z * node_mass - mass * z) / new_node_mass;
-            // Don't forget to update the node mass as well.
-            node_mass = new_node_mass;
-        }
+        const auto s_p_code = s_p_code_init >> ((cbits_v<UInt, NDim> - src_level) * NDim);
 
-        // Compute the distance between target particle and source COM.
-        // NOTE: if we are in a source node which contains only the target particle,
-        // then dist2 and dist_vec will be zero.
         F diff_x = node_x - x, diff_y = node_y - y, diff_z = node_z - z,
           dist2 = diff_x * diff_x + diff_y * diff_y + diff_z * diff_z;
-        // Now let's run the BH check on *all* the target particles in the same wavefront.
-        // NOTE: if we are in a source node which contains only the target particle,
-        // then dist2 will have been set to zero above and the check always fails.
-        if (__all_sync(unsigned(-1), src_dim2 < theta2 * dist2)) {
-            // We are not in a leaf node containing only the target particle,
-            // and the source node satisfies the BH criterion for the target
-            // particle. We will then add the (approximated) contribution of the source node
-            // to the final result.
-            //
-            // Start by adding the softening.
+        if (__all_sync(unsigned(-1), s_p_code != src_code && src_dim2 < theta2 * dist2)) {
             dist2 += eps2;
-            // Compute the (softened) distance.
             const auto dist = sqrt(dist2);
             const auto node_mass_dist3 = node_mass / (dist * dist2);
             r_x += diff_x * node_mass_dist3;
             r_y += diff_y * node_mass_dist3;
             r_z += diff_z * node_mass_dist3;
-            // We can now skip all the children of the source node.
             src_idx += n_children_src + 1;
         } else {
-            // Either the source node fails the BH criterion, or we are in a source node which
-            // contains only the target particle.
             if (!n_children_src) {
-                // We are in a leaf node. Compute all the interactions with the target particle.
-                // NOTE: if we are in a source node which contains only the target particle,
-                // then the loop will have just 1 iteration and the use of the is_tgt_particle
-                // variable will ensure that all interactions of the particle with itself
-                // amount to zero.
                 for (auto i = src_begin; i < src_end; ++i) {
-                    // Test if the current particle of the source leaf node coincides
-                    // with the target particle.
                     const bool is_tgt_particle = pidx == i;
-                    // Init the distance with the softening, plus add some extra
-                    // softening if i is the target particle. This will avoid
-                    // infinites when dividing by the distance below.
                     dist2 = eps2 + is_tgt_particle;
                     diff_x = ptr_x[i] - x;
                     diff_y = ptr_y[i] - y;
                     diff_z = ptr_z[i] - z;
                     dist2 += diff_x * diff_x + diff_y * diff_y + diff_z * diff_z;
-                    // Compute the distance, load the current source mass.
                     const auto dist = sqrt(dist2), m_i = ptr_mass[i];
-                    // Q == 0 or 2: accelerations are requested.
                     const auto m_i_dist3 = m_i / (dist * dist2);
                     r_x += diff_x * m_i_dist3;
                     r_y += diff_y * m_i_dist3;
                     r_z += diff_z * m_i_dist3;
                 }
             }
-            // In any case, we keep traversing the tree moving to the next node
-            // in depth-first order.
             ++src_idx;
         }
     }
 
-    // Handle the G constant and write out the result.
     res_x[pidx] = G * r_x;
     res_y[pidx] = G * r_y;
     res_z[pidx] = G * r_z;
 } // namespace detail
 
 template <unsigned Q, std::size_t NDim, typename F, typename UInt>
-void acc_pot_impl_cuda(const std::array<F *, tree_nvecs_res<Q, NDim>> &out, const tree_node_t<NDim, F, UInt> *tree,
+void cuda_acc_pot_impl(const std::array<F *, tree_nvecs_res<Q, NDim>> &out, const tree_node_t<NDim, F, UInt> *tree,
                        tree_size_t<F> tree_size, const std::array<const F *, NDim + 1u> &p_parts, const UInt *codes,
-                       tree_size_t<F> nparts, F theta2, F G, F eps2, tree_size_t<F> ncrit)
+                       tree_size_t<F> nparts, F theta2, F G, F eps2, tree_size_t<F>)
 {
     static_assert(Q == 0u);
 
@@ -223,7 +166,7 @@ void acc_pot_impl_cuda(const std::array<F *, tree_nvecs_res<Q, NDim>> &out, cons
 
 // Explicit instantiations.
 #define RAKAU_CUDA_EXPLICIT_INST(Q, NDim, F, UInt)                                                                     \
-    template void acc_pot_impl_cuda<Q, NDim, F, UInt>(                                                                 \
+    template void cuda_pot_impl_cuda<Q, NDim, F, UInt>(                                                                \
         const std::array<F *, tree_nvecs_res<Q, NDim>> &, const tree_node_t<NDim, F, UInt> *, tree_size_t<F>,          \
         const std::array<const F *, NDim + 1u> &, const UInt *, tree_size_t<F>, F, F, F, tree_size_t<F>)
 

@@ -19,8 +19,10 @@ namespace rakau
 inline namespace detail
 {
 
+unsigned cuda_min_size() __attribute__((visibility("default")));
+
 template <unsigned Q, std::size_t NDim, typename F, typename UInt>
-void acc_pot_impl_cuda(const std::array<F *, tree_nvecs_res<Q, NDim>> &, const tree_node_t<NDim, F, UInt> *,
+void cuda_acc_pot_impl(const std::array<F *, tree_nvecs_res<Q, NDim>> &, const tree_node_t<NDim, F, UInt> *,
                        tree_size_t<F>, const std::array<const F *, NDim + 1u> &, const UInt *, tree_size_t<F>, F, F, F,
                        tree_size_t<F>) __attribute__((visibility("default")));
 
