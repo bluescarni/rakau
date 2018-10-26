@@ -29,6 +29,12 @@ namespace rakau
 inline namespace detail
 {
 
+// Minimum number of particles needed for running the hcc implementation.
+unsigned hcc_min_size()
+{
+    return static_cast<unsigned>(__HSA_WAVEFRONT_SIZE__);
+}
+
 // Machinery to transform an array of pointers into a tuple of array views.
 template <typename T, std::size_t N, std::size_t... I>
 inline auto ap2tv_impl(const std::array<T *, N> &a, int size, std::index_sequence<I...>)
@@ -62,9 +68,11 @@ inline auto t2a(const Tuple &tup)
 }
 
 template <unsigned Q, std::size_t NDim, typename F, typename UInt>
-void acc_pot_impl_hcc(const std::array<F *, tree_nvecs_res<Q, NDim>> &out, const tree_node_t<NDim, F, UInt> *tree,
+void hcc_acc_pot_impl(const std::array<F *, tree_nvecs_res<Q, NDim>> &out, const tree_node_t<NDim, F, UInt> *tree,
                       tree_size_t<F> tree_size, const std::array<const F *, NDim + 1u> &p_parts, const UInt *codes,
-                      tree_size_t<F> nparts, F theta2, F G, F eps2, tree_size_t<F> ncrit)
+                      tree_size_t<F> nparts, F theta2, F G, F eps2,
+                      // NOTE: ncrit is currently unused.
+                      tree_size_t<F>)
 {
     hc::array_view<const tree_node_t<NDim, F, UInt>, 1> tree_view(boost::numeric_cast<int>(tree_size), tree);
     hc::array_view<const UInt, 1> codes_view(boost::numeric_cast<int>(nparts), codes);
@@ -131,26 +139,44 @@ void acc_pot_impl_hcc(const std::array<F *, tree_nvecs_res<Q, NDim>> &out, const
                 // Compute the shifted particle code. This is the particle code with one extra
                 // top bit and then shifted down according to the level of the source node, so that
                 // the top 1 bits of s_p_code and src_code are at the same position.
-                const auto s_p_code = static_cast<UInt>(s_p_code_init >> ((cbits_v<UInt, NDim> - src_level) * NDim));
-                // We need now to determine if the source node contains the target particle.
-                // If it does, in all but one specific case we will have to correct
-                // the source node COM coordinates & mass with the removal of the target particle.
-                // The only exception is if the source node contains *only* the target particle,
-                // in which case we want to avoid the correction because it would result in
-                // infinities.
+                // If s_p_code == src_code, then it means that the source node contains the target particle
+                // (or, in other words, the source node is an ancestor of the leaf node containing
+                // the target particle).
+                const auto s_p_code = s_p_code_init >> ((cbits_v<UInt, NDim> - src_level) * NDim);
+                // If the source node contains the target particle, we will need to account for self interactions
+                // in the tree traversal. There are two different approaches that can be taken.
                 //
-                // The check s_p_code == src_code tells us if the source node contains the target
-                // particle. The check (src_end - src_begin) != 1 tells us that the source node
-                // contains other particles in addition to the target particle.
-                if (s_p_code == src_code && (src_end - src_begin) != 1) {
-                    // Update the COM position.
-                    const auto new_node_mass = props[NDim] - p_mass;
-                    for (std::size_t j = 0; j < NDim; ++j) {
-                        props[j] = (props[j] * props[NDim] - p_mass * p_pos[j]) / new_node_mass;
-                    }
-                    // Don't forget to update the node mass as well.
-                    props[NDim] = new_node_mass;
-                }
+                // The first is to modify on-the-fly the properties of the source node with the removal of the target
+                // particle. In the classic BH scheme, this will alter the COM position of the source node
+                // and its mass. The alteration needs to take place if the source node is an ancestor of
+                // NT, the leaf node of the target particle. However, if the source node coincides with NT
+                // and NT contains *only* the target particle, then the alteration must not take place because
+                // otherwise we generate infinities (the COM of a system of only 1 particle is the particle
+                // itself). The alteration can be done by defining a mass factor mf as
+                //
+                // mf = orig_node_mass / (orig_node_mass - p_mass * needs_alteration),
+                //
+                // where needs_alteration is a boolean that expresses whether the source node needs to be
+                // adjusted or not (so that mf == 1 if no adjustment needs to happen). It can then be shown
+                // that the target particle's distance from the adjusted COM is
+                //
+                // new_dist = mf * orig_dist,
+                //
+                // where orig_dist is the (vector) distance from the original COM. The new node mass will be:
+                //
+                // new_node_mass = orig_node_mass - p_mass * needs_alteration.
+                //
+                // The other approach is not to modify the properties of the COM, and instead just continue
+                // in the tree traversal as if the current source node didn't satisfy the BH check. By doing this
+                // we will eventually land into the leaf node of the target particle, where we will compute
+                // local particle-particle interactions in the usual N**2 way (avoiding self interactions for the
+                // target particle).
+                //
+                // The first method is more arithmetically-intensive and requires less flow control. The other
+                // method will result in longer tree traversals and higher flow control, but requires less arithmetics.
+                // At the moment it seems like the first method might be a bit faster on the GPU, but it's also not
+                // entirely clear how more complicated/intensive the source node alteration would become once we
+                // implement quadrupole moments and other MACs. Thus, for now, let's go with the second approach.
 
                 // Compute the distance between target particle and source COM.
                 // NOTE: if we are in a source node which contains only the target particle,
@@ -161,13 +187,10 @@ void acc_pot_impl_hcc(const std::array<F *, tree_nvecs_res<Q, NDim>> &out, const
                     dist2 += diff * diff;
                     dist_vec[j] = diff;
                 }
-                // Now let's run the BH check on *all* the target particles in the same wavefront.
-                // NOTE: if we are in a source node which contains only the target particle,
-                // then dist2 will have been set to zero above and the check always fails.
-                if (hc::__all(src_dim2 < theta2 * dist2)) {
-                    // We are not in a leaf node containing only the target particle,
-                    // and the source node satisfies the BH criterion for the target
-                    // particle. We will then add the (approximated) contribution of the source node
+                // Now let's run the BH/ancestor check on all the target particles in the same wavefront.
+                if (hc::__all(s_p_code != src_code && src_dim2 < theta2 * dist2)) {
+                    // The source node does not contain the target particle and it satisfies the BH check.
+                    // We will then add the (approximated) contribution of the source node
                     // to the final result.
                     //
                     // Start by adding the softening.
@@ -192,14 +215,10 @@ void acc_pot_impl_hcc(const std::array<F *, tree_nvecs_res<Q, NDim>> &out, const
                     // We can now skip all the children of the source node.
                     src_idx += n_children_src + 1;
                 } else {
-                    // Either the source node fails the BH criterion, or we are in a source node which
-                    // contains only the target particle.
+                    // Either the source node contains the target particle, or it fails the BH check.
                     if (!n_children_src) {
-                        // We are in a leaf node. Compute all the interactions with the target particle.
-                        // NOTE: if we are in a source node which contains only the target particle,
-                        // then the loop will have just 1 iteration and the use of the is_tgt_particle
-                        // variable will ensure that all interactions of the particle with itself
-                        // amount to zero.
+                        // We are in a leaf node (possibly containing the target particle).
+                        // Compute all the interactions with the target particle.
                         for (auto i = src_begin; i < src_end; ++i) {
                             // Test if the current particle of the source leaf node coincides
                             // with the target particle.
@@ -236,8 +255,7 @@ void acc_pot_impl_hcc(const std::array<F *, tree_nvecs_res<Q, NDim>> &out, const
                             }
                         }
                     }
-                    // In any case, we keep traversing the tree moving to the next node
-                    // in depth-first order.
+                    // Keep traversing the tree moving to the next node in depth-first order.
                     ++src_idx;
                 }
             }
@@ -255,7 +273,7 @@ void acc_pot_impl_hcc(const std::array<F *, tree_nvecs_res<Q, NDim>> &out, const
 
 // Explicit instantiations.
 #define RAKAU_HC_EXPLICIT_INST(Q, NDim, F, UInt)                                                                       \
-    template void acc_pot_impl_hcc<Q, NDim, F, UInt>(                                                                  \
+    template void hcc_acc_pot_impl<Q, NDim, F, UInt>(                                                                  \
         const std::array<F *, tree_nvecs_res<Q, NDim>> &, const tree_node_t<NDim, F, UInt> *, tree_size_t<F>,          \
         const std::array<const F *, NDim + 1u> &, const UInt *, tree_size_t<F>, F, F, F, tree_size_t<F>)
 
