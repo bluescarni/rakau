@@ -142,8 +142,7 @@ void hcc_acc_pot_impl(const std::array<F *, tree_nvecs_res<Q, NDim>> &out, const
                 // If s_p_code == src_code, then it means that the source node contains the target particle
                 // (or, in other words, the source node is an ancestor of the leaf node containing
                 // the target particle).
-                const auto s_p_code
-                    = static_cast<UInt>(s_p_code_init >> static_cast<UInt>((cbits_v<UInt, NDim> - src_level) * NDim));
+                const auto s_p_code = s_p_code_init >> ((cbits_v<UInt, NDim> - src_level) * NDim);
                 // If the source node contains the target particle, we will need to account for self interactions
                 // in the tree traversal. There are two different approaches that can be taken.
                 //
