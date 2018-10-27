@@ -2486,14 +2486,18 @@ public:
         const auto codes_ptr = m_codes.data();
         const auto tree_ptr = m_tree.data();
 
+        std::size_t tot_walk_size = 0;
+
         // Loop over the critical blocks.
         for (size_type i = 0; i < nparts - static_cast<size_type>(nparts % crit_block_size); i += crit_block_size) {
             // Empty the temporary result vectors.
             for (std::size_t j = 0; j < NDim; ++j) {
                 std::fill(res_vec[j].begin(), res_vec[j].end(), F(0));
             }
+            std::size_t walk_size = 0;
             // Loop over the tree.
             for (size_type src_idx = 0; src_idx < tree_size;) {
+                ++walk_size;
                 // Get a reference to the current source node, and cache locally a few quantities.
                 const auto &src_node = tree_ptr[src_idx];
                 // Number of children of the source node.
@@ -2560,7 +2564,11 @@ public:
                     ++src_idx;
                 }
             }
+            tot_walk_size += walk_size;
         }
+        std::cout << "Av walk size: "
+                  << tot_walk_size / ((nparts - static_cast<size_type>(nparts % crit_block_size)) / crit_block_size)
+                  << '\n';
     }
 
 private:
