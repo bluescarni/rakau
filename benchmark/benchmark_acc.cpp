@@ -42,7 +42,7 @@ int main(int argc, char **argv)
     for (auto &_ : accs) {
         _.resize(nparts);
     }
-    t.accs_new({accs[0].data(), accs[1].data(), accs[2].data()}, 0.75f);
+    t.accs_new({accs[0].data(), accs[1].data(), accs[2].data()}, theta);
     std::cout << accs[0][t.ord_ind()[idx]] << ", " << accs[1][t.ord_ind()[idx]] << ", " << accs[2][t.ord_ind()[idx]]
               << '\n';
     auto eacc = t.exact_acc_u(t.ord_ind()[idx]);
