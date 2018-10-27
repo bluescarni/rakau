@@ -1,12 +1,11 @@
 function(ADD_RAKAU_BENCHMARK arg1)
   add_executable(${arg1} ${arg1}.cpp)
-  target_link_libraries(${arg1} rakau)
+  target_link_libraries(${arg1} rakau Boost::program_options)
   target_compile_options(${arg1} PRIVATE "$<$<CONFIG:DEBUG>:${RAKAU_CXX_FLAGS_DEBUG}>" "$<$<CONFIG:RELEASE>:${RAKAU_CXX_FLAGS_RELEASE}>")
   target_compile_definitions(${arg1} PRIVATE RAKAU_WITH_TIMER)
   set_property(TARGET ${arg1} PROPERTY CXX_STANDARD 17)
   set_property(TARGET ${arg1} PROPERTY CXX_STANDARD_REQUIRED YES)
   set_property(TARGET ${arg1} PROPERTY CXX_EXTENSIONS NO)
-  add_test(${arg1} ${arg1})
 endfunction()
 
 ADD_RAKAU_BENCHMARK(benchmark_acc)
