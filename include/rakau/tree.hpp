@@ -2449,7 +2449,7 @@ public:
     {
         accs_pots_o(acc_pot_ilist_to_array<2>(out), theta, G, eps);
     }
-    void accs_new(const std::array<F *, 3> &out, F theta, F G = F(1), F eps = F(0)) const
+    void accs_new(const std::array<F *, 3> &, F theta, F = F(1), F eps = F(0)) const
     {
         simple_timer st("vector accs/pots computation");
 
@@ -2482,8 +2482,7 @@ public:
 
         const auto nparts = m_parts[0].size(), tree_size = static_cast<size_type>(m_tree.size());
 
-        const auto x_ptr = m_parts[0].data(), y_ptr = m_parts[1].data(), z_ptr = m_parts[2].data(),
-                   m_ptr = m_parts[3].data();
+        const auto x_ptr = m_parts[0].data(), y_ptr = m_parts[1].data(), z_ptr = m_parts[2].data();
         const auto codes_ptr = m_codes.data();
         const auto tree_ptr = m_tree.data();
 
@@ -2506,29 +2505,28 @@ public:
                 const auto src_dim2 = fp_batch_type(src_node.dim2);
                 const auto src_code = c_batch_type(src_node.code);
                 const auto node_mass = fp_batch_type(src_node.props[NDim]);
-                const auto cracco = c_batch_type(UInt(1) << (cbits_v<UInt, NDim> * NDim));
-                const auto buppo = c_batch_type((cbits_v<UInt, NDim> - src_node.level) * NDim);
+                // A couple of constants useful in the bit shifting operations below.
+                const auto codes_or = c_batch_type(UInt(1) << (cbits_v<UInt, NDim> * NDim));
+                const auto codes_shift = c_batch_type((cbits_v<UInt, NDim> - src_node.level) * NDim);
 
                 bool bh_flag = true;
 
                 for (size_type j = i; j < i + crit_block_size; j += batch_size) {
+                    const auto codes = xsimd::load_aligned(codes_ptr + j);
+                    const auto s_p_codes = (codes | codes_or) >> codes_shift;
+
+                    const bool any_ancestor = xsimd::any(s_p_codes == src_code);
+
                     const auto pos_x = xsimd::load_aligned(x_ptr + j), pos_y = xsimd::load_aligned(y_ptr + j),
                                pos_z = xsimd::load_aligned(z_ptr + j);
 
                     const auto diff_x = com_pos_x - pos_x, diff_y = com_pos_y - pos_y, diff_z = com_pos_z - pos_z;
                     auto dist2 = diff_x * diff_x + diff_y * diff_y + diff_z * diff_z;
 
-                    const bool cond2 = xsimd::all(src_dim2 < theta2 * dist2);
+                    const bool any_bh_fail = xsimd::any(src_dim2 >= theta2 * dist2);
 
-                    const auto codes = xsimd::load_aligned(codes_ptr + j);
-                    const auto s_p_codes_init = codes | cracco;
-                    const auto s_p_codes = s_p_codes_init >> buppo;
-
-                    const bool cond1 = xsimd::all(s_p_codes != src_code);
-
-                    bh_flag = bh_flag && cond1 && cond2;
-
-                    if (!bh_flag) {
+                    if (any_ancestor || any_bh_fail) {
+                        bh_flag = false;
                         break;
                     }
 
@@ -2808,7 +2806,7 @@ private:
     // The particles: NDim coordinates plus masses.
     std::array<fp_vector, NDim + 1u> m_parts;
     // The particles' Morton codes.
-    std::vector<UInt, di_aligned_allocator<UInt>> m_codes;
+    std::vector<UInt, di_aligned_allocator<UInt, XSIMD_DEFAULT_ALIGNMENT>> m_codes;
     // The indirect sorting vector. It establishes how to re-order the
     // original particle sequence so that the particles' Morton codes are
     // sorted in ascending order. E.g., if m_isort is [0, 3, 1, 2, ...],
