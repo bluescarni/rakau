@@ -94,6 +94,45 @@ namespace rakau
 inline namespace detail
 {
 
+template <int Nlev, typename UInt>
+inline UInt encodePeano3D(UInt px, UInt py, UInt pz)
+{
+    UInt key = 0;
+    for (int jj = Nlev - 1; jj >= 0; jj--) {
+        /* get xi , yi , and zi */
+        UInt xi = (px >> jj) & 1u;
+        UInt yi = (py >> jj) & 1u;
+        UInt zi = (pz >> jj) & 1u;
+        /* turn px , py , and pz */
+        px ^= -(xi & ((!yi) | zi));
+
+        py ^= -((xi & (yi | zi)) | (yi & (!zi)));
+
+        pz ^= -((xi & (!yi) & (!zi)) | (yi & (!zi)));
+
+        /*  append 3bits to the  key */
+
+        key |= ((xi << 2) | ((xi ^ yi) << 1) | ((xi ^ zi) ^ yi)) << (3 * jj);
+
+        /*  rotate  uncyclic (x->z->y->x) */
+
+        if (zi) {
+            UInt pt = px;
+            px = py;
+            py = pz;
+            pz = pt;
+        } else {
+            if (!yi) {
+                UInt pt = px;
+                px = pz;
+                pz = pt;
+            }
+        }
+    }
+
+    return key;
+}
+
 class simple_timer
 {
 public:
@@ -2451,6 +2490,31 @@ public:
     }
     void accs_new(const std::array<F *, 3> &, F theta, F = F(1), F eps = F(0)) const
     {
+        std::vector<UInt> ph_codes(m_parts[0].size());
+        {
+            simple_timer st("ph encode");
+            std::array<UInt, 3> tmp_dcoord;
+            for (size_type i = 0; i < m_parts[0].size(); ++i) {
+                disc_coords(tmp_dcoord, i);
+                ph_codes[i] = encodePeano3D<cbits>(tmp_dcoord[0], tmp_dcoord[1], tmp_dcoord[2]);
+            }
+        }
+
+        auto new_parts(m_parts);
+        auto new_codes(m_codes);
+
+        std::vector<size_type> indices(m_parts[0].size());
+        std::iota(indices.begin(), indices.end(), size_type(0));
+        tbb::parallel_sort(
+            indices.begin(), indices.end(),
+            [codes_ptr = static_cast<const std::vector<UInt> &>(ph_codes).data()](
+                const size_type &idx1, const size_type &idx2) { return codes_ptr[idx1] < codes_ptr[idx2]; });
+
+        for (auto &_ : new_parts) {
+            apply_isort(_, indices);
+        }
+        apply_isort(new_codes, indices);
+
         simple_timer st("vector accs/pots computation");
 
         // xsimd batch types.
@@ -2482,8 +2546,8 @@ public:
 
         const auto nparts = m_parts[0].size(), tree_size = static_cast<size_type>(m_tree.size());
 
-        const auto x_ptr = m_parts[0].data(), y_ptr = m_parts[1].data(), z_ptr = m_parts[2].data();
-        const auto codes_ptr = m_codes.data();
+        const auto x_ptr = new_parts[0].data(), y_ptr = new_parts[1].data(), z_ptr = new_parts[2].data();
+        const auto codes_ptr = new_codes.data();
         const auto tree_ptr = m_tree.data();
 
         std::size_t tot_walk_size = 0;
