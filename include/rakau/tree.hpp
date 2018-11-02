@@ -2510,8 +2510,8 @@ public:
                 const auto src_code = c_batch_type(src_node.code);
                 const auto node_mass = fp_batch_type(src_node.props[NDim]);
                 // A couple of constants useful in the bit shifting operations below.
-                const auto codes_or = c_batch_type(UInt(1) << (cbits_v<UInt, NDim> * NDim));
-                const auto codes_shift = c_batch_type((cbits_v<UInt, NDim> - src_node.level) * NDim);
+                const auto codes_or = c_batch_type(UInt(1) << (cbits * NDim));
+                const auto codes_shift = c_batch_type((cbits - src_node.level) * NDim);
 
                 bool bh_flag = true;
 
