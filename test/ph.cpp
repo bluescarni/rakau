@@ -38,8 +38,8 @@ static const int ntrials = 10000;
 TEST_CASE("ph test")
 {
     tuple_for_each(uint_types{}, [](auto x) {
-        using uint_t = decltype(x);
-        tuple_for_each(ndims{}, [](auto d) {
+        tuple_for_each(ndims{}, [x](auto d) {
+            using uint_t = decltype(x);
             constexpr auto ndim = decltype(d)::value;
 
             std::array<uint_t, ndim> arr{};
