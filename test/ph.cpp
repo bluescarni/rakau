@@ -51,6 +51,12 @@ TEST_CASE("ph test")
                     arr[0] = udist(rng);
                     REQUIRE(ph_encode<static_cast<std::size_t>(std::numeric_limits<uint_t>::digits)>(arr) == arr[0]);
                 }
+
+                arr[0] = 0;
+                REQUIRE(ph_encode<static_cast<std::size_t>(std::numeric_limits<uint_t>::digits)>(arr) == arr[0]);
+
+                arr[0] = std::numeric_limits<uint_t>::max();
+                REQUIRE(ph_encode<static_cast<std::size_t>(std::numeric_limits<uint_t>::digits)>(arr) == arr[0]);
             } else {
                 constexpr auto nbits = static_cast<std::size_t>(std::numeric_limits<uint_t>::digits / ndim);
                 std::uniform_int_distribution<uint_t> udist(0, (uint_t(1) << nbits) - 1u);
