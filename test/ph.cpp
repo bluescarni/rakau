@@ -33,7 +33,7 @@ using ndims = std::tuple<sc<1>, sc<2>, sc<3>>;
 
 static std::mt19937 rng;
 
-static const int ntrials = 10000;
+static const auto ntrials = 100000l;
 
 TEST_CASE("ph test")
 {
@@ -42,6 +42,7 @@ TEST_CASE("ph test")
             (void)x;
 
             using uint_t = decltype(x);
+            static_assert(std::numeric_limits<std::size_t>::max() >= unsigned(std::numeric_limits<uint_t>::digits));
             constexpr auto ndim = decltype(d)::value;
 
             std::array<uint_t, ndim> arr{};
@@ -49,21 +50,21 @@ TEST_CASE("ph test")
             if constexpr (ndim == 1u) {
                 std::uniform_int_distribution<uint_t> udist;
 
-                for (int i = 0; i < ntrials; ++i) {
+                for (auto i = 0l; i < ntrials; ++i) {
                     arr[0] = udist(rng);
-                    REQUIRE(ph_encode<static_cast<std::size_t>(std::numeric_limits<uint_t>::digits)>(arr) == arr[0]);
+                    REQUIRE(ph_encode<std::numeric_limits<uint_t>::digits>(arr) == arr[0]);
                 }
 
                 arr[0] = 0;
-                REQUIRE(ph_encode<static_cast<std::size_t>(std::numeric_limits<uint_t>::digits)>(arr) == arr[0]);
+                REQUIRE(ph_encode<std::numeric_limits<uint_t>::digits>(arr) == arr[0]);
 
                 arr[0] = std::numeric_limits<uint_t>::max();
-                REQUIRE(ph_encode<static_cast<std::size_t>(std::numeric_limits<uint_t>::digits)>(arr) == arr[0]);
+                REQUIRE(ph_encode<std::numeric_limits<uint_t>::digits>(arr) == arr[0]);
             } else {
                 constexpr auto nbits = static_cast<std::size_t>(std::numeric_limits<uint_t>::digits / ndim);
                 std::uniform_int_distribution<uint_t> udist(0, (uint_t(1) << nbits) - 1u);
 
-                for (int i = 0; i < ntrials; ++i) {
+                for (auto i = 0l; i < ntrials; ++i) {
                     for (std::size_t j = 0; j < ndim; ++j) {
                         arr[j] = udist(rng);
                     }
