@@ -39,6 +39,8 @@ TEST_CASE("ph test")
 {
     tuple_for_each(uint_types{}, [](auto x) {
         tuple_for_each(ndims{}, [x](auto d) {
+            (void)x;
+
             using uint_t = decltype(x);
             constexpr auto ndim = decltype(d)::value;
 
