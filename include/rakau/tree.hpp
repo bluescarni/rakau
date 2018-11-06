@@ -474,6 +474,7 @@ private:
                                              // NOTE: make sure the node props are initialised to zero.
                                              {},
                                              get_sqr_node_dim(ParentLevel + 1u)});
+                    compute_node_properties(tree.back());
                     // Store the tree size before possibly adding more nodes.
                     const auto tree_size = tree.size();
                     // Cast npart to the unsigned counterpart.
@@ -563,6 +564,7 @@ private:
                                                      ParentLevel + 1u,
                                                      {},
                                                      get_sqr_node_dim(ParentLevel + 1u)});
+                        compute_node_properties(new_tree.back());
                         const auto u_npart
                             = static_cast<std::make_unsigned_t<decltype(std::distance(it_start, it_end))>>(npart);
                         // NOTE: we have a critical node only if there are no critical ancestors and either:
@@ -675,6 +677,11 @@ private:
                                    // zero for C++ floating-point).
                                    {},
                                    root_sqr_node_dim});
+
+        // Compute the root node's properties. Do it concurrently with other computations.
+        tbb::task_group tg;
+        tg.run([&]() { compute_node_properties(m_tree.back()); });
+
         // Check if the root node is a critical node. It is a critical node if the number of particles is leq m_ncrit
         // (the definition of critical node) or m_max_leaf_n (in which case it will have no children).
         const bool root_is_crit = m_codes.size() <= m_ncrit || m_codes.size() <= m_max_leaf_n;
@@ -688,8 +695,9 @@ private:
                                                           split_level, root_is_crit);
         }
 
+        tg.wait();
+
         // NOTE: the merge of the subtrees and of the critical nodes lists can be done independently.
-        tbb::task_group tg;
         tg.run([&]() {
             // NOTE: this sorting and the computation of the cumulative sizes can be done also in parallel,
             // but it's probably not worth it since the size of trees should be rather small.
@@ -804,35 +812,26 @@ private:
                                       + ") is too large, and it results in an overflow condition");
         }
     }
-    void build_tree_properties()
+    void compute_node_properties(node_type &node)
     {
-        simple_timer st("tree properties");
-        // NOTE: we check in build_tree() that m_tree.size() can be safely cast
-        // to size_type.
-        const auto tree_size = static_cast<size_type>(m_tree.size());
-        tbb::parallel_for(tbb::blocked_range<size_type>(0u, tree_size), [this](const auto &range) {
-            for (auto i = range.begin(); i != range.end(); ++i) {
-                auto &node = m_tree[i];
-                // Get the indices and the size for the current node.
-                const auto begin = node.begin, end = node.end;
-                assert(end > begin);
-                const auto size = end - begin;
-                // Compute the total mass.
-                const auto tot_mass = std::accumulate(m_parts[NDim].data() + begin, m_parts[NDim].data() + end, F(0));
-                // Compute the COM for the coordinates.
-                const auto m_ptr = m_parts[NDim].data() + begin;
-                for (std::size_t j = 0; j < NDim; ++j) {
-                    F acc(0);
-                    auto c_ptr = m_parts[j].data() + begin;
-                    for (std::remove_const_t<decltype(size)> k = 0; k < size; ++k) {
-                        acc = fma_wrap(m_ptr[k], c_ptr[k], acc);
-                    }
-                    node.props[j] = acc / tot_mass;
-                }
-                // Store the total mass.
-                node.props[NDim] = tot_mass;
+        // Get the indices and the size for the current node.
+        const auto begin = node.begin, end = node.end;
+        assert(end > begin);
+        const auto size = end - begin;
+        // Compute the total mass.
+        const auto tot_mass = std::accumulate(m_parts[NDim].data() + begin, m_parts[NDim].data() + end, F(0));
+        // Compute the COM for the coordinates.
+        const auto m_ptr = m_parts[NDim].data() + begin;
+        for (std::size_t j = 0; j < NDim; ++j) {
+            F acc(0);
+            auto c_ptr = m_parts[j].data() + begin;
+            for (std::remove_const_t<decltype(size)> k = 0; k < size; ++k) {
+                acc = fma_wrap(m_ptr[k], c_ptr[k], acc);
             }
-        });
+            node.props[j] = acc / tot_mass;
+        }
+        // Store the total mass.
+        node.props[NDim] = tot_mass;
     }
     // Discretize the coordinates of the particle at index idx. The result will
     // be written into retval.
@@ -1047,10 +1046,8 @@ private:
             tg.wait();
         }
         // Now let's proceed to the tree construction.
-        // NOTE: these functions work ok if N == 0.
+        // NOTE: this function works ok if N == 0.
         build_tree();
-        // Now move to the computation of the COM of the nodes.
-        build_tree_properties();
     }
 
 public:
@@ -2626,7 +2623,6 @@ private:
         m_tree.clear();
         m_crit_nodes.clear();
         build_tree();
-        build_tree_properties();
     }
     // Invoke the particle update function with an
     // exception safe wrapper.
