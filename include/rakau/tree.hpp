@@ -561,10 +561,11 @@ private:
             const code_shifter cs((cbits - ParentLevel - 1u) * NDim);
             const auto t_begin = boost::make_transform_iterator(begin, cs),
                        t_end = boost::make_transform_iterator(end, cs);
-            tbb::task_group tg;
-            for (UInt i = 0; i < (UInt(1) << NDim); ++i) {
-                tg.run([node_prefix, i, t_begin, t_end, &trees, parent_code, this, &retval, split_level, crit_ancestor,
-                        &crit_nodes] {
+            tbb::parallel_for(tbb::blocked_range<UInt>(0u, UInt(1) << NDim), [node_prefix, t_begin, t_end, &trees,
+                                                                              parent_code, this, &retval, split_level,
+                                                                              crit_ancestor,
+                                                                              &crit_nodes](const auto &range) {
+                for (auto i = range.begin(); i != range.end(); ++i) {
                     const auto [it_start, it_end]
                         = std::equal_range(t_begin, t_end, static_cast<UInt>((node_prefix << NDim) + i));
                     const auto npart = std::distance(it_start, it_end);
@@ -625,9 +626,8 @@ private:
                         checked_uinc(retval, new_tree[0].n_children);
                         checked_uinc(retval, size_type(1));
                     }
-                });
-            }
-            tg.wait();
+                }
+            });
             return retval.load();
         } else {
             return 0;
