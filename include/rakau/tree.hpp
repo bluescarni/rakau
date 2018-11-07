@@ -43,6 +43,7 @@
 #include <tbb/enumerable_thread_specific.h>
 #include <tbb/parallel_for.h>
 #include <tbb/parallel_sort.h>
+#include <tbb/partitioner.h>
 #include <tbb/task_group.h>
 
 #include <xsimd/xsimd.hpp>
@@ -1003,6 +1004,33 @@ private:
             m_box_size = determine_box_size(cm_it, N);
         }
         {
+            // Copy the input data.
+            simple_timer st_m("data movement");
+            // NOTE: we will be essentially doing a memcpy here. Let's try to fix a
+            // large chunk size and let's use a simple partitioner, in order to
+            // limit the parallel overhead while hopefully still getting some speedup.
+            const auto data_chunking = boost::numeric_cast<size_type>(1000000ul);
+            for (std::size_t j = 0; j < NDim + 1u; ++j) {
+                tbb::parallel_for(tbb::blocked_range<size_type>(0u, N, data_chunking),
+                                  [this, &cm_it, j](const auto &range) {
+                                      const auto begin = cm_it[j];
+                                      auto &vec = m_parts[j];
+                                      for (auto i = range.begin(); i != range.end(); ++i) {
+                                          vec[i] = *(begin + static_cast<it_diff_t>(i));
+                                      }
+                                  },
+                                  tbb::simple_partitioner());
+            }
+            // Generate the initial m_isort data (this is just a iota).
+            tbb::parallel_for(tbb::blocked_range<size_type>(0u, N, data_chunking),
+                              [this, &cm_it](const auto &range) {
+                                  for (auto i = range.begin(); i != range.end(); ++i) {
+                                      m_isort[i] = i;
+                                  }
+                              },
+                              tbb::simple_partitioner());
+        }
+        {
             // Do the Morton encoding.
             simple_timer st_m("morton encoding");
             tbb::parallel_for(tbb::blocked_range<size_type>(0u, N), [this, &cm_it](const auto &range) {
@@ -1010,19 +1038,9 @@ private:
                 std::array<UInt, NDim> tmp_dcoord;
                 // The encoder object.
                 morton_encoder<NDim, UInt> me;
-                // Determine the particles' codes, and fill in the particles' data.
                 for (auto i = range.begin(); i != range.end(); ++i) {
-                    // Write the coords in the temp structure and in the data members.
-                    for (std::size_t j = 0; j < NDim; ++j) {
-                        m_parts[j][i] = *(cm_it[j] + static_cast<it_diff_t>(i));
-                    }
-                    // Store the mass.
-                    m_parts[NDim][i] = *(cm_it[NDim] + static_cast<it_diff_t>(i));
-                    // Compute and store the code.
                     disc_coords(tmp_dcoord, i);
                     m_codes[i] = me(tmp_dcoord.data());
-                    // Store the index for indirect sorting (this is just a iota).
-                    m_isort[i] = i;
                 }
             });
         }
