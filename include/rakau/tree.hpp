@@ -2449,7 +2449,7 @@ public:
     {
         accs_pots_o(acc_pot_ilist_to_array<2>(out), theta, G, eps);
     }
-    void accs_new(const std::array<F *, 3> &, F theta, F = F(1), F eps = F(0)) const
+    void accs_new(const std::array<F *, 3> &out, F theta, F = F(1), F eps = F(0)) const
     {
         simple_timer st("vector accs/pots computation");
 
@@ -2482,22 +2482,19 @@ public:
 
         const auto nparts = m_parts[0].size(), tree_size = static_cast<size_type>(m_tree.size());
 
-        const auto x_ptr = m_parts[0].data(), y_ptr = m_parts[1].data(), z_ptr = m_parts[2].data();
+        const auto x_ptr = m_parts[0].data(), y_ptr = m_parts[1].data(), z_ptr = m_parts[2].data(),
+                   m_ptr = m_parts[3].data();
         const auto codes_ptr = m_codes.data();
         const auto tree_ptr = m_tree.data();
-
-        std::size_t tot_walk_size = 0;
 
         // Loop over the critical blocks.
         for (size_type i = 0; i < nparts - static_cast<size_type>(nparts % crit_block_size); i += crit_block_size) {
             // Empty the temporary result vectors.
             for (std::size_t j = 0; j < NDim; ++j) {
-                std::fill(res_vec[j].begin(), res_vec[j].end(), F(0));
+                std::fill(res_vec[j].data(), res_vec[j].data() + crit_block_size, F(0));
             }
-            std::size_t walk_size = 0;
             // Loop over the tree.
             for (size_type src_idx = 0; src_idx < tree_size;) {
-                ++walk_size;
                 // Get a reference to the current source node, and cache locally a few quantities.
                 const auto &src_node = tree_ptr[src_idx];
                 // Number of children of the source node.
@@ -2561,14 +2558,44 @@ public:
 
                     src_idx += n_children_src + 1;
                 } else {
+                    if (!n_children_src) {
+                        const auto src_begin = src_node.begin, src_end = src_node.end;
+                        for (size_type j = i; j < i + crit_block_size; j += batch_size) {
+                            const auto pos_x = xsimd::load_aligned(x_ptr + j), pos_y = xsimd::load_aligned(y_ptr + j),
+                                       pos_z = xsimd::load_aligned(z_ptr + j);
+
+                            auto res_x = xsimd::load_aligned(res_x_ptr + (j - i)),
+                                 res_y = xsimd::load_aligned(res_y_ptr + (j - i)),
+                                 res_z = xsimd::load_aligned(res_z_ptr + (j - i));
+
+                            for (auto src_pidx = src_begin; src_pidx < src_end; ++src_pidx) {
+                                if (src_pidx < j || src_pidx >= j + batch_size) {
+                                    const auto diff_x = x_ptr[src_pidx] - pos_x, diff_y = y_ptr[src_pidx] - pos_y,
+                                               diff_z = z_ptr[src_pidx] - pos_z;
+                                    const auto dist2 = eps2 + diff_x * diff_x + diff_y * diff_y + diff_z * diff_z;
+                                    const auto dist3 = (xsimd_sqrt(dist2) * dist2);
+                                    const auto m_dist3 = m_ptr[src_pidx] / dist3;
+
+                                    res_x = xsimd_fma(diff_x, m_dist3, res_x);
+                                    res_y = xsimd_fma(diff_y, m_dist3, res_y);
+                                    res_z = xsimd_fma(diff_z, m_dist3, res_z);
+                                }
+                            }
+
+                            res_x.store_aligned(res_x_ptr + (j - i));
+                            res_y.store_aligned(res_y_ptr + (j - i));
+                            res_z.store_aligned(res_z_ptr + (j - i));
+                        }
+                    }
                     ++src_idx;
                 }
             }
-            tot_walk_size += walk_size;
+
+            // Store the result for this block.
+            std::copy(res_x_ptr, res_x_ptr + crit_block_size, out[0] + i);
+            std::copy(res_y_ptr, res_y_ptr + crit_block_size, out[1] + i);
+            std::copy(res_z_ptr, res_z_ptr + crit_block_size, out[2] + i);
         }
-        std::cout << "Av walk size: "
-                  << tot_walk_size / ((nparts - static_cast<size_type>(nparts % crit_block_size)) / crit_block_size)
-                  << '\n';
     }
 
 private:
