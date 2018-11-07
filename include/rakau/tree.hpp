@@ -585,7 +585,7 @@ private:
                         compute_node_properties(new_node);
                         new_tree.push_back(std::move(new_node));
                         const auto u_npart
-                            = static_cast<std::make_unsigned_t<decltype(std::distance(it_start, it_end))>>(npart);
+                            = static_cast<std::make_unsigned_t<std::remove_const_t<decltype(npart)>>>(npart);
                         // NOTE: we have a critical node only if there are no critical ancestors and either:
                         // - the number of particles is leq m_ncrit (i.e., the definition of a
                         //   critical node), or
