@@ -36,6 +36,7 @@
 #include <vector>
 
 #include <boost/iterator/permutation_iterator.hpp>
+#include <boost/iterator/transform_iterator.hpp>
 #include <boost/numeric/conversion/cast.hpp>
 
 #include <tbb/blocked_range.h>
@@ -407,6 +408,19 @@ private:
         const auto tmp = m_box_size / static_cast<F>(UInt(1) << node_level);
         return tmp * tmp;
     }
+    // A small functor to right shift an input UInt by a fixed amount.
+    // Used in the tree construction functions.
+    struct code_shifter {
+        explicit code_shifter(UInt shift) : m_shift(shift)
+        {
+            assert(shift < static_cast<unsigned>(std::numeric_limits<UInt>::digits));
+        }
+        auto operator()(UInt code) const
+        {
+            return static_cast<UInt>(code >> m_shift);
+        }
+        UInt m_shift;
+    };
     // Serial construction of a subtree. The parent of the subtree is the node with code parent_code,
     // at the level ParentLevel. The particles in the children nodes have codes in the [begin, end)
     // range. The children nodes will be appended in depth-first order to tree. crit_nodes is the local
@@ -435,47 +449,51 @@ private:
             // it is an internal (i.e., non-leaf) node and we go deeper. If it contains <= m_max_leaf_n
             // particles, it is a leaf node, we stop going deeper and move to its sibling.
             //
-            // This is the node prefix: it is the nodal code of the parent with the most significant bit
-            // switched off.
+            // This is the node prefix: it is the nodal code of the parent with the MSB switched off.
             // NOTE: overflow is prevented by the if constexpr above.
             const auto node_prefix = parent_code - (UInt(1) << (ParentLevel * NDim));
+            // Init the code shifting functor, and the shifting iterators.
+            // Example: consider an octree, and parent level 1 (i.e., current level 2). We will
+            // want to shift down the codes so that only the most significant 2 * NDim = 2 * 3 = 6
+            // bits survive.
+            const code_shifter cs((cbits - ParentLevel - 1u) * NDim);
+            const auto t_begin = boost::make_transform_iterator(begin, cs),
+                       t_end = boost::make_transform_iterator(end, cs);
             // NOTE: overflow is prevented in the computation of cbits_v.
             for (UInt i = 0; i < (UInt(1) << NDim); ++i) {
-                // Compute the first and last possible codes for the current child node.
-                // They both start with (from MSB to LSB):
-                // - current node prefix,
-                // - i.
-                // The first possible code is then right-padded with all zeroes, the last possible
-                // code is right-padded with ones.
-                const auto p_first = static_cast<UInt>((node_prefix << ((cbits - ParentLevel) * NDim))
-                                                       + (i << ((cbits - ParentLevel - 1u) * NDim)));
-                const auto p_last
-                    = static_cast<UInt>(p_first + ((UInt(1) << ((cbits - ParentLevel - 1u) * NDim)) - 1u));
-                // Compute the starting point of the node: it_start will point to the first value equal to
-                // or greater than p_first.
-                const auto it_start = std::lower_bound(begin, end, p_first);
-                // Determine the end of the child node: it_end will point to the first value greater
-                // than the largest possible code for the current child node.
-                const auto it_end = std::upper_bound(it_start, end, p_last);
-                // Compute the number of particles.
+                // We want to identify which particles belong to the current child of the parent node.
+                // Example: consider a quadtree, parent level 1, parent nodal code 1 01. The node prefix,
+                // computed above, is 1 01 - 1 00 = 01. Let's say we are in the child with index 10
+                // (that is, i = 2, or the third child). Then, the codes of the particles belonging to the current
+                // child node will begin (from the MSB) with the 4 bits 01 10 (node prefix + current child
+                // index). In order to identify the particles with such initial bits in the code, we will
+                // be doing a binary search on the codes using a transform iterator that will shift
+                // down the codes on the fly.
+                const auto [it_start, it_end]
+                    = std::equal_range(t_begin, t_end, static_cast<UInt>((node_prefix << NDim) + i));
+                // NOTE: the boost transform iterators inherit the difference type from the base iterator.
+                // We checked outside that we can safely compute the distances in the base iterator.
                 const auto npart = std::distance(it_start, it_end);
                 assert(npart >= 0);
                 if (npart) {
                     // npart > 0, we have a node. Compute its nodal code by moving up the
                     // parent nodal code by NDim and adding the current child node index i.
                     const auto cur_code = static_cast<UInt>((parent_code << NDim) + i);
+                    // Create the new node.
+                    node_type new_node{static_cast<size_type>(std::distance(m_codes.begin(), it_start.base())),
+                                       static_cast<size_type>(std::distance(m_codes.begin(), it_end.base())),
+                                       // NOTE: the children count gets inited to zero. It
+                                       // will be filled in later.
+                                       0,
+                                       cur_code,
+                                       ParentLevel + 1u,
+                                       // NOTE: make sure the node props are initialised to zero.
+                                       {},
+                                       get_sqr_node_dim(ParentLevel + 1u)};
+                    // Compute its properties.
+                    compute_node_properties(new_node);
                     // Add the node to the tree.
-                    tree.push_back(node_type{static_cast<size_type>(std::distance(m_codes.begin(), it_start)),
-                                             static_cast<size_type>(std::distance(m_codes.begin(), it_end)),
-                                             // NOTE: the children count gets inited to zero. It
-                                             // will be filled in later.
-                                             0,
-                                             cur_code,
-                                             ParentLevel + 1u,
-                                             // NOTE: make sure the node props are initialised to zero.
-                                             {},
-                                             get_sqr_node_dim(ParentLevel + 1u)});
-                    compute_node_properties(tree.back());
+                    tree.push_back(std::move(new_node));
                     // Store the tree size before possibly adding more nodes.
                     const auto tree_size = tree.size();
                     // Cast npart to the unsigned counterpart.
@@ -502,7 +520,7 @@ private:
                         // the tree, as the computation of the children count might enlarge the tree and thus
                         // invalidate references to its elements.
                         const auto children_count = build_tree_ser_impl<ParentLevel + 1u>(
-                            tree, crit_nodes, cur_code, it_start, it_end,
+                            tree, crit_nodes, cur_code, it_start.base(), it_end.base(),
                             // NOTE: the children nodes have critical ancestors if either
                             // the newly-added node is critical or one of its ancestors is.
                             critical_node || crit_ancestor);
@@ -540,16 +558,15 @@ private:
             // NOTE: similar to the previous function, see comments there.
             assert(begin != end);
             const auto node_prefix = parent_code - (UInt(1) << (ParentLevel * NDim));
+            const code_shifter cs((cbits - ParentLevel - 1u) * NDim);
+            const auto t_begin = boost::make_transform_iterator(begin, cs),
+                       t_end = boost::make_transform_iterator(end, cs);
             tbb::task_group tg;
             for (UInt i = 0; i < (UInt(1) << NDim); ++i) {
-                tg.run([node_prefix, i, begin, end, &trees, parent_code, this, &retval, split_level, crit_ancestor,
+                tg.run([node_prefix, i, t_begin, t_end, &trees, parent_code, this, &retval, split_level, crit_ancestor,
                         &crit_nodes] {
-                    const auto p_first = static_cast<UInt>((node_prefix << ((cbits - ParentLevel) * NDim))
-                                                           + (i << ((cbits - ParentLevel - 1u) * NDim)));
-                    const auto p_last
-                        = static_cast<UInt>(p_first + ((UInt(1) << ((cbits - ParentLevel - 1u) * NDim)) - 1u));
-                    const auto it_start = std::lower_bound(begin, end, p_first);
-                    const auto it_end = std::upper_bound(it_start, end, p_last);
+                    const auto [it_start, it_end]
+                        = std::equal_range(t_begin, t_end, static_cast<UInt>((node_prefix << NDim) + i));
                     const auto npart = std::distance(it_start, it_end);
                     assert(npart >= 0);
                     if (npart) {
@@ -558,14 +575,15 @@ private:
                         // NOTE: use push_back(tree_type{}) instead of emplace_back() because
                         // TBB hates clang apparently.
                         auto &new_tree = *trees.push_back(tree_type{});
-                        new_tree.push_back(node_type{static_cast<size_type>(std::distance(m_codes.begin(), it_start)),
-                                                     static_cast<size_type>(std::distance(m_codes.begin(), it_end)),
-                                                     0,
-                                                     cur_code,
-                                                     ParentLevel + 1u,
-                                                     {},
-                                                     get_sqr_node_dim(ParentLevel + 1u)});
-                        compute_node_properties(new_tree.back());
+                        node_type new_node{static_cast<size_type>(std::distance(m_codes.begin(), it_start.base())),
+                                           static_cast<size_type>(std::distance(m_codes.begin(), it_end.base())),
+                                           0,
+                                           cur_code,
+                                           ParentLevel + 1u,
+                                           {},
+                                           get_sqr_node_dim(ParentLevel + 1u)};
+                        compute_node_properties(new_node);
+                        new_tree.push_back(std::move(new_node));
                         const auto u_npart
                             = static_cast<std::make_unsigned_t<decltype(std::distance(it_start, it_end))>>(npart);
                         // NOTE: we have a critical node only if there are no critical ancestors and either:
@@ -593,14 +611,14 @@ private:
                                 // children count and only later we assign it into the tree, as the computation
                                 // of the children count might end up modifying the tree.
                                 const auto children_count = build_tree_ser_impl<ParentLevel + 1u>(
-                                    new_tree, new_crit_nodes, cur_code, it_start, it_end,
+                                    new_tree, new_crit_nodes, cur_code, it_start.base(), it_end.base(),
                                     // NOTE: the children nodes have critical ancestors if either
                                     // the newly-added node is critical or one of its ancestors is.
                                     critical_node || crit_ancestor);
                                 new_tree[0].n_children = children_count;
                             } else {
                                 new_tree[0].n_children = build_tree_par_impl<ParentLevel + 1u>(
-                                    trees, crit_nodes, cur_code, it_start, it_end, split_level,
+                                    trees, crit_nodes, cur_code, it_start.base(), it_end.base(), split_level,
                                     critical_node || crit_ancestor);
                             }
                         }
