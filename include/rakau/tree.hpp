@@ -1050,18 +1050,14 @@ private:
             // Apply the permutation to the data members.
             // These steps can be done in parallel.
             simple_timer st_p("permute");
-            tbb::task_group tg;
-            tg.run([this]() {
-                apply_isort(m_codes, m_isort);
-                // Make sure the sort worked as intended.
-                assert(std::is_sorted(m_codes.begin(), m_codes.end()));
-            });
+            apply_isort(m_codes, m_isort);
+            // Make sure the sort worked as intended.
+            assert(std::is_sorted(m_codes.begin(), m_codes.end()));
             for (std::size_t j = 0; j < NDim + 1u; ++j) {
-                tg.run([this, j]() { apply_isort(m_parts[j], m_isort); });
+                apply_isort(m_parts[j], m_isort);
             }
             // Establish the indices for ordered iteration.
-            tg.run([this]() { isort_to_ord_ind(); });
-            tg.wait();
+            isort_to_ord_ind();
         }
         // Now let's proceed to the tree construction.
         // NOTE: this function works ok if N == 0.
