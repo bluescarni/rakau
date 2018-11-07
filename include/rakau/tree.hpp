@@ -954,6 +954,10 @@ private:
         }
         return retval;
     }
+    // Chunk size to be used in parallel operations when moving data. Set to a large value
+    // because this is used in bulk transfer operations, where we don't want TBB to try to split
+    // up the work in packages which are too small.
+    static constexpr auto data_chunking = 1000000ul;
     // Private constructor for implementation purposes. This is the constructor called by all the other ones.
     // NOTE: It needs to be a random access iterator, as we need to index into it for parallel iteration.
     template <typename It>
@@ -1009,9 +1013,8 @@ private:
             // NOTE: we will be essentially doing a memcpy here. Let's try to fix a
             // large chunk size and let's use a simple partitioner, in order to
             // limit the parallel overhead while hopefully still getting some speedup.
-            const auto data_chunking = boost::numeric_cast<size_type>(1000000ul);
             for (std::size_t j = 0; j < NDim + 1u; ++j) {
-                tbb::parallel_for(tbb::blocked_range<size_type>(0u, N, data_chunking),
+                tbb::parallel_for(tbb::blocked_range<size_type>(0u, N, boost::numeric_cast<size_type>(data_chunking)),
                                   [this, &cm_it, j](const auto &range) {
                                       const auto begin = cm_it[j];
                                       auto &vec = m_parts[j];
@@ -1022,7 +1025,7 @@ private:
                                   tbb::simple_partitioner());
             }
             // Generate the initial m_isort data (this is just a iota).
-            tbb::parallel_for(tbb::blocked_range<size_type>(0u, N, data_chunking),
+            tbb::parallel_for(tbb::blocked_range<size_type>(0u, N, boost::numeric_cast<size_type>(data_chunking)),
                               [this, &cm_it](const auto &range) {
                                   for (auto i = range.begin(); i != range.end(); ++i) {
                                       m_isort[i] = i;
@@ -1033,7 +1036,7 @@ private:
         {
             // Do the Morton encoding.
             simple_timer st_m("morton encoding");
-            tbb::parallel_for(tbb::blocked_range<size_type>(0u, N), [this, &cm_it](const auto &range) {
+            tbb::parallel_for(tbb::blocked_range<size_type>(0u, N), [this](const auto &range) {
                 // Temporary structure used in the encoding.
                 std::array<UInt, NDim> tmp_dcoord;
                 // The encoder object.
@@ -2593,27 +2596,30 @@ private:
         if (m_box_size_deduced) {
             m_box_size = determine_box_size(p_its_u(), nparts);
         }
-        // Establish the new codes and re-order the internal data members accordingly.
-        // NOTE: this is a slight repetition of some code in the constructor.
-        // However, there it makes sense to mix the morton encoding with data movement,
-        // while here the data is already in the member vectors. So we cannot really
-        // refactor these bits in a common function.
+
+        // Establish the new codes.
+        tbb::parallel_for(tbb::blocked_range<size_type>(0u, nparts), [this](const auto &range) {
+            std::array<UInt, NDim> tmp_dcoord;
+            morton_encoder<NDim, UInt> me;
+            for (auto i = range.begin(); i != range.end(); ++i) {
+                disc_coords(tmp_dcoord, i);
+                m_codes[i] = me(tmp_dcoord.data());
+            }
+        });
+
+        // Create an auxiliary indices vector for reordering.
         std::vector<size_type, di_aligned_allocator<size_type>> v_ind;
         // NOTE: we are never changing the number of particles in a tree, thus we are sure
         // that v_ind's size type can represent nparts (because of the checks
         // we run in the ctor).
         v_ind.resize(static_cast<decltype(v_ind.size())>(nparts));
-        tbb::parallel_for(tbb::blocked_range<decltype(m_parts[0].size())>(0u, nparts),
-                          [this, &v_ind](const auto &range) {
-                              std::array<UInt, NDim> tmp_dcoord;
-                              morton_encoder<NDim, UInt> me;
+        tbb::parallel_for(tbb::blocked_range<size_type>(0u, nparts, boost::numeric_cast<size_type>(data_chunking)),
+                          [&v_ind](const auto &range) {
                               for (auto i = range.begin(); i != range.end(); ++i) {
-                                  disc_coords(tmp_dcoord, i);
-                                  m_codes[i] = me(tmp_dcoord.data());
-                                  // NOTE: this is just a iota.
                                   v_ind[i] = i;
                               }
-                          });
+                          },
+                          tbb::simple_partitioner());
         // Do the sorting.
         indirect_code_sort(v_ind.begin(), v_ind.end());
         {
