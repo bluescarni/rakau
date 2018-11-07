@@ -1049,6 +1049,9 @@ private:
         {
             // Apply the permutation to the data members.
             // These steps can be done in parallel.
+            // NOTE: it's not 100% clear if doing things in parallel here helps.
+            // It seems to help a bit on the large skylake systems, hurt a bit
+            // on a desktop ryzen. Perhaps revisit in the future.
             simple_timer st_p("permute");
             tbb::task_group tg;
             tg.run([this]() {
