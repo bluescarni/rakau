@@ -750,32 +750,24 @@ private:
             simple_timer sts("tree copier");
             // Resize the tree and copy over the data from trees.
             m_tree.resize(boost::numeric_cast<decltype(m_tree.size())>(cum_sizes.back()));
-            // for (decltype(cum_sizes.size()) i = 0; i < cum_sizes.size() - 1u; ++i) {
-            //     std::cout << "Copying size: " << trees[i].size() << '\n';
-            //     std::copy(trees[i].begin(), trees[i].end(),
-            //               &m_tree[boost::numeric_cast<decltype(m_tree.size())>(cum_sizes[i])]);
-            // }
-
             tbb::parallel_for(
                 tbb::blocked_range<decltype(cum_sizes.size())>(0u,
                                                                // NOTE: cum_sizes is 1 element larger than trees.
                                                                cum_sizes.size() - 1u),
-                [this, &cum_sizes, &trees](const auto &range) {
-                    for (auto i = range.begin(); i != range.end(); ++i) {
-                        tbb::parallel_for(
-                            tbb::blocked_range<decltype(trees[i].size())>(0, trees[i].size()), [&](const auto &rangej) {
-                                std::copy(trees[i].data() + rangej.begin(), trees[i].data() + rangej.end(),
-                                          &m_tree[boost::numeric_cast<decltype(m_tree.size())>(cum_sizes[i])]
-                                              + rangej.begin());
-                            });
-
-                        // std::copy(trees[i].begin(), trees[i].end(),
-                        //           &m_tree[boost::numeric_cast<decltype(m_tree.size())>(cum_sizes[i])]);
+                [this, &cum_sizes, &trees](const auto &out_range) {
+                    for (auto i = out_range.begin(); i != out_range.end(); ++i) {
+                        tbb::parallel_for(tbb::blocked_range<decltype(trees[i].size())>(0, trees[i].size()),
+                                          [&](const auto &in_range) {
+                                              std::copy(trees[i].data() + in_range.begin(),
+                                                        trees[i].data() + in_range.end(),
+                                                        m_tree.data() + cum_sizes[i] + in_range.begin());
+                                          });
                     }
                 });
         });
 
         tg.run([&]() {
+            simple_timer stf("trepper");
             // NOTE: as above, we could do some of these things in parallel but it does not seem worth it at this time.
             // Sort the critical nodes lists according to the starting points of the ranges.
             std::sort(crit_nodes.begin(), crit_nodes.end(), [](const auto &v1, const auto &v2) {
@@ -804,10 +796,14 @@ private:
                 tbb::blocked_range<decltype(cum_sizes.size())>(0u,
                                                                // NOTE: cum_sizes is 1 element larger than crit_nodes.
                                                                cum_sizes.size() - 1u),
-                [this, &cum_sizes, &crit_nodes](const auto &range) {
-                    for (auto i = range.begin(); i != range.end(); ++i) {
-                        std::copy(crit_nodes[i].begin(), crit_nodes[i].end(),
-                                  &m_crit_nodes[boost::numeric_cast<decltype(m_crit_nodes.size())>(cum_sizes[i])]);
+                [this, &cum_sizes, &crit_nodes](const auto &out_range) {
+                    for (auto i = out_range.begin(); i != out_range.end(); ++i) {
+                        tbb::parallel_for(tbb::blocked_range<decltype(crit_nodes[i].size())>(0, crit_nodes[i].size()),
+                                          [&](const auto &in_range) {
+                                              std::copy(crit_nodes[i].data() + in_range.begin(),
+                                                        crit_nodes[i].data() + in_range.end(),
+                                                        m_crit_nodes.data() + cum_sizes[i] + in_range.begin());
+                                          });
                     }
                 });
         });
