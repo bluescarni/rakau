@@ -750,22 +750,29 @@ private:
             simple_timer sts("tree copier");
             // Resize the tree and copy over the data from trees.
             m_tree.resize(boost::numeric_cast<decltype(m_tree.size())>(cum_sizes.back()));
-            for (decltype(cum_sizes.size()) i = 0; i < cum_sizes.size() - 1u; ++i) {
-                std::cout << "Copying size: " << trees[i].size() << '\n';
-                std::copy(trees[i].begin(), trees[i].end(),
-                          &m_tree[boost::numeric_cast<decltype(m_tree.size())>(cum_sizes[i])]);
-            }
+            // for (decltype(cum_sizes.size()) i = 0; i < cum_sizes.size() - 1u; ++i) {
+            //     std::cout << "Copying size: " << trees[i].size() << '\n';
+            //     std::copy(trees[i].begin(), trees[i].end(),
+            //               &m_tree[boost::numeric_cast<decltype(m_tree.size())>(cum_sizes[i])]);
+            // }
 
-            // tbb::parallel_for(
-            //     tbb::blocked_range<decltype(cum_sizes.size())>(0u,
-            //                                                    // NOTE: cum_sizes is 1 element larger than trees.
-            //                                                    cum_sizes.size() - 1u),
-            //     [this, &cum_sizes, &trees](const auto &range) {
-            //         for (auto i = range.begin(); i != range.end(); ++i) {
-            //             std::copy(trees[i].begin(), trees[i].end(),
-            //                       &m_tree[boost::numeric_cast<decltype(m_tree.size())>(cum_sizes[i])]);
-            //         }
-            //     });
+            tbb::parallel_for(
+                tbb::blocked_range<decltype(cum_sizes.size())>(0u,
+                                                               // NOTE: cum_sizes is 1 element larger than trees.
+                                                               cum_sizes.size() - 1u),
+                [this, &cum_sizes, &trees](const auto &range) {
+                    for (auto i = range.begin(); i != range.end(); ++i) {
+                        tbb::parallel_for(
+                            tbb::blocked_range<decltype(trees[i].size())>(0, trees[i].size()), [&](const auto &rangej) {
+                                std::copy(trees[i].data() + rangej.begin(), trees[i].data() + rangej.end(),
+                                          &m_tree[boost::numeric_cast<decltype(m_tree.size())>(cum_sizes[i])]
+                                              + rangej.begin());
+                            });
+
+                        // std::copy(trees[i].begin(), trees[i].end(),
+                        //           &m_tree[boost::numeric_cast<decltype(m_tree.size())>(cum_sizes[i])]);
+                    }
+                });
         });
 
         tg.run([&]() {
