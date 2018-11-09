@@ -605,7 +605,7 @@ private:
                                   ? *crit_nodes.push_back({{new_tree[0].code, new_tree[0].begin, new_tree[0].end}})
                                   : *crit_nodes.push_back({});
                         if (u_npart > m_max_leaf_n) {
-                            if (ParentLevel + 1u == split_level) {
+                            if (u_npart < 40000u) {
                                 // NOTE: the current level is the split level: start building
                                 // the complete subtree of the newly-added node in a serial fashion.
                                 // NOTE: like in the serial function, make sure we first compute the
@@ -708,13 +708,19 @@ private:
             // The root node is critical, add it to the global list.
             crit_nodes.push_back({{UInt(1), size_type(0), size_type(m_codes.size())}});
         }
-        // Build the rest, if needed.
-        if (m_codes.size() > m_max_leaf_n) {
-            m_tree[0].n_children = build_tree_par_impl<0>(trees, crit_nodes, 1, m_codes.begin(), m_codes.end(),
-                                                          split_level, root_is_crit);
+        {
+            simple_timer stb("baffing");
+            // Build the rest, if needed.
+            if (m_codes.size() > m_max_leaf_n) {
+                m_tree[0].n_children = build_tree_par_impl<0>(trees, crit_nodes, 1, m_codes.begin(), m_codes.end(),
+                                                              split_level, root_is_crit);
+            }
+
+            tg.wait();
         }
 
-        tg.wait();
+        std::cout << "Total size trees: " << trees.size() << '\n';
+        std::cout << "Total size crits: " << crit_nodes.size() << '\n';
 
         // NOTE: the merge of the subtrees and of the critical nodes lists can be done independently.
         tg.run([&]() {
@@ -722,31 +728,44 @@ private:
             // but it's probably not worth it since the size of trees should be rather small.
             //
             // Sort the subtrees according to the nodal code of the first node.
-            std::sort(trees.begin(), trees.end(), [](const auto &t1, const auto &t2) {
-                assert(t1.size() && t2.size());
-                return node_compare<NDim>(t1[0].code, t2[0].code);
-            });
+            {
+                simple_timer sts("tree sort");
+                std::sort(trees.begin(), trees.end(), [](const auto &t1, const auto &t2) {
+                    assert(t1.size() && t2.size());
+                    return node_compare<NDim>(t1[0].code, t2[0].code);
+                });
+            }
             // Compute the cumulative sizes in trees.
             std::vector<size_type, di_aligned_allocator<size_type>> cum_sizes;
-            // NOTE: start from 1 in order to account for the root node (which is not accounted
-            // for in trees' sizes).
-            cum_sizes.emplace_back(1u);
-            for (const auto &t : trees) {
-                cum_sizes.push_back(cum_sizes.back());
-                checked_uinc(cum_sizes.back(), boost::numeric_cast<size_type>(t.size()));
+            {
+                simple_timer sts("tree cumsize");
+                // NOTE: start from 1 in order to account for the root node (which is not accounted
+                // for in trees' sizes).
+                cum_sizes.emplace_back(1u);
+                for (const auto &t : trees) {
+                    cum_sizes.push_back(cum_sizes.back());
+                    checked_uinc(cum_sizes.back(), boost::numeric_cast<size_type>(t.size()));
+                }
             }
+            simple_timer sts("tree copier");
             // Resize the tree and copy over the data from trees.
             m_tree.resize(boost::numeric_cast<decltype(m_tree.size())>(cum_sizes.back()));
-            tbb::parallel_for(
-                tbb::blocked_range<decltype(cum_sizes.size())>(0u,
-                                                               // NOTE: cum_sizes is 1 element larger than trees.
-                                                               cum_sizes.size() - 1u),
-                [this, &cum_sizes, &trees](const auto &range) {
-                    for (auto i = range.begin(); i != range.end(); ++i) {
-                        std::copy(trees[i].begin(), trees[i].end(),
-                                  &m_tree[boost::numeric_cast<decltype(m_tree.size())>(cum_sizes[i])]);
-                    }
-                });
+            for (decltype(cum_sizes.size()) i = 0; i < cum_sizes.size() - 1u; ++i) {
+                std::cout << "Copying size: " << trees[i].size() << '\n';
+                std::copy(trees[i].begin(), trees[i].end(),
+                          &m_tree[boost::numeric_cast<decltype(m_tree.size())>(cum_sizes[i])]);
+            }
+
+            // tbb::parallel_for(
+            //     tbb::blocked_range<decltype(cum_sizes.size())>(0u,
+            //                                                    // NOTE: cum_sizes is 1 element larger than trees.
+            //                                                    cum_sizes.size() - 1u),
+            //     [this, &cum_sizes, &trees](const auto &range) {
+            //         for (auto i = range.begin(); i != range.end(); ++i) {
+            //             std::copy(trees[i].begin(), trees[i].end(),
+            //                       &m_tree[boost::numeric_cast<decltype(m_tree.size())>(cum_sizes[i])]);
+            //         }
+            //     });
         });
 
         tg.run([&]() {
