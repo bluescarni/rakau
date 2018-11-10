@@ -1315,7 +1315,7 @@ public:
         }
         if (n_printed < n_nodes) {
             // We have not printed all the nodes in the tree. Add an ellipsis.
-            std::cout << "...\n";
+            os << "...\n";
         }
         return os;
     }
