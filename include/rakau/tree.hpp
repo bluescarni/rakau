@@ -29,7 +29,6 @@
 #include <numeric>
 #include <stdexcept>
 #include <string>
-#include <thread>
 #include <tuple>
 #include <type_traits>
 #include <utility>
@@ -540,15 +539,16 @@ private:
         }
     }
     // Parallel tree construction. It will iterate in parallel over the children of a node with nodal code
-    // parent_code at level ParentLevel, add single nodes to the 'trees' concurrent container, and recurse down
-    // until the tree level split_level is reached. From there, whole subtrees (rather than single nodes) will be
+    // parent_code at level ParentLevel, add single nodes to the 'trees' concurrent container, and recurse depth-first
+    // until a node containing less than an implementation-defined number of particles is encountered.
+    // From there, whole subtrees (rather than single nodes) will be
     // constructed and added to the 'trees' container via build_tree_ser_impl(). The particles in the children nodes
     // have codes in the [begin, end) range. crit_nodes is the global list of lists of critical nodes, crit_ancestor a
     // flag signalling if the parent node or one of its ancestors is a critical node.
     template <UInt ParentLevel, typename Out, typename CritNodes, typename CIt>
     size_type build_tree_par_impl(Out &trees, CritNodes &crit_nodes, [[maybe_unused]] UInt parent_code,
                                   [[maybe_unused]] CIt begin, [[maybe_unused]] CIt end,
-                                  [[maybe_unused]] UInt split_level, [[maybe_unused]] bool crit_ancestor)
+                                  [[maybe_unused]] bool crit_ancestor)
     {
         if constexpr (ParentLevel < cbits) {
             assert(tree_level<NDim>(parent_code) == ParentLevel);
@@ -562,8 +562,7 @@ private:
             const auto t_begin = boost::make_transform_iterator(begin, cs),
                        t_end = boost::make_transform_iterator(end, cs);
             tbb::parallel_for(tbb::blocked_range<UInt>(0u, UInt(1) << NDim), [node_prefix, t_begin, t_end, &trees,
-                                                                              parent_code, this, &retval, split_level,
-                                                                              crit_ancestor,
+                                                                              parent_code, this, &retval, crit_ancestor,
                                                                               &crit_nodes](const auto &range) {
                 for (auto i = range.begin(); i != range.end(); ++i) {
                     const auto [it_start, it_end]
@@ -605,9 +604,13 @@ private:
                                   ? *crit_nodes.push_back({{new_tree[0].code, new_tree[0].begin, new_tree[0].end}})
                                   : *crit_nodes.push_back({});
                         if (u_npart > m_max_leaf_n) {
-                            if (u_npart < 40000u) {
-                                // NOTE: the current level is the split level: start building
-                                // the complete subtree of the newly-added node in a serial fashion.
+                            // NOTE: this is the smallest number of particles a node must
+                            // contain in order to continue the tree construction in parallel.
+                            // This number has been determined experimentally, and seems to work
+                            // fine on different setups. Maybe in the future it could be made
+                            // a tuning parameter, if needed.
+                            constexpr auto split_nparts = 40000ul;
+                            if (u_npart < split_nparts) {
                                 // NOTE: like in the serial function, make sure we first compute the
                                 // children count and only later we assign it into the tree, as the computation
                                 // of the children count might end up modifying the tree.
@@ -618,8 +621,10 @@ private:
                                     critical_node || crit_ancestor);
                                 new_tree[0].n_children = children_count;
                             } else {
+                                // We have enough particles in the node to continue the
+                                // construction in parallel.
                                 new_tree[0].n_children = build_tree_par_impl<ParentLevel + 1u>(
-                                    trees, crit_nodes, cur_code, it_start.base(), it_end.base(), split_level,
+                                    trees, crit_nodes, cur_code, it_start.base(), it_end.base(),
                                     critical_node || crit_ancestor);
                             }
                         }
@@ -652,22 +657,6 @@ private:
             throw std::overflow_error("The number of particles (" + std::to_string(m_codes.size())
                                       + ") is too large, and it results in an overflow condition");
         }
-        // Computation of the level at which we start building the subtrees serially.
-        // Based on the equation (2**NDim)**split_level >= number of cores. So, for instance,
-        // on a 16-core machine and 3 dimensions, this results in split_level == 2: we are
-        // switching to serial subtree building at the second level where we have up to
-        // 64 nodes.
-        const auto split_level = [] {
-            if (const auto hc = std::thread::hardware_concurrency(); hc) {
-                // NOTE: use UInt in the shift, as we now that UInt won't
-                // overflow thanks to the checks in cbits.
-                const auto tmp = std::log(hc) / std::log(UInt(1) << NDim);
-                // Make sure we don't return zero on single-core machines.
-                return std::max(UInt(1u), boost::numeric_cast<UInt>(std::ceil(tmp)));
-            }
-            // Just return 1 if hardware_concurrency is not working.
-            return UInt(1u);
-        }();
         // Vector of partial trees. This will eventually contain a sequence of single-node trees
         // and subtrees. A subtree starts with a node and contains all of its children, ordered
         // according to the nodal code.
@@ -708,19 +697,13 @@ private:
             // The root node is critical, add it to the global list.
             crit_nodes.push_back({{UInt(1), size_type(0), size_type(m_codes.size())}});
         }
-        {
-            simple_timer stb("baffing");
-            // Build the rest, if needed.
-            if (m_codes.size() > m_max_leaf_n) {
-                m_tree[0].n_children = build_tree_par_impl<0>(trees, crit_nodes, 1, m_codes.begin(), m_codes.end(),
-                                                              split_level, root_is_crit);
-            }
-
-            tg.wait();
+        // Build the rest, if needed.
+        if (m_codes.size() > m_max_leaf_n) {
+            m_tree[0].n_children
+                = build_tree_par_impl<0>(trees, crit_nodes, 1, m_codes.begin(), m_codes.end(), root_is_crit);
         }
-
-        std::cout << "Total size trees: " << trees.size() << '\n';
-        std::cout << "Total size crits: " << crit_nodes.size() << '\n';
+        // Wait for the root node properties to be computed.
+        tg.wait();
 
         // NOTE: the merge of the subtrees and of the critical nodes lists can be done independently.
         tg.run([&]() {
@@ -728,26 +711,19 @@ private:
             // but it's probably not worth it since the size of trees should be rather small.
             //
             // Sort the subtrees according to the nodal code of the first node.
-            {
-                simple_timer sts("tree sort");
-                std::sort(trees.begin(), trees.end(), [](const auto &t1, const auto &t2) {
-                    assert(t1.size() && t2.size());
-                    return node_compare<NDim>(t1[0].code, t2[0].code);
-                });
-            }
+            std::sort(trees.begin(), trees.end(), [](const auto &t1, const auto &t2) {
+                assert(t1.size() && t2.size());
+                return node_compare<NDim>(t1[0].code, t2[0].code);
+            });
             // Compute the cumulative sizes in trees.
             std::vector<size_type, di_aligned_allocator<size_type>> cum_sizes;
-            {
-                simple_timer sts("tree cumsize");
-                // NOTE: start from 1 in order to account for the root node (which is not accounted
-                // for in trees' sizes).
-                cum_sizes.emplace_back(1u);
-                for (const auto &t : trees) {
-                    cum_sizes.push_back(cum_sizes.back());
-                    checked_uinc(cum_sizes.back(), boost::numeric_cast<size_type>(t.size()));
-                }
+            // NOTE: start from 1 in order to account for the root node (which is not accounted
+            // for in trees' sizes).
+            cum_sizes.emplace_back(1u);
+            for (const auto &t : trees) {
+                cum_sizes.push_back(cum_sizes.back());
+                checked_uinc(cum_sizes.back(), boost::numeric_cast<size_type>(t.size()));
             }
-            simple_timer sts("tree copier");
             // Resize the tree and copy over the data from trees.
             m_tree.resize(boost::numeric_cast<decltype(m_tree.size())>(cum_sizes.back()));
             tbb::parallel_for(
@@ -767,7 +743,6 @@ private:
         });
 
         tg.run([&]() {
-            simple_timer stf("trepper");
             // NOTE: as above, we could do some of these things in parallel but it does not seem worth it at this time.
             // Sort the critical nodes lists according to the starting points of the ranges.
             std::sort(crit_nodes.begin(), crit_nodes.end(), [](const auto &v1, const auto &v2) {
