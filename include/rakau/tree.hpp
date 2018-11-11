@@ -29,13 +29,13 @@
 #include <numeric>
 #include <stdexcept>
 #include <string>
-#include <thread>
 #include <tuple>
 #include <type_traits>
 #include <utility>
 #include <vector>
 
 #include <boost/iterator/permutation_iterator.hpp>
+#include <boost/iterator/transform_iterator.hpp>
 #include <boost/numeric/conversion/cast.hpp>
 
 #include <tbb/blocked_range.h>
@@ -43,6 +43,7 @@
 #include <tbb/enumerable_thread_specific.h>
 #include <tbb/parallel_for.h>
 #include <tbb/parallel_sort.h>
+#include <tbb/partitioner.h>
 #include <tbb/task_group.h>
 
 #include <xsimd/xsimd.hpp>
@@ -406,6 +407,19 @@ private:
         const auto tmp = m_box_size / static_cast<F>(UInt(1) << node_level);
         return tmp * tmp;
     }
+    // A small functor to right shift an input UInt by a fixed amount.
+    // Used in the tree construction functions.
+    struct code_shifter {
+        explicit code_shifter(UInt shift) : m_shift(shift)
+        {
+            assert(shift < static_cast<unsigned>(std::numeric_limits<UInt>::digits));
+        }
+        auto operator()(UInt code) const
+        {
+            return static_cast<UInt>(code >> m_shift);
+        }
+        UInt m_shift;
+    };
     // Serial construction of a subtree. The parent of the subtree is the node with code parent_code,
     // at the level ParentLevel. The particles in the children nodes have codes in the [begin, end)
     // range. The children nodes will be appended in depth-first order to tree. crit_nodes is the local
@@ -434,47 +448,51 @@ private:
             // it is an internal (i.e., non-leaf) node and we go deeper. If it contains <= m_max_leaf_n
             // particles, it is a leaf node, we stop going deeper and move to its sibling.
             //
-            // This is the node prefix: it is the nodal code of the parent with the most significant bit
-            // switched off.
+            // This is the node prefix: it is the nodal code of the parent with the MSB switched off.
             // NOTE: overflow is prevented by the if constexpr above.
             const auto node_prefix = parent_code - (UInt(1) << (ParentLevel * NDim));
+            // Init the code shifting functor, and the shifting iterators.
+            // Example: consider an octree, and parent level 1 (i.e., current level 2). We will
+            // want to shift down the codes so that only the most significant 2 * NDim = 2 * 3 = 6
+            // bits survive.
+            const code_shifter cs((cbits - ParentLevel - 1u) * NDim);
+            const auto t_begin = boost::make_transform_iterator(begin, cs),
+                       t_end = boost::make_transform_iterator(end, cs);
             // NOTE: overflow is prevented in the computation of cbits_v.
             for (UInt i = 0; i < (UInt(1) << NDim); ++i) {
-                // Compute the first and last possible codes for the current child node.
-                // They both start with (from MSB to LSB):
-                // - current node prefix,
-                // - i.
-                // The first possible code is then right-padded with all zeroes, the last possible
-                // code is right-padded with ones.
-                const auto p_first = static_cast<UInt>((node_prefix << ((cbits - ParentLevel) * NDim))
-                                                       + (i << ((cbits - ParentLevel - 1u) * NDim)));
-                const auto p_last
-                    = static_cast<UInt>(p_first + ((UInt(1) << ((cbits - ParentLevel - 1u) * NDim)) - 1u));
-                // Compute the starting point of the node: it_start will point to the first value equal to
-                // or greater than p_first.
-                const auto it_start = std::lower_bound(begin, end, p_first);
-                // Determine the end of the child node: it_end will point to the first value greater
-                // than the largest possible code for the current child node.
-                const auto it_end = std::upper_bound(it_start, end, p_last);
-                // Compute the number of particles.
+                // We want to identify which particles belong to the current child of the parent node.
+                // Example: consider a quadtree, parent level 1, parent nodal code 1 01. The node prefix,
+                // computed above, is 1 01 - 1 00 = 01. Let's say we are in the child with index 10
+                // (that is, i = 2, or the third child). Then, the codes of the particles belonging to the current
+                // child node will begin (from the MSB) with the 4 bits 01 10 (node prefix + current child
+                // index). In order to identify the particles with such initial bits in the code, we will
+                // be doing a binary search on the codes using a transform iterator that will shift
+                // down the codes on the fly.
+                const auto [it_start, it_end]
+                    = std::equal_range(t_begin, t_end, static_cast<UInt>((node_prefix << NDim) + i));
+                // NOTE: the boost transform iterators inherit the difference type from the base iterator.
+                // We checked outside that we can safely compute the distances in the base iterator.
                 const auto npart = std::distance(it_start, it_end);
                 assert(npart >= 0);
                 if (npart) {
                     // npart > 0, we have a node. Compute its nodal code by moving up the
                     // parent nodal code by NDim and adding the current child node index i.
                     const auto cur_code = static_cast<UInt>((parent_code << NDim) + i);
+                    // Create the new node.
+                    node_type new_node{static_cast<size_type>(std::distance(m_codes.begin(), it_start.base())),
+                                       static_cast<size_type>(std::distance(m_codes.begin(), it_end.base())),
+                                       // NOTE: the children count gets inited to zero. It
+                                       // will be filled in later.
+                                       0,
+                                       cur_code,
+                                       ParentLevel + 1u,
+                                       // NOTE: make sure the node props are initialised to zero.
+                                       {},
+                                       get_sqr_node_dim(ParentLevel + 1u)};
+                    // Compute its properties.
+                    compute_node_properties(new_node);
                     // Add the node to the tree.
-                    tree.push_back(node_type{static_cast<size_type>(std::distance(m_codes.begin(), it_start)),
-                                             static_cast<size_type>(std::distance(m_codes.begin(), it_end)),
-                                             // NOTE: the children count gets inited to zero. It
-                                             // will be filled in later.
-                                             0,
-                                             cur_code,
-                                             ParentLevel + 1u,
-                                             // NOTE: make sure the node props are initialised to zero.
-                                             {},
-                                             get_sqr_node_dim(ParentLevel + 1u)});
-                    compute_node_properties(tree.back());
+                    tree.push_back(std::move(new_node));
                     // Store the tree size before possibly adding more nodes.
                     const auto tree_size = tree.size();
                     // Cast npart to the unsigned counterpart.
@@ -501,7 +519,7 @@ private:
                         // the tree, as the computation of the children count might enlarge the tree and thus
                         // invalidate references to its elements.
                         const auto children_count = build_tree_ser_impl<ParentLevel + 1u>(
-                            tree, crit_nodes, cur_code, it_start, it_end,
+                            tree, crit_nodes, cur_code, it_start.base(), it_end.base(),
                             // NOTE: the children nodes have critical ancestors if either
                             // the newly-added node is critical or one of its ancestors is.
                             critical_node || crit_ancestor);
@@ -521,15 +539,16 @@ private:
         }
     }
     // Parallel tree construction. It will iterate in parallel over the children of a node with nodal code
-    // parent_code at level ParentLevel, add single nodes to the 'trees' concurrent container, and recurse down
-    // until the tree level split_level is reached. From there, whole subtrees (rather than single nodes) will be
+    // parent_code at level ParentLevel, add single nodes to the 'trees' concurrent container, and recurse depth-first
+    // until a node containing less than an implementation-defined number of particles is encountered.
+    // From there, whole subtrees (rather than single nodes) will be
     // constructed and added to the 'trees' container via build_tree_ser_impl(). The particles in the children nodes
     // have codes in the [begin, end) range. crit_nodes is the global list of lists of critical nodes, crit_ancestor a
     // flag signalling if the parent node or one of its ancestors is a critical node.
     template <UInt ParentLevel, typename Out, typename CritNodes, typename CIt>
     size_type build_tree_par_impl(Out &trees, CritNodes &crit_nodes, [[maybe_unused]] UInt parent_code,
                                   [[maybe_unused]] CIt begin, [[maybe_unused]] CIt end,
-                                  [[maybe_unused]] UInt split_level, [[maybe_unused]] bool crit_ancestor)
+                                  [[maybe_unused]] bool crit_ancestor)
     {
         if constexpr (ParentLevel < cbits) {
             assert(tree_level<NDim>(parent_code) == ParentLevel);
@@ -539,16 +558,15 @@ private:
             // NOTE: similar to the previous function, see comments there.
             assert(begin != end);
             const auto node_prefix = parent_code - (UInt(1) << (ParentLevel * NDim));
-            tbb::task_group tg;
-            for (UInt i = 0; i < (UInt(1) << NDim); ++i) {
-                tg.run([node_prefix, i, begin, end, &trees, parent_code, this, &retval, split_level, crit_ancestor,
-                        &crit_nodes] {
-                    const auto p_first = static_cast<UInt>((node_prefix << ((cbits - ParentLevel) * NDim))
-                                                           + (i << ((cbits - ParentLevel - 1u) * NDim)));
-                    const auto p_last
-                        = static_cast<UInt>(p_first + ((UInt(1) << ((cbits - ParentLevel - 1u) * NDim)) - 1u));
-                    const auto it_start = std::lower_bound(begin, end, p_first);
-                    const auto it_end = std::upper_bound(it_start, end, p_last);
+            const code_shifter cs((cbits - ParentLevel - 1u) * NDim);
+            const auto t_begin = boost::make_transform_iterator(begin, cs),
+                       t_end = boost::make_transform_iterator(end, cs);
+            tbb::parallel_for(tbb::blocked_range<UInt>(0u, UInt(1) << NDim), [node_prefix, t_begin, t_end, &trees,
+                                                                              parent_code, this, &retval, crit_ancestor,
+                                                                              &crit_nodes](const auto &range) {
+                for (auto i = range.begin(); i != range.end(); ++i) {
+                    const auto [it_start, it_end]
+                        = std::equal_range(t_begin, t_end, static_cast<UInt>((node_prefix << NDim) + i));
                     const auto npart = std::distance(it_start, it_end);
                     assert(npart >= 0);
                     if (npart) {
@@ -557,16 +575,17 @@ private:
                         // NOTE: use push_back(tree_type{}) instead of emplace_back() because
                         // TBB hates clang apparently.
                         auto &new_tree = *trees.push_back(tree_type{});
-                        new_tree.push_back(node_type{static_cast<size_type>(std::distance(m_codes.begin(), it_start)),
-                                                     static_cast<size_type>(std::distance(m_codes.begin(), it_end)),
-                                                     0,
-                                                     cur_code,
-                                                     ParentLevel + 1u,
-                                                     {},
-                                                     get_sqr_node_dim(ParentLevel + 1u)});
-                        compute_node_properties(new_tree.back());
+                        node_type new_node{static_cast<size_type>(std::distance(m_codes.begin(), it_start.base())),
+                                           static_cast<size_type>(std::distance(m_codes.begin(), it_end.base())),
+                                           0,
+                                           cur_code,
+                                           ParentLevel + 1u,
+                                           {},
+                                           get_sqr_node_dim(ParentLevel + 1u)};
+                        compute_node_properties(new_node);
+                        new_tree.push_back(std::move(new_node));
                         const auto u_npart
-                            = static_cast<std::make_unsigned_t<decltype(std::distance(it_start, it_end))>>(npart);
+                            = static_cast<std::make_unsigned_t<std::remove_const_t<decltype(npart)>>>(npart);
                         // NOTE: we have a critical node only if there are no critical ancestors and either:
                         // - the number of particles is leq m_ncrit (i.e., the definition of a
                         //   critical node), or
@@ -585,30 +604,35 @@ private:
                                   ? *crit_nodes.push_back({{new_tree[0].code, new_tree[0].begin, new_tree[0].end}})
                                   : *crit_nodes.push_back({});
                         if (u_npart > m_max_leaf_n) {
-                            if (ParentLevel + 1u == split_level) {
-                                // NOTE: the current level is the split level: start building
-                                // the complete subtree of the newly-added node in a serial fashion.
+                            // NOTE: this is the smallest number of particles a node must
+                            // contain in order to continue the tree construction in parallel.
+                            // This number has been determined experimentally, and seems to work
+                            // fine on different setups. Maybe in the future it could be made
+                            // a tuning parameter, if needed.
+                            constexpr auto split_nparts = 40000ul;
+                            if (u_npart < split_nparts) {
                                 // NOTE: like in the serial function, make sure we first compute the
                                 // children count and only later we assign it into the tree, as the computation
                                 // of the children count might end up modifying the tree.
                                 const auto children_count = build_tree_ser_impl<ParentLevel + 1u>(
-                                    new_tree, new_crit_nodes, cur_code, it_start, it_end,
+                                    new_tree, new_crit_nodes, cur_code, it_start.base(), it_end.base(),
                                     // NOTE: the children nodes have critical ancestors if either
                                     // the newly-added node is critical or one of its ancestors is.
                                     critical_node || crit_ancestor);
                                 new_tree[0].n_children = children_count;
                             } else {
+                                // We have enough particles in the node to continue the
+                                // construction in parallel.
                                 new_tree[0].n_children = build_tree_par_impl<ParentLevel + 1u>(
-                                    trees, crit_nodes, cur_code, it_start, it_end, split_level,
+                                    trees, crit_nodes, cur_code, it_start.base(), it_end.base(),
                                     critical_node || crit_ancestor);
                             }
                         }
                         checked_uinc(retval, new_tree[0].n_children);
                         checked_uinc(retval, size_type(1));
                     }
-                });
-            }
-            tg.wait();
+                }
+            });
             return retval.load();
         } else {
             return 0;
@@ -633,22 +657,6 @@ private:
             throw std::overflow_error("The number of particles (" + std::to_string(m_codes.size())
                                       + ") is too large, and it results in an overflow condition");
         }
-        // Computation of the level at which we start building the subtrees serially.
-        // Based on the equation (2**NDim)**split_level >= number of cores. So, for instance,
-        // on a 16-core machine and 3 dimensions, this results in split_level == 2: we are
-        // switching to serial subtree building at the second level where we have up to
-        // 64 nodes.
-        const auto split_level = [] {
-            if (const auto hc = std::thread::hardware_concurrency(); hc) {
-                // NOTE: use UInt in the shift, as we now that UInt won't
-                // overflow thanks to the checks in cbits.
-                const auto tmp = std::log(hc) / std::log(UInt(1) << NDim);
-                // Make sure we don't return zero on single-core machines.
-                return std::max(UInt(1u), boost::numeric_cast<UInt>(std::ceil(tmp)));
-            }
-            // Just return 1 if hardware_concurrency is not working.
-            return UInt(1u);
-        }();
         // Vector of partial trees. This will eventually contain a sequence of single-node trees
         // and subtrees. A subtree starts with a node and contains all of its children, ordered
         // according to the nodal code.
@@ -691,10 +699,10 @@ private:
         }
         // Build the rest, if needed.
         if (m_codes.size() > m_max_leaf_n) {
-            m_tree[0].n_children = build_tree_par_impl<0>(trees, crit_nodes, 1, m_codes.begin(), m_codes.end(),
-                                                          split_level, root_is_crit);
+            m_tree[0].n_children
+                = build_tree_par_impl<0>(trees, crit_nodes, 1, m_codes.begin(), m_codes.end(), root_is_crit);
         }
-
+        // Wait for the root node properties to be computed.
         tg.wait();
 
         // NOTE: the merge of the subtrees and of the critical nodes lists can be done independently.
@@ -722,10 +730,14 @@ private:
                 tbb::blocked_range<decltype(cum_sizes.size())>(0u,
                                                                // NOTE: cum_sizes is 1 element larger than trees.
                                                                cum_sizes.size() - 1u),
-                [this, &cum_sizes, &trees](const auto &range) {
-                    for (auto i = range.begin(); i != range.end(); ++i) {
-                        std::copy(trees[i].begin(), trees[i].end(),
-                                  &m_tree[boost::numeric_cast<decltype(m_tree.size())>(cum_sizes[i])]);
+                [this, &cum_sizes, &trees](const auto &out_range) {
+                    for (auto i = out_range.begin(); i != out_range.end(); ++i) {
+                        tbb::parallel_for(tbb::blocked_range<decltype(trees[i].size())>(0, trees[i].size()),
+                                          [&](const auto &in_range) {
+                                              std::copy(trees[i].data() + in_range.begin(),
+                                                        trees[i].data() + in_range.end(),
+                                                        m_tree.data() + cum_sizes[i] + in_range.begin());
+                                          });
                     }
                 });
         });
@@ -759,10 +771,14 @@ private:
                 tbb::blocked_range<decltype(cum_sizes.size())>(0u,
                                                                // NOTE: cum_sizes is 1 element larger than crit_nodes.
                                                                cum_sizes.size() - 1u),
-                [this, &cum_sizes, &crit_nodes](const auto &range) {
-                    for (auto i = range.begin(); i != range.end(); ++i) {
-                        std::copy(crit_nodes[i].begin(), crit_nodes[i].end(),
-                                  &m_crit_nodes[boost::numeric_cast<decltype(m_crit_nodes.size())>(cum_sizes[i])]);
+                [this, &cum_sizes, &crit_nodes](const auto &out_range) {
+                    for (auto i = out_range.begin(); i != out_range.end(); ++i) {
+                        tbb::parallel_for(tbb::blocked_range<decltype(crit_nodes[i].size())>(0, crit_nodes[i].size()),
+                                          [&](const auto &in_range) {
+                                              std::copy(crit_nodes[i].data() + in_range.begin(),
+                                                        crit_nodes[i].data() + in_range.end(),
+                                                        m_crit_nodes.data() + cum_sizes[i] + in_range.begin());
+                                          });
                     }
                 });
         });
@@ -953,6 +969,10 @@ private:
         }
         return retval;
     }
+    // Chunk size to be used in parallel operations when moving data. Set to a large value
+    // because this is used in bulk transfer operations, where we don't want TBB to try to split
+    // up the work in packages which are too small.
+    static constexpr auto data_chunking = 1000000ul;
     // Private constructor for implementation purposes. This is the constructor called by all the other ones.
     // NOTE: It needs to be a random access iterator, as we need to index into it for parallel iteration.
     template <typename It>
@@ -1003,26 +1023,42 @@ private:
             m_box_size = determine_box_size(cm_it, N);
         }
         {
+            // Copy the input data.
+            simple_timer st_m("data movement");
+            // NOTE: we will be essentially doing a memcpy here. Let's try to fix a
+            // large chunk size and let's use a simple partitioner, in order to
+            // limit the parallel overhead while hopefully still getting some speedup.
+            for (std::size_t j = 0; j < NDim + 1u; ++j) {
+                tbb::parallel_for(tbb::blocked_range<size_type>(0u, N, boost::numeric_cast<size_type>(data_chunking)),
+                                  [this, &cm_it, j](const auto &range) {
+                                      const auto begin = cm_it[j];
+                                      auto &vec = m_parts[j];
+                                      for (auto i = range.begin(); i != range.end(); ++i) {
+                                          vec[i] = *(begin + static_cast<it_diff_t>(i));
+                                      }
+                                  },
+                                  tbb::simple_partitioner());
+            }
+            // Generate the initial m_isort data (this is just a iota).
+            tbb::parallel_for(tbb::blocked_range<size_type>(0u, N, boost::numeric_cast<size_type>(data_chunking)),
+                              [this, &cm_it](const auto &range) {
+                                  for (auto i = range.begin(); i != range.end(); ++i) {
+                                      m_isort[i] = i;
+                                  }
+                              },
+                              tbb::simple_partitioner());
+        }
+        {
             // Do the Morton encoding.
             simple_timer st_m("morton encoding");
-            tbb::parallel_for(tbb::blocked_range<size_type>(0u, N), [this, &cm_it](const auto &range) {
+            tbb::parallel_for(tbb::blocked_range<size_type>(0u, N), [this](const auto &range) {
                 // Temporary structure used in the encoding.
                 std::array<UInt, NDim> tmp_dcoord;
                 // The encoder object.
                 morton_encoder<NDim, UInt> me;
-                // Determine the particles' codes, and fill in the particles' data.
                 for (auto i = range.begin(); i != range.end(); ++i) {
-                    // Write the coords in the temp structure and in the data members.
-                    for (std::size_t j = 0; j < NDim; ++j) {
-                        m_parts[j][i] = *(cm_it[j] + static_cast<it_diff_t>(i));
-                    }
-                    // Store the mass.
-                    m_parts[NDim][i] = *(cm_it[NDim] + static_cast<it_diff_t>(i));
-                    // Compute and store the code.
                     disc_coords(tmp_dcoord, i);
                     m_codes[i] = me(tmp_dcoord.data());
-                    // Store the index for indirect sorting (this is just a iota).
-                    m_isort[i] = i;
                 }
             });
         }
@@ -1031,6 +1067,9 @@ private:
         {
             // Apply the permutation to the data members.
             // These steps can be done in parallel.
+            // NOTE: it's not 100% clear if doing things in parallel here helps.
+            // It seems to help a bit on the large skylake systems, hurt a bit
+            // on a desktop ryzen. Perhaps revisit in the future.
             simple_timer st_p("permute");
             tbb::task_group tg;
             tg.run([this]() {
@@ -1251,7 +1290,7 @@ public:
         }
         if (n_printed < n_nodes) {
             // We have not printed all the nodes in the tree. Add an ellipsis.
-            std::cout << "...\n";
+            os << "...\n";
         }
         return os;
     }
@@ -2572,27 +2611,30 @@ private:
         if (m_box_size_deduced) {
             m_box_size = determine_box_size(p_its_u(), nparts);
         }
-        // Establish the new codes and re-order the internal data members accordingly.
-        // NOTE: this is a slight repetition of some code in the constructor.
-        // However, there it makes sense to mix the morton encoding with data movement,
-        // while here the data is already in the member vectors. So we cannot really
-        // refactor these bits in a common function.
+
+        // Establish the new codes.
+        tbb::parallel_for(tbb::blocked_range<size_type>(0u, nparts), [this](const auto &range) {
+            std::array<UInt, NDim> tmp_dcoord;
+            morton_encoder<NDim, UInt> me;
+            for (auto i = range.begin(); i != range.end(); ++i) {
+                disc_coords(tmp_dcoord, i);
+                m_codes[i] = me(tmp_dcoord.data());
+            }
+        });
+
+        // Create an auxiliary indices vector for reordering.
         std::vector<size_type, di_aligned_allocator<size_type>> v_ind;
         // NOTE: we are never changing the number of particles in a tree, thus we are sure
         // that v_ind's size type can represent nparts (because of the checks
         // we run in the ctor).
         v_ind.resize(static_cast<decltype(v_ind.size())>(nparts));
-        tbb::parallel_for(tbb::blocked_range<decltype(m_parts[0].size())>(0u, nparts),
-                          [this, &v_ind](const auto &range) {
-                              std::array<UInt, NDim> tmp_dcoord;
-                              morton_encoder<NDim, UInt> me;
+        tbb::parallel_for(tbb::blocked_range<size_type>(0u, nparts, boost::numeric_cast<size_type>(data_chunking)),
+                          [&v_ind](const auto &range) {
                               for (auto i = range.begin(); i != range.end(); ++i) {
-                                  disc_coords(tmp_dcoord, i);
-                                  m_codes[i] = me(tmp_dcoord.data());
-                                  // NOTE: this is just a iota.
                                   v_ind[i] = i;
                               }
-                          });
+                          },
+                          tbb::simple_partitioner());
         // Do the sorting.
         indirect_code_sort(v_ind.begin(), v_ind.end());
         {
