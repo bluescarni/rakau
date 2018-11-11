@@ -26,34 +26,16 @@
 #include <iostream>
 #include <iterator>
 #include <limits>
-#include <new>
 #include <numeric>
 #include <stdexcept>
 #include <string>
-#include <thread>
 #include <tuple>
 #include <type_traits>
 #include <utility>
 #include <vector>
 
-// We use the BitScanReverse(64) intrinsic in the implementation of clz(), but
-// only if we are *not* on clang-cl: there, we can use GCC-style intrinsics.
-// https://msdn.microsoft.com/en-us/library/fbxyd7zd.aspx
-#if !defined(__clang__) && defined(_MSC_VER)
-
-#include <intrin.h>
-
-#if _WIN64
-
-#pragma intrinsic(_BitScanReverse64)
-
-#endif
-
-#pragma intrinsic(_BitScanReverse)
-
-#endif
-
 #include <boost/iterator/permutation_iterator.hpp>
+#include <boost/iterator/transform_iterator.hpp>
 #include <boost/numeric/conversion/cast.hpp>
 
 #include <tbb/blocked_range.h>
@@ -61,6 +43,7 @@
 #include <tbb/enumerable_thread_specific.h>
 #include <tbb/parallel_for.h>
 #include <tbb/parallel_sort.h>
+#include <tbb/partitioner.h>
 #include <tbb/task_group.h>
 
 #include <xsimd/xsimd.hpp>
@@ -90,7 +73,9 @@
 
 #endif
 
+#include <rakau/detail/di_aligned_allocator.hpp>
 #include <rakau/detail/simd.hpp>
+#include <rakau/detail/tree_fwd.hpp>
 
 // likely/unlikely macros, for those compilers known to support them.
 #if defined(__clang__) || defined(__GNUC__) || defined(__INTEL_COMPILER)
@@ -110,15 +95,6 @@ namespace rakau
 
 inline namespace detail
 {
-
-// Dependent false for static_assert in if constexpr.
-// http://en.cppreference.com/w/cpp/language/if#Constexpr_If
-template <typename T>
-struct dependent_false : std::false_type {
-};
-
-template <typename T>
-inline constexpr bool dependent_false_v = dependent_false<T>::value;
 
 class simple_timer
 {
@@ -229,96 +205,11 @@ struct morton_encoder<2, std::uint32_t> {
     }
 };
 
-// Computation of the cbits value (number of bits to use
-// in the morton encoding for each coordinate).
-template <typename UInt, std::size_t NDim>
-constexpr auto compute_cbits_v()
-{
-    constexpr unsigned nbits = std::numeric_limits<UInt>::digits;
-    static_assert(nbits > NDim, "The number of bits must be greater than the number of dimensions.");
-    return static_cast<unsigned>(nbits / NDim - !(nbits % NDim));
-}
-
-template <typename UInt, std::size_t NDim>
-inline constexpr unsigned cbits_v = compute_cbits_v<UInt, NDim>();
-
-// clz wrapper. n must be a nonzero unsigned integral.
-template <typename UInt>
-inline unsigned clz(UInt n)
-{
-    static_assert(std::is_integral_v<UInt> && std::is_unsigned_v<UInt>);
-    assert(n);
-#if defined(__clang__) || defined(__GNUC__)
-    // Implementation using GCC's and clang's builtins.
-    if constexpr (std::is_same_v<UInt, unsigned>) {
-        return static_cast<unsigned>(__builtin_clz(n));
-    } else if constexpr (std::is_same_v<UInt, unsigned long>) {
-        return static_cast<unsigned>(__builtin_clzl(n));
-    } else if constexpr (std::is_same_v<UInt, unsigned long long>) {
-        return static_cast<unsigned>(__builtin_clzll(n));
-    } else {
-        // In this case we are dealing with an unsigned integral type which
-        // is not wider than unsigned int. Let's compute the result with n cast
-        // to unsigned int first.
-        const auto ret_u = static_cast<unsigned>(__builtin_clz(static_cast<unsigned>(n)));
-        // We must now subtract the number of extra bits that unsigned
-        // has over UInt.
-        constexpr auto extra_nbits
-            = static_cast<unsigned>(std::numeric_limits<unsigned>::digits - std::numeric_limits<UInt>::digits);
-        return ret_u - extra_nbits;
-    }
-#elif defined(_MSC_VER)
-    // Implementation using MSVC's intrinsics.
-    unsigned long index;
-    if constexpr (std::is_same_v<UInt, unsigned long long>) {
-#if _WIN64
-        // On 64-bit builds, we have a specific intrinsic for 64-bit ints.
-        _BitScanReverse64(&index, n);
-        return 63u - static_cast<unsigned>(index);
-#else
-        // On 32-bit builds, we split the computation in two parts.
-        if (n >> 32) {
-            // The high half of n contains something. The total bsr
-            // will be the bsr of the high half augmented by 32 bits.
-            _BitScanReverse(&index, static_cast<unsigned long>(n >> 32));
-            return static_cast<unsigned>(31u - index);
-        } else {
-            // The high half of n does not contain anything. Only
-            // the low half contributes to the bsr.
-            _BitScanReverse(&index, static_cast<unsigned long>(n));
-            return static_cast<unsigned>(63u - index);
-        }
-#endif
-    } else {
-        _BitScanReverse(&index, static_cast<unsigned long>(n));
-        return static_cast<unsigned>(std::numeric_limits<UInt>::digits) - 1u - static_cast<unsigned>(index);
-    }
-#else
-    static_assert(dependent_false_v<UInt>, "No clz() implementation is available on this platform.");
-#endif
-}
-
-// Small helper to get the tree level of a nodal code.
-template <std::size_t NDim, typename UInt>
-inline unsigned tree_level(UInt n)
-{
-#if !defined(NDEBUG)
-    constexpr unsigned cbits = cbits_v<UInt, NDim>;
-#endif
-    constexpr unsigned ndigits = std::numeric_limits<UInt>::digits;
-    assert(n);
-    assert(!((ndigits - 1u - clz(n)) % NDim));
-    auto retval = static_cast<unsigned>((ndigits - 1u - clz(n)) / NDim);
-    assert(cbits >= retval);
-    assert((cbits - retval) * NDim < ndigits);
-    return retval;
-}
-
 // Small function to compare nodal codes.
 template <std::size_t NDim, typename UInt>
 inline bool node_compare(UInt n1, UInt n2)
 {
-    constexpr unsigned cbits = cbits_v<UInt, NDim>;
+    constexpr auto cbits = cbits_v<UInt, NDim>;
     const auto tl1 = tree_level<NDim>(n1);
     const auto tl2 = tree_level<NDim>(n2);
     const auto s_n1 = n1 << ((cbits - tl1) * NDim);
@@ -371,83 +262,6 @@ inline void checked_uinc(std::atomic<T> &out, T add)
         throw std::overflow_error("Overflow in the addition of two unsigned integral values");
     }
 }
-
-// A trivial allocator that supports custom alignment and does
-// default-initialisation instead of value-initialisation.
-template <typename T, std::size_t Alignment = 0>
-struct di_aligned_allocator {
-    // Alignment must be either zero or:
-    // - not less than the natural alignment of T,
-    // - a power of 2.
-    static_assert(
-        !Alignment || (Alignment >= alignof(T) && (Alignment & (Alignment - 1u)) == 0u),
-        "Invalid alignment value: the alignment must be a power of 2 and not less than the natural alignment of T.");
-    // value_type must always be present.
-    using value_type = T;
-    // Make sure the size_type is consistent with the size type returned
-    // by malloc() and friends.
-    using size_type = std::size_t;
-    // NOTE: rebind is needed because we have a non-type template parameter, which
-    // prevents the automatic implementation of rebind from working.
-    // http://en.cppreference.com/w/cpp/concept/Allocator#cite_note-1
-    template <typename U>
-    struct rebind {
-        using other = di_aligned_allocator<U, Alignment>;
-    };
-    // Allocation.
-    T *allocate(size_type n) const
-    {
-        // Total size in bytes. This is prevented from being too large
-        // by the default implementation of max_size().
-        const auto size = n * sizeof(T);
-        void *retval;
-        if constexpr (Alignment == 0u) {
-            retval = std::malloc(size);
-        } else {
-            // For use in std::aligned_alloc, the size must be a multiple of the alignment.
-            // http://en.cppreference.com/w/cpp/memory/c/aligned_alloc
-            // A null pointer will be returned if invalid Alignment and/or size are supplied,
-            // or if the allocation fails.
-            // NOTE: some early versions of GCC put aligned_alloc in the root namespace rather
-            // than std, so let's try to workaround.
-            using namespace std;
-            retval = aligned_alloc(Alignment, size);
-        }
-        if (!retval) {
-            // Throw on failure.
-            throw std::bad_alloc{};
-        }
-        return static_cast<T *>(retval);
-    }
-    // Deallocation.
-    void deallocate(T *ptr, size_type) const
-    {
-        std::free(ptr);
-    }
-    // Trivial comparison operators.
-    friend bool operator==(const di_aligned_allocator &, const di_aligned_allocator &)
-    {
-        return true;
-    }
-    friend bool operator!=(const di_aligned_allocator &, const di_aligned_allocator &)
-    {
-        return false;
-    }
-    // The construction function.
-    template <typename U, typename... Args>
-    void construct(U *p, Args &&... args) const
-    {
-        if constexpr (sizeof...(args) == 0u) {
-            // When no construction arguments are supplied, do default
-            // initialisation rather than value initialisation.
-            ::new (static_cast<void *>(p)) U;
-        } else {
-            // This is the standard std::allocator implementation.
-            // http://en.cppreference.com/w/cpp/memory/allocator/construct
-            ::new (static_cast<void *>(p)) U(std::forward<Args>(args)...);
-        }
-    }
-};
 
 // Scalar FMA wrappers.
 inline float fma_wrap(float x, float y, float z)
@@ -502,20 +316,21 @@ inline constexpr bool use_fast_inv_sqrt =
 
 // Default values for the max_leaf_n and ncrit tree parameters.
 // These are determined experimentally from benchmarks on various systems.
+
+// NOTE: a value of 8 might get *slightly* better performance on the
+// acc/pot computations, but it results in a tree twice as big.
+inline constexpr unsigned default_max_leaf_n = 16;
+
 // NOTE: so far we have tested only on x86 systems, where it seems for
 // everything but AVX512 a good combination is 128, 16. For AVX512, 256
 // seems to work better than 128.
-inline constexpr unsigned default_max_leaf_n =
+inline constexpr unsigned default_ncrit =
 #if defined(XSIMD_X86_INSTR_SET) && XSIMD_X86_INSTR_SET >= XSIMD_X86_AVX512_VERSION
     256
 #else
     128
 #endif
     ;
-
-// NOTE: a value of 8 might get *slightly* better performance on the
-// acc/pot computations, but it results in a tree twice as big.
-inline constexpr unsigned default_ncrit = 16;
 
 } // namespace detail
 
@@ -565,7 +380,7 @@ class tree
     static_assert(std::is_integral_v<UInt> && std::is_unsigned_v<UInt>,
                   "The type UInt must be a C++ unsigned integral type.");
     // cbits shortcut.
-    static constexpr unsigned cbits = cbits_v<UInt, NDim>;
+    static constexpr auto cbits = cbits_v<UInt, NDim>;
     // simd_enabled shortcut.
     static constexpr bool simd_enabled = simd_enabled_v<F>;
     // Main vector type for storing floating-point values. It uses custom alignment to enable
@@ -573,31 +388,39 @@ class tree
     using fp_vector = std::vector<F, di_aligned_allocator<F, XSIMD_DEFAULT_ALIGNMENT>>;
 
 public:
-    using size_type = typename fp_vector::size_type;
+    using size_type = tree_size_t<F>;
 
 private:
-    // The node type:
-    // - code,
-    // - [node_start, node_end, n_children], where:
-    //   - node_start/node_end = the starting/ending indices (in the particles' array) of the node's particles,
-    //   - n_children = the number of children of the node,
-    // - total mass in the node,
-    // - COM coordinates,
-    // - node level,
-    // - square of the edge of the node.
-    using node_type = std::tuple<UInt, std::array<size_type, 3>, F, std::array<F, NDim>, unsigned, F>;
+    // Consistency check: the size type which was forward-defined
+    // is the same as the actual size type.
+    static_assert(std::is_same_v<size_type, typename fp_vector::size_type>);
+    // The node type.
+    using node_type = tree_node_t<NDim, F, UInt>;
     // The tree type.
     using tree_type = std::vector<node_type, di_aligned_allocator<node_type>>;
     // The critical node descriptor type (nodal code and particle range).
-    using cnode_type = std::tuple<UInt, size_type, size_type>;
+    using cnode_type = tree_cnode_t<F, UInt>;
     // List of critical nodes.
     using cnode_list_type = std::vector<cnode_type, di_aligned_allocator<cnode_type>>;
     // Small helper to get the square of the dimension of a node at the tree level node_level.
-    F get_sqr_node_dim(unsigned node_level) const
+    F get_sqr_node_dim(UInt node_level) const
     {
         const auto tmp = m_box_size / static_cast<F>(UInt(1) << node_level);
         return tmp * tmp;
     }
+    // A small functor to right shift an input UInt by a fixed amount.
+    // Used in the tree construction functions.
+    struct code_shifter {
+        explicit code_shifter(UInt shift) : m_shift(shift)
+        {
+            assert(shift < static_cast<unsigned>(std::numeric_limits<UInt>::digits));
+        }
+        auto operator()(UInt code) const
+        {
+            return static_cast<UInt>(code >> m_shift);
+        }
+        UInt m_shift;
+    };
     // Serial construction of a subtree. The parent of the subtree is the node with code parent_code,
     // at the level ParentLevel. The particles in the children nodes have codes in the [begin, end)
     // range. The children nodes will be appended in depth-first order to tree. crit_nodes is the local
@@ -606,13 +429,13 @@ private:
     // NOTE: here and elsewhere the use of [[maybe_unused]] is a bit random, as we use to suppress
     // GCC warnings which also look rather random (e.g., it complains about some unused
     // arguments but not others).
-    template <unsigned ParentLevel, typename CIt>
+    template <UInt ParentLevel, typename CIt>
     size_type build_tree_ser_impl(tree_type &tree, cnode_list_type &crit_nodes, [[maybe_unused]] UInt parent_code,
                                   [[maybe_unused]] CIt begin, [[maybe_unused]] CIt end, bool crit_ancestor)
     {
         if constexpr (ParentLevel < cbits) {
             assert(tree_level<NDim>(parent_code) == ParentLevel);
-            assert(tree.size() && get<0>(tree.back()) == parent_code);
+            assert(tree.size() && tree.back().code == parent_code);
             size_type retval = 0;
             // We should never be invoking this on an empty range.
             assert(begin != end);
@@ -626,48 +449,51 @@ private:
             // it is an internal (i.e., non-leaf) node and we go deeper. If it contains <= m_max_leaf_n
             // particles, it is a leaf node, we stop going deeper and move to its sibling.
             //
-            // This is the node prefix: it is the nodal code of the parent with the most significant bit
-            // switched off.
+            // This is the node prefix: it is the nodal code of the parent with the MSB switched off.
             // NOTE: overflow is prevented by the if constexpr above.
             const auto node_prefix = parent_code - (UInt(1) << (ParentLevel * NDim));
+            // Init the code shifting functor, and the shifting iterators.
+            // Example: consider an octree, and parent level 1 (i.e., current level 2). We will
+            // want to shift down the codes so that only the most significant 2 * NDim = 2 * 3 = 6
+            // bits survive.
+            const code_shifter cs((cbits - ParentLevel - 1u) * NDim);
+            const auto t_begin = boost::make_transform_iterator(begin, cs),
+                       t_end = boost::make_transform_iterator(end, cs);
             // NOTE: overflow is prevented in the computation of cbits_v.
             for (UInt i = 0; i < (UInt(1) << NDim); ++i) {
-                // Compute the first and last possible codes for the current child node.
-                // They both start with (from MSB to LSB):
-                // - current node prefix,
-                // - i.
-                // The first possible code is then right-padded with all zeroes, the last possible
-                // code is right-padded with ones.
-                const auto p_first = static_cast<UInt>((node_prefix << ((cbits - ParentLevel) * NDim))
-                                                       + (i << ((cbits - ParentLevel - 1u) * NDim)));
-                const auto p_last
-                    = static_cast<UInt>(p_first + ((UInt(1) << ((cbits - ParentLevel - 1u) * NDim)) - 1u));
-                // Compute the starting point of the node: it_start will point to the first value equal to
-                // or greater than p_first.
-                const auto it_start = std::lower_bound(begin, end, p_first);
-                // Determine the end of the child node: it_end will point to the first value greater
-                // than the largest possible code for the current child node.
-                const auto it_end = std::upper_bound(it_start, end, p_last);
-                // Compute the number of particles.
+                // We want to identify which particles belong to the current child of the parent node.
+                // Example: consider a quadtree, parent level 1, parent nodal code 1 01. The node prefix,
+                // computed above, is 1 01 - 1 00 = 01. Let's say we are in the child with index 10
+                // (that is, i = 2, or the third child). Then, the codes of the particles belonging to the current
+                // child node will begin (from the MSB) with the 4 bits 01 10 (node prefix + current child
+                // index). In order to identify the particles with such initial bits in the code, we will
+                // be doing a binary search on the codes using a transform iterator that will shift
+                // down the codes on the fly.
+                const auto [it_start, it_end]
+                    = std::equal_range(t_begin, t_end, static_cast<UInt>((node_prefix << NDim) + i));
+                // NOTE: the boost transform iterators inherit the difference type from the base iterator.
+                // We checked outside that we can safely compute the distances in the base iterator.
                 const auto npart = std::distance(it_start, it_end);
                 assert(npart >= 0);
                 if (npart) {
                     // npart > 0, we have a node. Compute its nodal code by moving up the
                     // parent nodal code by NDim and adding the current child node index i.
                     const auto cur_code = static_cast<UInt>((parent_code << NDim) + i);
+                    // Create the new node.
+                    node_type new_node{static_cast<size_type>(std::distance(m_codes.begin(), it_start.base())),
+                                       static_cast<size_type>(std::distance(m_codes.begin(), it_end.base())),
+                                       // NOTE: the children count gets inited to zero. It
+                                       // will be filled in later.
+                                       0,
+                                       cur_code,
+                                       ParentLevel + 1u,
+                                       // NOTE: make sure the node props are initialised to zero.
+                                       {},
+                                       get_sqr_node_dim(ParentLevel + 1u)};
+                    // Compute its properties.
+                    compute_node_properties(new_node);
                     // Add the node to the tree.
-                    tree.emplace_back(
-                        cur_code,
-                        std::array<size_type, 3>{static_cast<size_type>(std::distance(m_codes.begin(), it_start)),
-                                                 static_cast<size_type>(std::distance(m_codes.begin(), it_end)),
-                                                 // NOTE: the children count gets inited to zero. It
-                                                 // will be filled in later.
-                                                 size_type(0)},
-                        // NOTE: make sure mass and COM coords are initialised in a known state (i.e.,
-                        // zero for C++ floating-point).
-                        0, std::array<F, NDim>{},
-                        // Current level and square of the node dimension at the current level.
-                        ParentLevel + 1u, get_sqr_node_dim(ParentLevel + 1u));
+                    tree.push_back(std::move(new_node));
                     // Store the tree size before possibly adding more nodes.
                     const auto tree_size = tree.size();
                     // Cast npart to the unsigned counterpart.
@@ -685,7 +511,7 @@ private:
                           && (u_npart <= m_ncrit || u_npart <= m_max_leaf_n || ParentLevel + 1u == cbits);
                     if (critical_node) {
                         // The node is a critical one, add it to the list of critical nodes for this subtree.
-                        crit_nodes.push_back({get<0>(tree.back()), get<1>(tree.back())[0], get<1>(tree.back())[1]});
+                        crit_nodes.push_back({tree.back().code, tree.back().begin, tree.back().end});
                     }
                     if (u_npart > m_max_leaf_n) {
                         // The node is an internal one, go deeper, and update the children count
@@ -694,15 +520,15 @@ private:
                         // the tree, as the computation of the children count might enlarge the tree and thus
                         // invalidate references to its elements.
                         const auto children_count = build_tree_ser_impl<ParentLevel + 1u>(
-                            tree, crit_nodes, cur_code, it_start, it_end,
+                            tree, crit_nodes, cur_code, it_start.base(), it_end.base(),
                             // NOTE: the children nodes have critical ancestors if either
                             // the newly-added node is critical or one of its ancestors is.
                             critical_node || crit_ancestor);
-                        get<1>(tree[tree_size - 1u])[2] = children_count;
+                        tree[tree_size - 1u].n_children = children_count;
                     }
                     // The total children count will be augmented by the children count of the
                     // newly-added node, +1 for the node itself.
-                    checked_uinc(retval, get<1>(tree[tree_size - 1u])[2]);
+                    checked_uinc(retval, tree[tree_size - 1u].n_children);
                     checked_uinc(retval, size_type(1));
                 }
             }
@@ -714,15 +540,16 @@ private:
         }
     }
     // Parallel tree construction. It will iterate in parallel over the children of a node with nodal code
-    // parent_code at level ParentLevel, add single nodes to the 'trees' concurrent container, and recurse down
-    // until the tree level split_level is reached. From there, whole subtrees (rather than single nodes) will be
+    // parent_code at level ParentLevel, add single nodes to the 'trees' concurrent container, and recurse depth-first
+    // until a node containing less than an implementation-defined number of particles is encountered.
+    // From there, whole subtrees (rather than single nodes) will be
     // constructed and added to the 'trees' container via build_tree_ser_impl(). The particles in the children nodes
     // have codes in the [begin, end) range. crit_nodes is the global list of lists of critical nodes, crit_ancestor a
     // flag signalling if the parent node or one of its ancestors is a critical node.
-    template <unsigned ParentLevel, typename Out, typename CritNodes, typename CIt>
+    template <UInt ParentLevel, typename Out, typename CritNodes, typename CIt>
     size_type build_tree_par_impl(Out &trees, CritNodes &crit_nodes, [[maybe_unused]] UInt parent_code,
                                   [[maybe_unused]] CIt begin, [[maybe_unused]] CIt end,
-                                  [[maybe_unused]] unsigned split_level, [[maybe_unused]] bool crit_ancestor)
+                                  [[maybe_unused]] bool crit_ancestor)
     {
         if constexpr (ParentLevel < cbits) {
             assert(tree_level<NDim>(parent_code) == ParentLevel);
@@ -732,16 +559,15 @@ private:
             // NOTE: similar to the previous function, see comments there.
             assert(begin != end);
             const auto node_prefix = parent_code - (UInt(1) << (ParentLevel * NDim));
-            tbb::task_group tg;
-            for (UInt i = 0; i < (UInt(1) << NDim); ++i) {
-                tg.run([node_prefix, i, begin, end, &trees, parent_code, this, &retval, split_level, crit_ancestor,
-                        &crit_nodes] {
-                    const auto p_first = static_cast<UInt>((node_prefix << ((cbits - ParentLevel) * NDim))
-                                                           + (i << ((cbits - ParentLevel - 1u) * NDim)));
-                    const auto p_last
-                        = static_cast<UInt>(p_first + ((UInt(1) << ((cbits - ParentLevel - 1u) * NDim)) - 1u));
-                    const auto it_start = std::lower_bound(begin, end, p_first);
-                    const auto it_end = std::upper_bound(it_start, end, p_last);
+            const code_shifter cs((cbits - ParentLevel - 1u) * NDim);
+            const auto t_begin = boost::make_transform_iterator(begin, cs),
+                       t_end = boost::make_transform_iterator(end, cs);
+            tbb::parallel_for(tbb::blocked_range<UInt>(0u, UInt(1) << NDim), [node_prefix, t_begin, t_end, &trees,
+                                                                              parent_code, this, &retval, crit_ancestor,
+                                                                              &crit_nodes](const auto &range) {
+                for (auto i = range.begin(); i != range.end(); ++i) {
+                    const auto [it_start, it_end]
+                        = std::equal_range(t_begin, t_end, static_cast<UInt>((node_prefix << NDim) + i));
                     const auto npart = std::distance(it_start, it_end);
                     assert(npart >= 0);
                     if (npart) {
@@ -750,14 +576,17 @@ private:
                         // NOTE: use push_back(tree_type{}) instead of emplace_back() because
                         // TBB hates clang apparently.
                         auto &new_tree = *trees.push_back(tree_type{});
-                        new_tree.emplace_back(
-                            cur_code,
-                            std::array<size_type, 3>{static_cast<size_type>(std::distance(m_codes.begin(), it_start)),
-                                                     static_cast<size_type>(std::distance(m_codes.begin(), it_end)),
-                                                     size_type(0)},
-                            0, std::array<F, NDim>{}, ParentLevel + 1u, get_sqr_node_dim(ParentLevel + 1u));
+                        node_type new_node{static_cast<size_type>(std::distance(m_codes.begin(), it_start.base())),
+                                           static_cast<size_type>(std::distance(m_codes.begin(), it_end.base())),
+                                           0,
+                                           cur_code,
+                                           ParentLevel + 1u,
+                                           {},
+                                           get_sqr_node_dim(ParentLevel + 1u)};
+                        compute_node_properties(new_node);
+                        new_tree.push_back(std::move(new_node));
                         const auto u_npart
-                            = static_cast<std::make_unsigned_t<decltype(std::distance(it_start, it_end))>>(npart);
+                            = static_cast<std::make_unsigned_t<std::remove_const_t<decltype(npart)>>>(npart);
                         // NOTE: we have a critical node only if there are no critical ancestors and either:
                         // - the number of particles is leq m_ncrit (i.e., the definition of a
                         //   critical node), or
@@ -772,34 +601,39 @@ private:
                         // will contain 1 element, otherwise it will be an empty list. This empty list may remain empty,
                         // or be used to accumulate the list of critical nodes during the serial subtree construction.
                         auto &new_crit_nodes
-                            = critical_node ? *crit_nodes.push_back({{get<0>(new_tree[0]), get<1>(new_tree[0])[0],
-                                                                      get<1>(new_tree[0])[1]}})
-                                            : *crit_nodes.push_back({});
+                            = critical_node
+                                  ? *crit_nodes.push_back({{new_tree[0].code, new_tree[0].begin, new_tree[0].end}})
+                                  : *crit_nodes.push_back({});
                         if (u_npart > m_max_leaf_n) {
-                            if (ParentLevel + 1u == split_level) {
-                                // NOTE: the current level is the split level: start building
-                                // the complete subtree of the newly-added node in a serial fashion.
+                            // NOTE: this is the smallest number of particles a node must
+                            // contain in order to continue the tree construction in parallel.
+                            // This number has been determined experimentally, and seems to work
+                            // fine on different setups. Maybe in the future it could be made
+                            // a tuning parameter, if needed.
+                            constexpr auto split_nparts = 40000ul;
+                            if (u_npart < split_nparts) {
                                 // NOTE: like in the serial function, make sure we first compute the
                                 // children count and only later we assign it into the tree, as the computation
                                 // of the children count might end up modifying the tree.
                                 const auto children_count = build_tree_ser_impl<ParentLevel + 1u>(
-                                    new_tree, new_crit_nodes, cur_code, it_start, it_end,
+                                    new_tree, new_crit_nodes, cur_code, it_start.base(), it_end.base(),
                                     // NOTE: the children nodes have critical ancestors if either
                                     // the newly-added node is critical or one of its ancestors is.
                                     critical_node || crit_ancestor);
-                                get<1>(new_tree[0])[2] = children_count;
+                                new_tree[0].n_children = children_count;
                             } else {
-                                get<1>(new_tree[0])[2] = build_tree_par_impl<ParentLevel + 1u>(
-                                    trees, crit_nodes, cur_code, it_start, it_end, split_level,
+                                // We have enough particles in the node to continue the
+                                // construction in parallel.
+                                new_tree[0].n_children = build_tree_par_impl<ParentLevel + 1u>(
+                                    trees, crit_nodes, cur_code, it_start.base(), it_end.base(),
                                     critical_node || crit_ancestor);
                             }
                         }
-                        checked_uinc(retval, get<1>(new_tree[0])[2]);
+                        checked_uinc(retval, new_tree[0].n_children);
                         checked_uinc(retval, size_type(1));
                     }
-                });
-            }
-            tg.wait();
+                }
+            });
             return retval.load();
         } else {
             return 0;
@@ -824,22 +658,6 @@ private:
             throw std::overflow_error("The number of particles (" + std::to_string(m_codes.size())
                                       + ") is too large, and it results in an overflow condition");
         }
-        // Computation of the level at which we start building the subtrees serially.
-        // Based on the equation (2**NDim)**split_level >= number of cores. So, for instance,
-        // on a 16-core machine and 3 dimensions, this results in split_level == 2: we are
-        // switching to serial subtree building at the second level where we have up to
-        // 64 nodes.
-        const unsigned split_level = [] {
-            if (const auto hc = std::thread::hardware_concurrency(); hc) {
-                // NOTE: use UInt in the shift, as we now that UInt won't
-                // overflow thanks to the checks in cbits.
-                const auto tmp = std::log(hc) / std::log(UInt(1) << NDim);
-                // Make sure we don't return zero on single-core machines.
-                return std::max(1u, boost::numeric_cast<unsigned>(std::ceil(tmp)));
-            }
-            // Just return 1 if hardware_concurrency is not working.
-            return 1u;
-        }();
         // Vector of partial trees. This will eventually contain a sequence of single-node trees
         // and subtrees. A subtree starts with a node and contains all of its children, ordered
         // according to the nodal code.
@@ -856,16 +674,23 @@ private:
                 "The computation of the square of the dimension of the root node leads to the non-finite value "
                 + std::to_string(root_sqr_node_dim));
         }
-        m_tree.emplace_back(1,
-                            std::array<size_type, 3>{size_type(0), size_type(m_codes.size()),
-                                                     // NOTE: the children count gets inited to zero. It
-                                                     // will be filled in later.
-                                                     size_type(0)},
-                            // NOTE: make sure mass and COM coords are initialised in a known state (i.e.,
-                            // zero for C++ floating-point).
-                            0, std::array<F, NDim>{},
-                            // Tree level and square of the root node dimension.
-                            0, root_sqr_node_dim);
+        m_tree.push_back(node_type{size_type(0),
+                                   size_type(m_codes.size()),
+                                   // NOTE: the children count gets inited to zero. It
+                                   // will be filled in later.
+                                   0,
+                                   // Root code is 1.
+                                   1,
+                                   0,
+                                   // NOTE: make sure mass and COM coords are initialised in a known state (i.e.,
+                                   // zero for C++ floating-point).
+                                   {},
+                                   root_sqr_node_dim});
+
+        // Compute the root node's properties. Do it concurrently with other computations.
+        tbb::task_group tg;
+        tg.run([&]() { compute_node_properties(m_tree.back()); });
+
         // Check if the root node is a critical node. It is a critical node if the number of particles is leq m_ncrit
         // (the definition of critical node) or m_max_leaf_n (in which case it will have no children).
         const bool root_is_crit = m_codes.size() <= m_ncrit || m_codes.size() <= m_max_leaf_n;
@@ -875,12 +700,13 @@ private:
         }
         // Build the rest, if needed.
         if (m_codes.size() > m_max_leaf_n) {
-            get<1>(m_tree[0])[2] = build_tree_par_impl<0>(trees, crit_nodes, 1, m_codes.begin(), m_codes.end(),
-                                                          split_level, root_is_crit);
+            m_tree[0].n_children
+                = build_tree_par_impl<0>(trees, crit_nodes, 1, m_codes.begin(), m_codes.end(), root_is_crit);
         }
+        // Wait for the root node properties to be computed.
+        tg.wait();
 
         // NOTE: the merge of the subtrees and of the critical nodes lists can be done independently.
-        tbb::task_group tg;
         tg.run([&]() {
             // NOTE: this sorting and the computation of the cumulative sizes can be done also in parallel,
             // but it's probably not worth it since the size of trees should be rather small.
@@ -888,7 +714,7 @@ private:
             // Sort the subtrees according to the nodal code of the first node.
             std::sort(trees.begin(), trees.end(), [](const auto &t1, const auto &t2) {
                 assert(t1.size() && t2.size());
-                return node_compare<NDim>(get<0>(t1[0]), get<0>(t2[0]));
+                return node_compare<NDim>(t1[0].code, t2[0].code);
             });
             // Compute the cumulative sizes in trees.
             std::vector<size_type, di_aligned_allocator<size_type>> cum_sizes;
@@ -905,10 +731,14 @@ private:
                 tbb::blocked_range<decltype(cum_sizes.size())>(0u,
                                                                // NOTE: cum_sizes is 1 element larger than trees.
                                                                cum_sizes.size() - 1u),
-                [this, &cum_sizes, &trees](const auto &range) {
-                    for (auto i = range.begin(); i != range.end(); ++i) {
-                        std::copy(trees[i].begin(), trees[i].end(),
-                                  &m_tree[boost::numeric_cast<decltype(m_tree.size())>(cum_sizes[i])]);
+                [this, &cum_sizes, &trees](const auto &out_range) {
+                    for (auto i = out_range.begin(); i != out_range.end(); ++i) {
+                        tbb::parallel_for(tbb::blocked_range<decltype(trees[i].size())>(0, trees[i].size()),
+                                          [&](const auto &in_range) {
+                                              std::copy(trees[i].data() + in_range.begin(),
+                                                        trees[i].data() + in_range.end(),
+                                                        m_tree.data() + cum_sizes[i] + in_range.begin());
+                                          });
                     }
                 });
         });
@@ -942,10 +772,14 @@ private:
                 tbb::blocked_range<decltype(cum_sizes.size())>(0u,
                                                                // NOTE: cum_sizes is 1 element larger than crit_nodes.
                                                                cum_sizes.size() - 1u),
-                [this, &cum_sizes, &crit_nodes](const auto &range) {
-                    for (auto i = range.begin(); i != range.end(); ++i) {
-                        std::copy(crit_nodes[i].begin(), crit_nodes[i].end(),
-                                  &m_crit_nodes[boost::numeric_cast<decltype(m_crit_nodes.size())>(cum_sizes[i])]);
+                [this, &cum_sizes, &crit_nodes](const auto &out_range) {
+                    for (auto i = out_range.begin(); i != out_range.end(); ++i) {
+                        tbb::parallel_for(tbb::blocked_range<decltype(crit_nodes[i].size())>(0, crit_nodes[i].size()),
+                                          [&](const auto &in_range) {
+                                              std::copy(crit_nodes[i].data() + in_range.begin(),
+                                                        crit_nodes[i].data() + in_range.end(),
+                                                        m_crit_nodes.data() + cum_sizes[i] + in_range.begin());
+                                          });
                     }
                 });
         });
@@ -953,12 +787,10 @@ private:
 
         // Various debug checks.
         // Check the tree is sorted according to the nodal code comparison.
-        assert(std::is_sorted(m_tree.begin(), m_tree.end(), [](const auto &t1, const auto &t2) {
-            return node_compare<NDim>(get<0>(t1), get<0>(t2));
-        }));
+        assert(std::is_sorted(m_tree.begin(), m_tree.end(),
+                              [](const auto &n1, const auto &n2) { return node_compare<NDim>(n1.code, n2.code); }));
         // Check that all the nodes contain at least 1 element.
-        assert(
-            std::all_of(m_tree.begin(), m_tree.end(), [](const auto &tup) { return get<1>(tup)[1] > get<1>(tup)[0]; }));
+        assert(std::all_of(m_tree.begin(), m_tree.end(), [](const auto &t) { return t.end > t.begin; }));
         // In a non-empty domain, we must have at least 1 critical node.
         assert(!m_crit_nodes.empty());
         // The list of critical nodes must start with the first particle and end with the last particle.
@@ -981,10 +813,10 @@ private:
         }));
         // Verify the node levels.
         assert(std::all_of(m_tree.begin(), m_tree.end(),
-                           [](const auto &tup) { return get<4>(tup) == tree_level<NDim>(get<0>(tup)); }));
+                           [](const auto &n) { return n.level == tree_level<NDim>(n.code); }));
         // Verify the node dim2.
         assert(std::all_of(m_tree.begin(), m_tree.end(),
-                           [this](const auto &tup) { return get<5>(tup) == get_sqr_node_dim(get<4>(tup)); }));
+                           [this](const auto &n) { return n.dim2 == get_sqr_node_dim(n.level); }));
 
         // NOTE: a couple of final checks to make sure we can use size_type to represent both the tree
         // size and the size of the list of critical nodes.
@@ -997,36 +829,26 @@ private:
                                       + ") is too large, and it results in an overflow condition");
         }
     }
-    void build_tree_properties()
+    void compute_node_properties(node_type &node)
     {
-        simple_timer st("tree properties");
-        // NOTE: we check in build_tree() that m_tree.size() can be safely cast
-        // to size_type.
-        const auto tree_size = static_cast<size_type>(m_tree.size());
-        tbb::parallel_for(tbb::blocked_range<size_type>(0u, tree_size), [this](const auto &range) {
-            for (auto i = range.begin(); i != range.end(); ++i) {
-                auto &tup = m_tree[i];
-                // Get the indices and the size for the current node.
-                const auto begin = get<1>(tup)[0];
-                const auto end = get<1>(tup)[1];
-                assert(end > begin);
-                const auto size = end - begin;
-                // Compute the total mass.
-                const auto tot_mass = std::accumulate(m_parts[NDim].data() + begin, m_parts[NDim].data() + end, F(0));
-                // Compute the COM for the coordinates.
-                const auto m_ptr = m_parts[NDim].data() + begin;
-                for (std::size_t j = 0; j < NDim; ++j) {
-                    F acc(0);
-                    auto c_ptr = m_parts[j].data() + begin;
-                    for (std::remove_const_t<decltype(size)> k = 0; k < size; ++k) {
-                        acc = fma_wrap(m_ptr[k], c_ptr[k], acc);
-                    }
-                    get<3>(tup)[j] = acc / tot_mass;
-                }
-                // Store the total mass.
-                get<2>(tup) = tot_mass;
+        // Get the indices and the size for the current node.
+        const auto begin = node.begin, end = node.end;
+        assert(end > begin);
+        const auto size = end - begin;
+        // Compute the total mass.
+        const auto tot_mass = std::accumulate(m_parts[NDim].data() + begin, m_parts[NDim].data() + end, F(0));
+        // Compute the COM for the coordinates.
+        const auto m_ptr = m_parts[NDim].data() + begin;
+        for (std::size_t j = 0; j < NDim; ++j) {
+            F acc(0);
+            auto c_ptr = m_parts[j].data() + begin;
+            for (std::remove_const_t<decltype(size)> k = 0; k < size; ++k) {
+                acc = fma_wrap(m_ptr[k], c_ptr[k], acc);
             }
-        });
+            node.props[j] = acc / tot_mass;
+        }
+        // Store the total mass.
+        node.props[NDim] = tot_mass;
     }
     // Discretize the coordinates of the particle at index idx. The result will
     // be written into retval.
@@ -1148,6 +970,10 @@ private:
         }
         return retval;
     }
+    // Chunk size to be used in parallel operations when moving data. Set to a large value
+    // because this is used in bulk transfer operations, where we don't want TBB to try to split
+    // up the work in packages which are too small.
+    static constexpr auto data_chunking = 1000000ul;
     // Private constructor for implementation purposes. This is the constructor called by all the other ones.
     // NOTE: It needs to be a random access iterator, as we need to index into it for parallel iteration.
     template <typename It>
@@ -1231,14 +1057,12 @@ private:
         {
             // Do the Morton encoding.
             simple_timer st_m("morton encoding");
-            tbb::parallel_for(tbb::blocked_range<size_type>(0u, N), [this, &cm_it](const auto &range) {
+            tbb::parallel_for(tbb::blocked_range<size_type>(0u, N), [this](const auto &range) {
                 // Temporary structure used in the encoding.
                 std::array<UInt, NDim> tmp_dcoord;
                 // The encoder object.
                 morton_encoder<NDim, UInt> me;
-                // Determine the particles' codes, and fill in the particles' data.
                 for (auto i = range.begin(); i != range.end(); ++i) {
-                    // Compute and store the code.
                     disc_coords(tmp_dcoord, i);
                     m_codes[i] = me(tmp_dcoord.data());
                 }
@@ -1249,6 +1073,9 @@ private:
         {
             // Apply the permutation to the data members.
             // These steps can be done in parallel.
+            // NOTE: it's not 100% clear if doing things in parallel here helps.
+            // It seems to help a bit on the large skylake systems, hurt a bit
+            // on a desktop ryzen. Perhaps revisit in the future.
             simple_timer st_p("permute");
             tbb::task_group tg;
             tg.run([this]() {
@@ -1264,10 +1091,8 @@ private:
             tg.wait();
         }
         // Now let's proceed to the tree construction.
-        // NOTE: these functions work ok if N == 0.
+        // NOTE: this function works ok if N == 0.
         build_tree();
-        // Now move to the computation of the COM of the nodes.
-        build_tree_properties();
     }
 
 public:
@@ -1450,12 +1275,12 @@ public:
         }
         // Init the number of nodes printed so far.
         size_type n_printed = 0;
-        for (const auto &tup : m_tree) {
+        for (const auto &node : m_tree) {
             // Print the node.
-            os << std::bitset<std::numeric_limits<UInt>::digits>(get<0>(tup)) << '|' << get<1>(tup)[0] << ','
-               << get<1>(tup)[1] << ',' << get<1>(tup)[2] << "|" << get<2>(tup) << "|[";
+            os << std::bitset<std::numeric_limits<UInt>::digits>(node.code) << '|' << node.begin << ',' << node.end
+               << ',' << node.n_children << "|" << node.props[NDim] << "|[";
             for (std::size_t j = 0; j < NDim; ++j) {
-                os << get<3>(tup)[j];
+                os << node.props[j];
                 if (j < NDim - 1u) {
                     os << ", ";
                 }
@@ -1471,7 +1296,7 @@ public:
         }
         if (n_printed < n_nodes) {
             // We have not printed all the nodes in the tree. Add an ellipsis.
-            std::cout << "...\n";
+            os << "...\n";
         }
         return os;
     }
@@ -1509,13 +1334,7 @@ private:
     // Q == 1 -> potentials only, 1 vector
     // Q == 2 -> accs + pots, NDim + 1 vectors
     template <unsigned Q>
-    static constexpr std::size_t compute_nvecs_res()
-    {
-        static_assert(Q <= 2u);
-        return static_cast<std::size_t>(Q == 0u ? NDim : (Q == 1u ? 1u : NDim + 1u));
-    }
-    template <unsigned Q>
-    static constexpr std::size_t nvecs_res = compute_nvecs_res<Q>();
+    static constexpr std::size_t nvecs_res = tree_nvecs_res<Q, NDim>;
     // Temporary storage to accumulate the accelerations/potentials induced on the
     // particles of a critical node. Data in here will be copied to
     // the output arrays after the accelerations/potentials from all the other
@@ -1806,7 +1625,7 @@ private:
                         // Q == 1 or 2: potentials are requested.
                         // Establish the index of the potential in the result array:
                         // 0 if only the potentials are requested, NDim otherwise.
-                        constexpr auto pot_idx = static_cast<std::size_t>(Q == 1u ? 0 : NDim);
+                        constexpr auto pot_idx = static_cast<std::size_t>(Q == 1u ? 0u : NDim);
                         // Compute the negated mutual potential.
                         const auto mut_pot = m1 / dist * m2;
                         // Subtract mut_pot from the accumulator for the current particle and from
@@ -1823,7 +1642,7 @@ private:
                     }
                 }
                 if constexpr (Q == 1u || Q == 2u) {
-                    constexpr auto pot_idx = static_cast<std::size_t>(Q == 1u ? 0 : NDim);
+                    constexpr auto pot_idx = static_cast<std::size_t>(Q == 1u ? 0u : NDim);
                     // NOTE: addition, because the value in a1[pot_idx] was already built
                     // as a negative quantity.
                     res_ptrs[pot_idx][i1] += a1[pot_idx];
@@ -1844,7 +1663,7 @@ private:
         // Get a reference to the source node.
         const auto &src_node = m_tree[src_idx];
         // Establish the range of the source node.
-        const auto src_begin = get<1>(src_node)[0], src_end = get<1>(src_node)[1];
+        const auto src_begin = src_node.begin, src_end = src_node.end;
         if constexpr (simd_enabled && NDim == 3u) {
             // The SIMD-accelerated version.
             using batch_type = xsimd::simd_type<F>;
@@ -1974,7 +1793,7 @@ private:
                         // Q == 1 or 2: potentials are requested.
                         // Establish the index of the potential in the result array:
                         // 0 if only the potentials are requested, NDim otherwise.
-                        constexpr auto pot_idx = static_cast<std::size_t>(Q == 1u ? 0 : NDim);
+                        constexpr auto pot_idx = static_cast<std::size_t>(Q == 1u ? 0u : NDim);
                         res_ptrs[pot_idx][i1] = fma_wrap(-m1, m2 / dist, res_ptrs[pot_idx][i1]);
                     }
                 }
@@ -1992,7 +1811,7 @@ private:
                              const std::array<F *, nvecs_res<Q>> &res_ptrs) const
     {
         // Load locally the mass of the source node.
-        const auto m_src = get<2>(m_tree[src_idx]);
+        const auto m_src = m_tree[src_idx].props[NDim];
         if constexpr (simd_enabled && NDim == 3u) {
             using batch_type = xsimd::simd_type<F>;
             constexpr auto batch_size = batch_type::size;
@@ -2077,7 +1896,7 @@ private:
             // Init the pointer to the target masses, but only if potentials are requested.
             [[maybe_unused]] const F *m_ptr;
             if constexpr (Q == 1u || Q == 2u) {
-                m_ptr = p_ptrs[3];
+                m_ptr = p_ptrs[NDim];
             }
             for (size_type i = 0; i < tgt_size; ++i) {
                 if constexpr (Q == 0u || Q == 2u) {
@@ -2091,10 +1910,10 @@ private:
                     // Q == 1 or 2: potentials are requested.
                     // Establish the index of the potential in the result array:
                     // 0 if only the potentials are requested, NDim otherwise.
-                    constexpr auto pot_idx = static_cast<std::size_t>(Q == 1u ? 0 : NDim);
+                    constexpr auto pot_idx = static_cast<std::size_t>(Q == 1u ? 0u : NDim);
                     // Establish the index of the dist values in the temp data:
                     // 0 if only the potentials are requested, NDim + 1 otherwise.
-                    constexpr auto dist_idx = static_cast<std::size_t>(Q == 1u ? 0 : NDim + 1u);
+                    constexpr auto dist_idx = static_cast<std::size_t>(Q == 1u ? 0u : NDim + 1u);
                     res_ptrs[pot_idx][i] = fma_wrap(-m_ptr[i], m_src / tmp_ptrs[dist_idx][i], res_ptrs[pot_idx][i]);
                 }
             }
@@ -2132,18 +1951,18 @@ private:
             // Q == 1 or 2: potentials are requested.
             // Establish the index of the dist values in the temp data:
             // 0 if only the potentials are requested, NDim + 1 otherwise.
-            constexpr auto dist_idx = static_cast<std::size_t>(Q == 1u ? 0 : NDim + 1u);
+            constexpr auto dist_idx = static_cast<std::size_t>(Q == 1u ? 0u : NDim + 1u);
             tmp_vecs[dist_idx].resize(pdata_size);
             tmp_ptrs[dist_idx] = tmp_vecs[dist_idx].data();
         }
         // Local cache.
         const auto &src_node = m_tree[src_idx];
         // Copy locally the number of children of the source node.
-        const auto n_children_src = get<1>(src_node)[2];
-        // Copy locally the COM coords of the source.
-        const auto com_pos = get<3>(src_node);
+        const auto n_children_src = src_node.n_children;
+        // Copy locally the properties of the source node.
+        const auto props = src_node.props;
         // Copy locally the dim2 of the source node.
-        const auto src_dim2 = get<5>(src_node);
+        const auto src_dim2 = src_node.dim2;
         // The flag for the BH criterion check. Initially set to true,
         // it will be set to false if at least one particle in the
         // target node fails the check.
@@ -2153,8 +1972,8 @@ private:
             using batch_type = xsimd::simd_type<F>;
             constexpr auto batch_size = batch_type::size;
             // Splatted vector versions of the scalar variables.
-            const batch_type src_dim2_vec(src_dim2), theta2_vec(theta2), eps2_vec(eps2), x_com_vec(com_pos[0]),
-                y_com_vec(com_pos[1]), z_com_vec(com_pos[2]);
+            const batch_type src_dim2_vec(src_dim2), theta2_vec(theta2), eps2_vec(eps2), x_com_vec(props[0]),
+                y_com_vec(props[1]), z_com_vec(props[2]);
             // Pointers to the coordinates.
             const auto [x_ptr, y_ptr, z_ptr, m_ptr] = p_ptrs;
             (void)m_ptr;
@@ -2246,7 +2065,7 @@ private:
             for (size_type i = 0; i < tgt_size; ++i) {
                 F dist2(0);
                 for (std::size_t j = 0; j < NDim; ++j) {
-                    const auto diff = com_pos[j] - p_ptrs[j][i];
+                    const auto diff = props[j] - p_ptrs[j][i];
                     if constexpr (Q == 0u || Q == 2u) {
                         // Store the differences for later use, if we are computing
                         // accelerations.
@@ -2273,7 +2092,7 @@ private:
                     // Q == 1 or 2: potentials are requested.
                     // Establish the index of the dist values in the temp data:
                     // 0 if only the potentials are requested, NDim + 1 otherwise.
-                    constexpr auto dist_idx = static_cast<std::size_t>(Q == 1u ? 0 : NDim + 1u);
+                    constexpr auto dist_idx = static_cast<std::size_t>(Q == 1u ? 0u : NDim + 1u);
                     // NOTE: in the scalar part, we always store dist.
                     tmp_ptrs[dist_idx][i] = dist;
                 }
@@ -2313,44 +2132,43 @@ private:
         const auto tgt_level = tree_level<NDim>(tgt_code);
         // Total size of the tree.
         const auto tree_size = static_cast<size_type>(m_tree.size());
-        // Index of the current source node.
-        size_type src_idx = 0;
-        while (src_idx < tree_size) {
+        // Start the iteration over the source nodes.
+        for (size_type src_idx = 0; src_idx < tree_size;) {
             // Get a reference to the current source node.
             const auto &src_node = m_tree[src_idx];
             // Extract the code of the source node.
-            const auto src_code = get<0>(src_node);
+            const auto src_code = src_node.code;
             // Number of children of the source node.
-            const auto n_children_src = get<1>(src_node)[2];
-            if (rakau_unlikely(src_code == tgt_code)) {
-                // If src_code == tgt_code, we are currently visiting the target node.
-                // Compute the self interactions and skip all the children of the target node.
-                // NOTE: mark it as unlikely as we will run into this condition only once per traversal.
-                tree_self_interactions<Q>(eps2, tgt_size, p_ptrs, res_ptrs);
-                src_idx += n_children_src + 1u;
-                continue;
-            }
+            const auto n_children_src = src_node.n_children;
             // Extract the level of the source node.
-            const auto src_level = get<4>(src_node);
+            const auto src_level = src_node.level;
             // Compute the shifted target code. This is tgt_code
             // shifted down by the difference between tgt_level
             // and src_level. For instance, in an octree,
             // if the target code is 1 000 000 001 000, then tgt_level
-            // is 4, and, src_level is 2, then the shifted code
+            // is 4, and, if src_level is 2, then the shifted code
             // will be 1 000 000.
             const auto s_tgt_code = static_cast<UInt>(tgt_code >> ((tgt_level - src_level) * NDim));
-            // Is the source node an ancestor of the target node? It is if the
-            // shifted target code coincides with the source code.
             if (s_tgt_code == src_code) {
-                // If the source node is an ancestor of the target, then we continue the
-                // depth-first traversal.
-                ++src_idx;
-                continue;
+                // The shifted target code coincides with the source code. This means
+                // that either the source node is an ancestor of the target node, or it is
+                // the target node itself. In the former cases, we just have to continue
+                // the depth-first traversal by setting ++src_idx. In the latter case,
+                // we want to bump up src_idx by n_children_src + 1 in order to skip
+                // the target node and all its children. We will compute later the self
+                // interactions in the target node.
+                const auto tgt_eq_src_mask = static_cast<size_type>(-(src_code == tgt_code));
+                src_idx += 1u + (n_children_src & tgt_eq_src_mask);
+            } else {
+                // The source node is not an ancestor of the target. We need to run the BH criterion
+                // check. The tree_acc_pot_bh_check() function will return the index of the next node
+                // in the traversal.
+                src_idx = tree_acc_pot_bh_check<Q>(src_idx, theta2, eps2, tgt_size, p_ptrs, res_ptrs);
             }
-            // The source node is not an ancestor of the target. We need to run the BH criterion check.
-            // The tree_acc_pot_bh_check() function will return the index of the next node in the traversal.
-            src_idx = tree_acc_pot_bh_check<Q>(src_idx, theta2, eps2, tgt_size, p_ptrs, res_ptrs);
         }
+
+        // Compute the self interactions within the target node.
+        tree_self_interactions<Q>(eps2, tgt_size, p_ptrs, res_ptrs);
     }
     // Top level function for the computation of the accelerations/potentials. out is the array of output iterators,
     // theta2 the square of the opening angle, G the grav constant, eps2 the square of the softening length. Q indicates
@@ -2709,7 +2527,7 @@ private:
                 // Q == 1 or 2: potentials are requested.
                 // Establish the index of the potential in the result array:
                 // 0 if only the potentials are requested, NDim otherwise.
-                constexpr auto pot_idx = static_cast<std::size_t>(Q == 1u ? 0 : NDim);
+                constexpr auto pot_idx = static_cast<std::size_t>(Q == 1u ? 0u : NDim);
                 retval[pot_idx] = fma_wrap(-Gmi_dist, m_parts[NDim][idx], retval[pot_idx]);
             }
         }
@@ -2799,27 +2617,30 @@ private:
         if (m_box_size_deduced) {
             m_box_size = determine_box_size(p_its_u(), nparts);
         }
-        // Establish the new codes and re-order the internal data members accordingly.
-        // NOTE: this is a slight repetition of some code in the constructor.
-        // However, there it makes sense to mix the morton encoding with data movement,
-        // while here the data is already in the member vectors. So we cannot really
-        // refactor these bits in a common function.
+
+        // Establish the new codes.
+        tbb::parallel_for(tbb::blocked_range<size_type>(0u, nparts), [this](const auto &range) {
+            std::array<UInt, NDim> tmp_dcoord;
+            morton_encoder<NDim, UInt> me;
+            for (auto i = range.begin(); i != range.end(); ++i) {
+                disc_coords(tmp_dcoord, i);
+                m_codes[i] = me(tmp_dcoord.data());
+            }
+        });
+
+        // Create an auxiliary indices vector for reordering.
         std::vector<size_type, di_aligned_allocator<size_type>> v_ind;
         // NOTE: we are never changing the number of particles in a tree, thus we are sure
         // that v_ind's size type can represent nparts (because of the checks
         // we run in the ctor).
         v_ind.resize(static_cast<decltype(v_ind.size())>(nparts));
-        tbb::parallel_for(tbb::blocked_range<decltype(m_parts[0].size())>(0u, nparts),
-                          [this, &v_ind](const auto &range) {
-                              std::array<UInt, NDim> tmp_dcoord;
-                              morton_encoder<NDim, UInt> me;
+        tbb::parallel_for(tbb::blocked_range<size_type>(0u, nparts, boost::numeric_cast<size_type>(data_chunking)),
+                          [&v_ind](const auto &range) {
                               for (auto i = range.begin(); i != range.end(); ++i) {
-                                  disc_coords(tmp_dcoord, i);
-                                  m_codes[i] = me(tmp_dcoord.data());
-                                  // NOTE: this is just a iota.
                                   v_ind[i] = i;
                               }
-                          });
+                          },
+                          tbb::simple_partitioner());
         // Do the sorting.
         indirect_code_sort(v_ind.begin(), v_ind.end());
         {
@@ -2850,7 +2671,6 @@ private:
         m_tree.clear();
         m_crit_nodes.clear();
         build_tree();
-        build_tree_properties();
     }
     // Invoke the particle update function with an
     // exception safe wrapper.

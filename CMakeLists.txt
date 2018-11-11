@@ -70,11 +70,17 @@ endif()
 add_library(rakau INTERFACE)
 
 # Find Boost.
+if (RAKAU_BUILD_BENCHMARKS)
+  set(_RAKAU_BOOST_COMPONENTS program_options)
+else()
+  set(_RAKAU_BOOST_COMPONENTS)
+endif()
 include(RakauFindBoost)
+unset(_RAKAU_BOOST_COMPONENTS)
 
 # Find xsimd.
 # NOTE: we have some AVX512 code in here, so require xsimd at least version 5.
-find_package(xsimd 5 REQUIRED)
+find_package(xsimd REQUIRED)
 
 # Find TBB.
 find_package(TBB REQUIRED)
@@ -86,7 +92,7 @@ target_link_libraries(rakau INTERFACE Boost::boost xsimd TBB::tbb)
 target_include_directories(rakau INTERFACE
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
     $<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}/include>
-	$<INSTALL_INTERFACE:include>)
+    $<INSTALL_INTERFACE:include>)
 
 # Configure config.hpp.
 configure_file("${CMAKE_CURRENT_SOURCE_DIR}/config.hpp.in" "${CMAKE_CURRENT_BINARY_DIR}/include/rakau/config.hpp" @ONLY)
