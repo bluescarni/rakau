@@ -1041,7 +1041,7 @@ private:
             }
             // Generate the initial m_isort data (this is just a iota).
             tbb::parallel_for(tbb::blocked_range<size_type>(0u, N, boost::numeric_cast<size_type>(data_chunking)),
-                              [this, &cm_it](const auto &range) {
+                              [this](const auto &range) {
                                   for (auto i = range.begin(); i != range.end(); ++i) {
                                       m_isort[i] = i;
                                   }
