@@ -35,7 +35,7 @@ int main(int argc, char **argv)
     auto parts = get_plummer_sphere(nparts, a, bsize, parinit);
 
     tree<3, float> t({parts.data() + nparts, parts.data() + 2 * nparts, parts.data() + 3 * nparts, parts.data()},
-                     nparts, max_leaf_n, ncrit);
+                     nparts, kwargs::max_leaf_n = max_leaf_n, kwargs::ncrit = ncrit);
     std::cout << t << '\n';
     std::array<std::vector<float>, 3> accs;
     t.accs_u(accs, theta);

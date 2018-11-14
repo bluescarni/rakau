@@ -53,8 +53,8 @@ TEST_CASE("potentials softening ordered")
                     for (auto eps : softs) {
                         std::vector<fp_type> diff;
                         octree<fp_type> t(
-                            bsize, {parts.begin() + s, parts.begin() + 2u * s, parts.begin() + 3u * s, parts.begin()},
-                            s, max_leaf_n, ncrit);
+                            {parts.begin() + s, parts.begin() + 2u * s, parts.begin() + 3u * s, parts.begin()}, s,
+                            kwargs::box_size = bsize, kwargs::max_leaf_n = max_leaf_n, kwargs::ncrit = ncrit);
                         t.pots_o(pots, theta, fp_type(1), eps);
                         // Check that all potentials are finite.
                         REQUIRE(std::all_of(pots[0].begin(), pots[0].end(), [](auto c) { return std::isfinite(c); }));
@@ -82,10 +82,10 @@ TEST_CASE("potentials softening ordered")
                                 *(new_parts.begin() + 3u * s + idx) = *(new_parts.begin() + 3u * s + idx + 1u);
                             }
                             // Create a new tree.
-                            t = octree<fp_type>(bsize,
-                                                {new_parts.begin() + s, new_parts.begin() + 2u * s,
+                            t = octree<fp_type>({new_parts.begin() + s, new_parts.begin() + 2u * s,
                                                  new_parts.begin() + 3u * s, new_parts.begin()},
-                                                s, max_leaf_n, ncrit);
+                                                s, kwargs::box_size = bsize, kwargs::max_leaf_n = max_leaf_n,
+                                                kwargs::ncrit = ncrit);
                             // Compute the potentials.
                             // Try with the init list overload as well.
                             t.pots_u({pots[0].data()}, theta, fp_type(1), eps);
@@ -125,8 +125,8 @@ TEST_CASE("potentials softening unordered")
                     for (auto eps : softs) {
                         std::vector<fp_type> diff;
                         octree<fp_type> t(
-                            bsize, {parts.begin() + s, parts.begin() + 2u * s, parts.begin() + 3u * s, parts.begin()},
-                            s, max_leaf_n, ncrit);
+                            {parts.begin() + s, parts.begin() + 2u * s, parts.begin() + 3u * s, parts.begin()}, s,
+                            kwargs::box_size = bsize, kwargs::max_leaf_n = max_leaf_n, kwargs::ncrit = ncrit);
                         t.pots_u(pots, theta, fp_type(1), eps);
                         // Check that all potentials are finite.
                         REQUIRE(std::all_of(pots[0].begin(), pots[0].end(), [](auto c) { return std::isfinite(c); }));
@@ -154,10 +154,10 @@ TEST_CASE("potentials softening unordered")
                                 *(new_parts.begin() + 3u * s + idx) = *(new_parts.begin() + 3u * s + idx + 1u);
                             }
                             // Create a new tree.
-                            t = octree<fp_type>(bsize,
-                                                {new_parts.begin() + s, new_parts.begin() + 2u * s,
+                            t = octree<fp_type>({new_parts.begin() + s, new_parts.begin() + 2u * s,
                                                  new_parts.begin() + 3u * s, new_parts.begin()},
-                                                s, max_leaf_n, ncrit);
+                                                s, kwargs::box_size = bsize, kwargs::max_leaf_n = max_leaf_n,
+                                                kwargs::ncrit = ncrit);
                             // Compute the potentials.
                             // Try with the init list overload as well.
                             t.pots_u({pots[0].data()}, theta, fp_type(1), eps);

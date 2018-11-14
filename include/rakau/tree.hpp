@@ -341,8 +341,6 @@ namespace kwargs
 {
 
 IGOR_MAKE_KWARG(box_size);
-IGOR_MAKE_KWARG(coords);
-IGOR_MAKE_KWARG(nparts);
 IGOR_MAKE_KWARG(max_leaf_n);
 IGOR_MAKE_KWARG(ncrit);
 
@@ -988,7 +986,7 @@ private:
     // because this is used in bulk transfer operations, where we don't want TBB to try to split
     // up the work in packages which are too small.
     static constexpr auto data_chunking = 1000000ul;
-    // Private constructor for implementation purposes. This is the constructor called by all the other ones.
+    // Implementation of the constructor.
     // NOTE: It needs to be a random access iterator, as we need to index into it for parallel iteration.
     template <typename It>
     void construct_impl(const F &box_size, bool box_size_deduced, const std::array<It, NDim + 1u> &cm_it,
@@ -1110,80 +1108,6 @@ private:
         build_tree();
     }
 
-public:
-    // Default constructor.
-    tree() : m_box_size(0), m_box_size_deduced(false), m_max_leaf_n(default_max_leaf_n), m_ncrit(default_ncrit) {}
-
-private:
-    template <typename... Args>
-    struct gc_checker : std::true_type {
-    };
-    template <typename T>
-    struct gc_checker<T> : std::integral_constant<bool, !std::is_same_v<tree, uncvref_t<T>>> {
-    };
-    template <typename... Args>
-    using general_ctor_enabler = std::enable_if_t<(sizeof...(Args) > 0u) && gc_checker<Args...>::value, int>;
-
-    template <typename T>
-    struct is_init_list : std::false_type {
-    };
-    template <typename T>
-    struct is_init_list<std::initializer_list<T>> : std::true_type {
-    };
-
-    template <typename T>
-    struct is_std_array : std::false_type {
-    };
-    template <typename T, std::size_t S>
-    struct is_std_array<std::array<T, S>> : std::true_type {
-    };
-
-public:
-    template <typename... Args, general_ctor_enabler<Args &&...> = 0>
-    explicit tree(Args &&... args)
-    {
-        igor::parser p(std::forward<Args>(args)...);
-        auto [bs_ref, c_ref, N_ref, mlf_ref, ncrit_ref]
-            = p(kwargs::box_size, kwargs::coords, kwargs::nparts, kwargs::max_leaf_n, kwargs::ncrit);
-        if constexpr (!igor::is_provided<decltype(c_ref)> || !igor::is_provided<decltype(N_ref)>) {
-            static_assert(dependent_false_v<Args...>);
-        } else {
-            F box_size(0);
-            bool box_size_provided = false;
-            if constexpr (igor::is_provided<decltype(bs_ref)>) {
-                box_size = bs_ref;
-                box_size_provided = true;
-            }
-
-            size_type max_leaf_n = default_max_leaf_n, ncrit = default_ncrit;
-            if constexpr (igor::is_provided<decltype(mlf_ref)>) {
-                max_leaf_n = mlf_ref;
-            }
-            if constexpr (igor::is_provided<decltype(ncrit_ref)>) {
-                ncrit = ncrit_ref;
-            }
-
-            if constexpr (is_std_array<uncvref_t<decltype(c_ref)>>::value) {
-                construct_impl(box_size, box_size_provided, c_ref, N_ref, max_leaf_n, ncrit);
-            } else if constexpr (is_init_list<uncvref_t<decltype(c_ref)>>::value) {
-                construct_impl(box_size, box_size_provided, ctor_ilist_to_array(c_ref), N_ref, max_leaf_n, ncrit);
-            } else {
-            }
-        }
-    }
-    // template <typename It>
-    // explicit tree(const F &box_size, const std::array<It, NDim + 1u> &cm_it, const size_type &N,
-    //               const size_type &max_leaf_n = default_max_leaf_n, const size_type &ncrit = default_ncrit)
-    // {
-    //     construct_impl(box_size, false, cm_it, N, max_leaf_n, ncrit);
-    // }
-    // template <typename It>
-    // explicit tree(const std::array<It, NDim + 1u> &cm_it, const size_type &N,
-    //               const size_type &max_leaf_n = default_max_leaf_n, const size_type &ncrit = default_ncrit)
-    // {
-    //     construct_impl(F(0), true, cm_it, N, max_leaf_n, ncrit);
-    // }
-
 private:
     template <typename It>
     static auto ctor_ilist_to_array(std::initializer_list<It> ilist)
@@ -1201,21 +1125,37 @@ private:
     }
 
 public:
-    // NOTE: as in the other ctor, It must be a ra iterator. This ensures also we can def-construct it in the
-    // ctor_ilist_to_array() helper.
-    // template <typename It>
-    // explicit tree(const F &box_size, std::initializer_list<It> cm_it, const size_type &N,
-    //               const size_type &max_leaf_n = default_max_leaf_n, const size_type &ncrit = default_ncrit)
-    //     : tree(box_size, ctor_ilist_to_array(cm_it), N, max_leaf_n, ncrit)
-    // {
-    // }
-    // template <typename It>
-    // explicit tree(std::initializer_list<It> cm_it, const size_type &N, const size_type &max_leaf_n =
-    // default_max_leaf_n,
-    //               const size_type &ncrit = default_ncrit)
-    //     : tree(ctor_ilist_to_array(cm_it), N, max_leaf_n, ncrit)
-    // {
-    // }
+    // Default constructor.
+    tree() : m_box_size(0), m_box_size_deduced(false), m_max_leaf_n(default_max_leaf_n), m_ncrit(default_ncrit) {}
+    // Constructor from array of iterators.
+    template <typename It, typename... Args>
+    explicit tree(const std::array<It, NDim + 1u> &cm_it, const size_type &N, Args &&... args)
+    {
+        igor::parser p{args...};
+        auto [box_size_ref, max_leaf_n_ref, ncrit_ref] = p(kwargs::box_size, kwargs::max_leaf_n, kwargs::ncrit);
+        F box_size(0);
+        bool box_size_deduced = true;
+        if constexpr (igor::is_provided<decltype(box_size_ref)>) {
+            box_size = boost::numeric_cast<F>(box_size_ref);
+            box_size_deduced = false;
+        }
+
+        size_type max_leaf_n = default_max_leaf_n, ncrit = default_ncrit;
+        if constexpr (igor::is_provided<decltype(max_leaf_n_ref)>) {
+            max_leaf_n = boost::numeric_cast<size_type>(max_leaf_n_ref);
+        }
+        if constexpr (igor::is_provided<decltype(ncrit_ref)>) {
+            ncrit = boost::numeric_cast<size_type>(ncrit_ref);
+        }
+
+        construct_impl(box_size, box_size_deduced, cm_it, N, max_leaf_n, ncrit);
+    }
+    // Convenience overload with init list instead of array.
+    template <typename It, typename... Args>
+    explicit tree(std::initializer_list<It> cm_it, const size_type &N, Args &&... args)
+        : tree(ctor_ilist_to_array(cm_it), N, std::forward<Args>(args)...)
+    {
+    }
     tree(const tree &) = default;
     tree(tree &&other) noexcept
         : m_box_size(other.m_box_size), m_box_size_deduced(other.m_box_size_deduced), m_max_leaf_n(other.m_max_leaf_n),
@@ -1266,7 +1206,7 @@ public:
             m_tree = std::move(other.m_tree);
             m_crit_nodes = std::move(other.m_crit_nodes);
             // Make sure other is left in an empty state, otherwise we might
-            // have in principle assertions failures in the destructor of other
+            // have in principle assertion failures in the destructor of other
             // in debug mode.
             other.clear();
         }

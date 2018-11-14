@@ -94,9 +94,8 @@ int main(int argc, char **argv)
 
     // auto parts = get_uniform_particles<3>(nparts, bsize);
     auto parts = get_plummer_sphere(nparts, bsize);
-    tree<3, float> t(bsize,
-                     {parts.begin() + nparts, parts.begin() + 2 * nparts, parts.begin() + 3 * nparts, parts.begin()},
-                     nparts, max_leaf_n, ncrit);
+    tree<3, float> t({parts.begin() + nparts, parts.begin() + 2 * nparts, parts.begin() + 3 * nparts, parts.begin()},
+                     nparts, kwargs::box_size = bsize, kwargs::max_leaf_n = max_leaf_n, kwargs::ncrit = ncrit);
     std::cout << t << '\n';
     std::array<std::vector<float>, 4> accs_pots;
     t.accs_pots_u(accs_pots, 0.75f);

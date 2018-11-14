@@ -21,6 +21,7 @@
 #include "test_utils.hpp"
 
 using namespace rakau;
+using namespace rakau::kwargs;
 using namespace rakau_test;
 
 using fp_types = std::tuple<float, double>;
@@ -34,8 +35,8 @@ TEST_CASE("update positions")
         constexpr auto bsize = static_cast<fp_type>(1);
         constexpr auto s = 10000u;
         auto parts = get_uniform_particles<3>(s, bsize, rng);
-        octree<fp_type> t(bsize, {parts.begin() + s, parts.begin() + 2u * s, parts.begin() + 3u * s, parts.begin()}, s,
-                          16, 256),
+        octree<fp_type> t({parts.begin() + s, parts.begin() + 2u * s, parts.begin() + 3u * s, parts.begin()}, s,
+                          box_size = bsize, max_leaf_n = 16, ncrit = 256),
             t2(t);
         // Select randomly some particle indices to track.
         using size_type = typename decltype(t)::size_type;

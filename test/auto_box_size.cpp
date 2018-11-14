@@ -18,6 +18,7 @@
 #include "test_utils.hpp"
 
 using namespace rakau;
+using namespace rakau::kwargs;
 using namespace rakau_test;
 
 using fp_types = std::tuple<float, double>;
@@ -29,7 +30,7 @@ TEST_CASE("automatic box size")
         {
             fp_type x_coords[] = {0, 1, 2, 3}, y_coords[] = {-4, -5, -6, -7}, z_coords[] = {4, 5, 3, 1},
                     masses[] = {1, 1, 1, 1};
-            octree<fp_type> t({x_coords, y_coords, z_coords, masses}, 4, 1, 1);
+            octree<fp_type> t({x_coords, y_coords, z_coords, masses}, 4, max_leaf_n = 1, ncrit = 1);
             REQUIRE(t.get_box_size_deduced());
             REQUIRE(t.get_box_size() == 14 + fp_type(0.7));
             t.update_particles_u([](const auto &its) {
