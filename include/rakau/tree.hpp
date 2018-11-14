@@ -1128,8 +1128,11 @@ public:
     template <typename It, typename... Args>
     explicit tree(const std::array<It, NDim + 1u> &cm_it, const size_type &N, Args &&... args)
     {
+        // Parse the kwargs.
         igor::parser p{args...};
         auto [box_size_ref, max_leaf_n_ref, ncrit_ref] = p(kwargs::box_size, kwargs::max_leaf_n, kwargs::ncrit);
+
+        // Handle the box size.
         F box_size(0);
         bool box_size_deduced = true;
         if constexpr (igor::is_provided<decltype(box_size_ref)>) {
@@ -1137,6 +1140,7 @@ public:
             box_size_deduced = false;
         }
 
+        // Handle max_leaf_n and ncrit.
         size_type max_leaf_n = default_max_leaf_n, ncrit = default_ncrit;
         if constexpr (igor::is_provided<decltype(max_leaf_n_ref)>) {
             max_leaf_n = boost::numeric_cast<size_type>(max_leaf_n_ref);
@@ -1145,6 +1149,7 @@ public:
             ncrit = boost::numeric_cast<size_type>(ncrit_ref);
         }
 
+        // Do the actual construction.
         construct_impl(box_size, box_size_deduced, cm_it, N, max_leaf_n, ncrit);
     }
     // Convenience overload with init list instead of array.
