@@ -1050,20 +1050,17 @@ private:
             for (std::size_t j = 0; j < NDim + 1u; ++j) {
                 tbb::parallel_for(tbb::blocked_range<size_type>(0u, N, boost::numeric_cast<size_type>(data_chunking)),
                                   [this, &cm_it, j](const auto &range) {
-                                      const auto begin = cm_it[j];
-                                      auto &vec = m_parts[j];
-                                      for (auto i = range.begin(); i != range.end(); ++i) {
-                                          vec[i] = *(begin + static_cast<it_diff_t>(i));
-                                      }
+                                      std::copy(cm_it[j] + static_cast<it_diff_t>(range.begin()),
+                                                cm_it[j] + static_cast<it_diff_t>(range.end()),
+                                                m_parts[j].data() + range.begin());
                                   },
                                   tbb::simple_partitioner());
             }
             // Generate the initial m_isort data (this is just a iota).
             tbb::parallel_for(tbb::blocked_range<size_type>(0u, N, boost::numeric_cast<size_type>(data_chunking)),
                               [this](const auto &range) {
-                                  for (auto i = range.begin(); i != range.end(); ++i) {
-                                      m_isort[i] = i;
-                                  }
+                                  std::iota(m_isort.data() + range.begin(), m_isort.data() + range.end(),
+                                            range.begin());
                               },
                               tbb::simple_partitioner());
         }
@@ -2650,9 +2647,7 @@ private:
         v_ind.resize(static_cast<decltype(v_ind.size())>(nparts));
         tbb::parallel_for(tbb::blocked_range<size_type>(0u, nparts, boost::numeric_cast<size_type>(data_chunking)),
                           [&v_ind](const auto &range) {
-                              for (auto i = range.begin(); i != range.end(); ++i) {
-                                  v_ind[i] = i;
-                              }
+                              std::iota(v_ind.data() + range.begin(), v_ind.data() + range.end(), range.begin());
                           },
                           tbb::simple_partitioner());
         // Do the sorting.
