@@ -1163,6 +1163,11 @@ public:
         // Make sure other is left in a known state, otherwise we might
         // have in principle assertions failures in the destructor of other
         // in debug mode.
+        // NOTE: it is not clear if we can rely on std::vector's move ctor
+        // to clear() the moved-from object. The page on cppreference says
+        // the moved-from vector is guaranteed to be empty(), but I was not able
+        // to confirm this independently. So for now let's keep custom
+        // implementations of move semantics until this is clarified.
         other.clear();
     }
     tree &operator=(const tree &other)
