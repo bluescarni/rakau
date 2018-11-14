@@ -1160,6 +1160,36 @@ public:
         : tree(ctor_ilist_to_array(cm_it), N, std::forward<Args>(args)...)
     {
     }
+
+private:
+    template <typename Allocator>
+    static auto ctor_vecs_to_its(const std::array<std::vector<F, Allocator>, NDim + 1u> &coords)
+    {
+        std::array<decltype(coords[0].data()), NDim + 1u> retval;
+
+        const auto s = coords[0].size();
+        retval[0] = coords[0].data();
+        for (std::size_t j = 1; j < NDim + 1u; ++j) {
+            if (rakau_unlikely(coords[j].size() != s)) {
+                throw std::invalid_argument("Inconsistent sizes detected in the construction of a tree from an array "
+                                            "of vectors: the first vector has a size of "
+                                            + std::to_string(s) + ", while the vector at index " + std::to_string(j)
+                                            + " has a size of " + std::to_string(coords[j].size())
+                                            + " (all the vectors in the input array must have the same size)");
+            }
+            retval[j] = coords[j].data();
+        }
+
+        return retval;
+    }
+
+public:
+    // Convenience overload for the construction from an array of vectors of coords/masses.
+    template <typename Allocator, typename... Args>
+    explicit tree(const std::array<std::vector<F, Allocator>, NDim + 1u> &coords, Args &&... args)
+        : tree(ctor_vecs_to_its(coords), boost::numeric_cast<size_type>(coords[0].size()), std::forward<Args>(args)...)
+    {
+    }
     tree(const tree &) = default;
     tree(tree &&other) noexcept
         : m_box_size(other.m_box_size), m_box_size_deduced(other.m_box_size_deduced), m_max_leaf_n(other.m_max_leaf_n),
