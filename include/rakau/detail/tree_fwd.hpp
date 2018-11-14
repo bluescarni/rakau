@@ -43,12 +43,12 @@ inline namespace detail
 
 // Dependent false for static_assert in if constexpr.
 // http://en.cppreference.com/w/cpp/language/if#Constexpr_If
-template <typename T>
+template <typename T, typename...>
 struct dependent_false : std::false_type {
 };
 
-template <typename T>
-inline constexpr bool dependent_false_v = dependent_false<T>::value;
+template <typename T, typename... Us>
+inline constexpr bool dependent_false_v = dependent_false<T, Us...>::value;
 
 // Size type for the tree class.
 // NOTE: strictly speaking, the allocator we use in the tree may have a different
