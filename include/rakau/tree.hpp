@@ -1105,22 +1105,6 @@ private:
         build_tree();
     }
 
-private:
-    template <typename It>
-    static auto ctor_ilist_to_array(std::initializer_list<It> ilist)
-    {
-        if (ilist.size() != NDim + 1u) {
-            throw std::invalid_argument("An initializer list containing " + std::to_string(ilist.size())
-                                        + " iterators was used in the construction of a " + std::to_string(NDim)
-                                        + "-dimensional tree, but a list with " + std::to_string(NDim + 1u)
-                                        + " iterators is required instead (" + std::to_string(NDim)
-                                        + " iterators for the coordinates, 1 for the masses)");
-        }
-        std::array<It, NDim + 1u> retval;
-        std::copy(ilist.begin(), ilist.end(), retval.begin());
-        return retval;
-    }
-
 public:
     // Default constructor.
     tree() : m_box_size(0), m_box_size_deduced(false), m_max_leaf_n(default_max_leaf_n), m_ncrit(default_ncrit) {}
@@ -1152,6 +1136,24 @@ public:
         // Do the actual construction.
         construct_impl(box_size, box_size_deduced, cm_it, N, max_leaf_n, ncrit);
     }
+
+private:
+    template <typename It>
+    static auto ctor_ilist_to_array(std::initializer_list<It> ilist)
+    {
+        if (rakau_unlikely(ilist.size() != NDim + 1u)) {
+            throw std::invalid_argument("An initializer list containing " + std::to_string(ilist.size())
+                                        + " iterators was used in the construction of a " + std::to_string(NDim)
+                                        + "-dimensional tree, but a list with " + std::to_string(NDim + 1u)
+                                        + " iterators is required instead (" + std::to_string(NDim)
+                                        + " iterators for the coordinates, 1 for the masses)");
+        }
+        std::array<It, NDim + 1u> retval;
+        std::copy(ilist.begin(), ilist.end(), retval.begin());
+        return retval;
+    }
+
+public:
     // Convenience overload with init list instead of array.
     template <typename It, typename... Args>
     explicit tree(std::initializer_list<It> cm_it, const size_type &N, Args &&... args)
