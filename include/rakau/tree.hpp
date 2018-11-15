@@ -1117,17 +1117,17 @@ public:
         // Handle the box size.
         F box_size(0);
         bool box_size_deduced = true;
-        if constexpr (igor::is_provided<decltype(box_size_ref)>) {
+        if constexpr (igor::is_provided<Args...>(kwargs::box_size)) {
             box_size = boost::numeric_cast<F>(box_size_ref);
             box_size_deduced = false;
         }
 
         // Handle max_leaf_n and ncrit.
         size_type max_leaf_n = default_max_leaf_n, ncrit = default_ncrit;
-        if constexpr (igor::is_provided<decltype(max_leaf_n_ref)>) {
+        if constexpr (igor::is_provided<Args...>(kwargs::max_leaf_n)) {
             max_leaf_n = boost::numeric_cast<size_type>(max_leaf_n_ref);
         }
-        if constexpr (igor::is_provided<decltype(ncrit_ref)>) {
+        if constexpr (igor::is_provided<Args...>(kwargs::ncrit)) {
             ncrit = boost::numeric_cast<size_type>(ncrit_ref);
         }
 

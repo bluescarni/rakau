@@ -166,8 +166,24 @@ private:
     tuple_t m_nargs;
 };
 
-template <typename T>
-inline constexpr bool is_provided = !std::is_same_v<T, const not_provided_t &>;
+inline namespace detail
+{
+
+template <typename Tag, typename T>
+struct is_provided_impl : std::false_type {
+};
+
+template <typename Tag1, typename Tag2, typename T>
+struct is_provided_impl<Tag1, tagged_container<Tag2, T>> : std::is_same<Tag1, Tag2> {
+};
+
+} // namespace detail
+
+template <typename... Args, typename Tag>
+constexpr bool is_provided(const named_argument<Tag> &)
+{
+    return std::disjunction_v<is_provided_impl<Tag, uncvref_t<Args>>...>;
+}
 
 } // namespace igor
 
