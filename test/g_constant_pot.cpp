@@ -12,7 +12,6 @@
 #include "catch.hpp"
 
 #include <algorithm>
-#include <array>
 #include <initializer_list>
 #include <random>
 #include <vector>
@@ -40,27 +39,27 @@ TEST_CASE("g constant accelerations")
         auto parts = get_uniform_particles<3>(s, bsize, rng);
         octree<fp_type> t({parts.begin() + s, parts.begin() + 2u * s, parts.begin() + 3u * s, parts.begin()}, s,
                           box_size = bsize, max_leaf_n = 16, ncrit = 256);
-        std::array<std::vector<fp_type>, 1> pots;
+        std::vector<fp_type> pots;
         t.pots_u(pots, theta);
         auto pots_u_orig(pots);
         t.pots_o(pots, theta);
         auto pots_o_orig(pots);
         t.pots_u(pots, theta, fp_type(0));
-        REQUIRE(std::all_of(pots[0].begin(), pots[0].end(), [](fp_type x) { return x == fp_type(0); }));
+        REQUIRE(std::all_of(pots.begin(), pots.end(), [](fp_type x) { return x == fp_type(0); }));
         t.pots_u(pots, theta, fp_type(2));
-        REQUIRE(std::all_of(boost::make_zip_iterator(boost::make_tuple(pots[0].begin(), pots_u_orig[0].begin())),
-                            boost::make_zip_iterator(boost::make_tuple(pots[0].end(), pots_u_orig[0].end())),
+        REQUIRE(std::all_of(boost::make_zip_iterator(boost::make_tuple(pots.begin(), pots_u_orig.begin())),
+                            boost::make_zip_iterator(boost::make_tuple(pots.end(), pots_u_orig.end())),
                             [](auto t) { return boost::get<0>(t) == fp_type(2) * boost::get<1>(t); }));
         t.pots_o(pots, theta, fp_type(1) / fp_type(2));
-        REQUIRE(std::all_of(boost::make_zip_iterator(boost::make_tuple(pots[0].begin(), pots_o_orig[0].begin())),
-                            boost::make_zip_iterator(boost::make_tuple(pots[0].end(), pots_o_orig[0].end())),
+        REQUIRE(std::all_of(boost::make_zip_iterator(boost::make_tuple(pots.begin(), pots_o_orig.begin())),
+                            boost::make_zip_iterator(boost::make_tuple(pots.end(), pots_o_orig.end())),
                             [](auto t) { return boost::get<0>(t) == boost::get<1>(t) / fp_type(2); }));
         // Check the exact pots as well.
         const auto epot_u_orig = t.exact_pot_u(42);
         const auto epot_o_orig = t.exact_pot_o(42);
         const auto epot_u = t.exact_pot_u(42, fp_type(2));
         const auto epot_o = t.exact_pot_o(42, fp_type(1) / fp_type(2));
-        REQUIRE(epot_u_orig[0] == epot_u[0] / fp_type(2));
-        REQUIRE(epot_o_orig[0] == epot_o[0] * fp_type(2));
+        REQUIRE(epot_u_orig == epot_u / fp_type(2));
+        REQUIRE(epot_o_orig == epot_o * fp_type(2));
     });
 }

@@ -2434,6 +2434,15 @@ private:
         }
         acc_pot_dispatch<Ordered, Q>(out_ptrs, theta, G, eps);
     }
+    // Helper overload for a single vector. It will prepare the vector and then
+    // call the other overload. This is used for the potential-only computations.
+    template <bool Ordered, unsigned Q, typename Allocator>
+    void acc_pot_dispatch(std::vector<F, Allocator> &out, F theta, F G, F eps) const
+    {
+        static_assert(Q == 1u);
+        out.resize(boost::numeric_cast<decltype(out.size())>(m_parts[0].size()));
+        acc_pot_dispatch<Ordered, Q>(std::array{out.data()}, theta, G, eps);
+    }
     // Small helper to turn an init list into an array, in the functions for the computation
     // of the accelerations/potentials. Q indicates which quantities will be computed (accs,
     // potentials, or both).
@@ -2469,19 +2478,14 @@ public:
         accs_u(acc_pot_ilist_to_array<0>(out), theta, G, eps);
     }
     template <typename Allocator>
-    void pots_u(std::array<std::vector<F, Allocator>, 1> &out, F theta, F G = F(1), F eps = F(0)) const
+    void pots_u(std::vector<F, Allocator> &out, F theta, F G = F(1), F eps = F(0)) const
     {
         acc_pot_dispatch<false, 1>(out, theta, G, eps);
     }
     template <typename It>
-    void pots_u(const std::array<It, 1> &out, F theta, F G = F(1), F eps = F(0)) const
+    void pots_u(It out, F theta, F G = F(1), F eps = F(0)) const
     {
-        acc_pot_dispatch<false, 1>(out, theta, G, eps);
-    }
-    template <typename It>
-    void pots_u(std::initializer_list<It> out, F theta, F G = F(1), F eps = F(0)) const
-    {
-        pots_u(acc_pot_ilist_to_array<1>(out), theta, G, eps);
+        acc_pot_dispatch<false, 1>(std::array{out}, theta, G, eps);
     }
     template <typename Allocator>
     void accs_pots_u(std::array<std::vector<F, Allocator>, NDim + 1u> &out, F theta, F G = F(1), F eps = F(0)) const
@@ -2514,19 +2518,14 @@ public:
         accs_o(acc_pot_ilist_to_array<0>(out), theta, G, eps);
     }
     template <typename Allocator>
-    void pots_o(std::array<std::vector<F, Allocator>, 1> &out, F theta, F G = F(1), F eps = F(0)) const
+    void pots_o(std::vector<F, Allocator> &out, F theta, F G = F(1), F eps = F(0)) const
     {
         acc_pot_dispatch<true, 1>(out, theta, G, eps);
     }
     template <typename It>
-    void pots_o(const std::array<It, 1> &out, F theta, F G = F(1), F eps = F(0)) const
+    void pots_o(It out, F theta, F G = F(1), F eps = F(0)) const
     {
-        acc_pot_dispatch<true, 1>(out, theta, G, eps);
-    }
-    template <typename It>
-    void pots_o(std::initializer_list<It> out, F theta, F G = F(1), F eps = F(0)) const
-    {
-        pots_o(acc_pot_ilist_to_array<1>(out), theta, G, eps);
+        acc_pot_dispatch<true, 1>(std::array{out}, theta, G, eps);
     }
     template <typename Allocator>
     void accs_pots_o(std::array<std::vector<F, Allocator>, NDim + 1u> &out, F theta, F G = F(1), F eps = F(0)) const
@@ -2591,9 +2590,9 @@ public:
     {
         return exact_acc_pot_impl<false, 0>(idx, G, eps);
     }
-    std::array<F, 1> exact_pot_u(size_type idx, F G = F(1), F eps = F(0)) const
+    F exact_pot_u(size_type idx, F G = F(1), F eps = F(0)) const
     {
-        return exact_acc_pot_impl<false, 1>(idx, G, eps);
+        return exact_acc_pot_impl<false, 1>(idx, G, eps)[0];
     }
     std::array<F, NDim + 1u> exact_acc_pot_u(size_type idx, F G = F(1), F eps = F(0)) const
     {
@@ -2603,9 +2602,9 @@ public:
     {
         return exact_acc_pot_impl<true, 0>(idx, G, eps);
     }
-    std::array<F, 1> exact_pot_o(size_type idx, F G = F(1), F eps = F(0)) const
+    F exact_pot_o(size_type idx, F G = F(1), F eps = F(0)) const
     {
-        return exact_acc_pot_impl<true, 1>(idx, G, eps);
+        return exact_acc_pot_impl<true, 1>(idx, G, eps)[0];
     }
     std::array<F, NDim + 1u> exact_acc_pot_o(size_type idx, F G = F(1), F eps = F(0)) const
     {

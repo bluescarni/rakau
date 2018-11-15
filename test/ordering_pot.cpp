@@ -12,7 +12,6 @@
 #include "catch.hpp"
 
 #include <algorithm>
-#include <array>
 #include <cmath>
 #include <initializer_list>
 #include <limits>
@@ -48,7 +47,7 @@ TEST_CASE("potentials ordering")
         std::uniform_int_distribution<size_type> idist(0, s - 1u);
         std::generate(track_idx.begin(), track_idx.end(), [&idist]() { return idist(rng); });
         // Get the exact potentials on the particles.
-        std::vector<std::array<fp_type, 1>> exact_pots;
+        std::vector<fp_type> exact_pots;
         for (auto idx : track_idx) {
             exact_pots.emplace_back(t.exact_pot_o(idx));
         }
@@ -70,12 +69,12 @@ TEST_CASE("potentials ordering")
             }
         });
         // Now let's get the tree-calculated potentials.
-        std::array<std::vector<fp_type>, 1> t_pots;
+        std::vector<fp_type> t_pots;
         t.pots_o(t_pots, theta);
         // Let's compare the potentials.
         for (size_type i = 0; i < track_idx.size(); ++i) {
-            const auto epot = exact_pots[i][0];
-            const auto tpot = t_pots[0][track_idx[i]];
+            const auto epot = exact_pots[i];
+            const auto tpot = t_pots[track_idx[i]];
             const auto rdiff = std::abs((epot - tpot) / epot);
             std::cout << "rdiff=" << rdiff << '\n';
             if (std::numeric_limits<fp_type>::is_iec559) {
@@ -103,11 +102,11 @@ TEST_CASE("potentials ordering")
                 r[2][i] = r0 * std::cos(th0);
             }
         });
-        // Try the init list overload as well.
-        t.pots_o({t_pots[0].begin()}, theta);
+        // Try the other overload as well.
+        t.pots_o(t_pots.begin(), theta);
         for (size_type i = 0; i < track_idx.size(); ++i) {
-            const auto epot = exact_pots[i][0];
-            const auto tpot = t_pots[0][track_idx[i]];
+            const auto epot = exact_pots[i];
+            const auto tpot = t_pots[track_idx[i]];
             const auto rdiff = std::abs((epot - tpot) / epot);
             std::cout << "rdiff=" << rdiff << '\n';
             if (std::numeric_limits<fp_type>::is_iec559) {
@@ -130,8 +129,8 @@ TEST_CASE("potentials ordering")
         });
         t.pots_o(t_pots, theta);
         for (size_type i = 0; i < track_idx.size(); ++i) {
-            const auto epot = exact_pots[i][0];
-            const auto tpot = t_pots[0][track_idx[i]];
+            const auto epot = exact_pots[i];
+            const auto tpot = t_pots[track_idx[i]];
             const auto rdiff = std::abs((epot - tpot) / epot);
             std::cout << "rdiff=" << rdiff << '\n';
             if (std::numeric_limits<fp_type>::is_iec559) {
@@ -158,8 +157,8 @@ TEST_CASE("potentials ordering")
         t.pots_o(t_pots, theta);
         // Verify they are close to the original ones.
         for (size_type i = 0; i < track_idx.size(); ++i) {
-            const auto epot = exact_pots[i][0];
-            const auto rdiff = std::abs((epot - t_pots[0][track_idx[i]]) / epot);
+            const auto epot = exact_pots[i];
+            const auto rdiff = std::abs((epot - t_pots[track_idx[i]]) / epot);
             if (std::numeric_limits<fp_type>::is_iec559) {
                 if (std::is_same_v<fp_type, double>) {
                     REQUIRE(rdiff <= fp_type(2E-11));

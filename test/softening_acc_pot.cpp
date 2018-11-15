@@ -71,7 +71,7 @@ TEST_CASE("accelerations/potentials softening ordered")
                             x_diff.emplace_back(std::abs((eacc[0] - accpots[0][i]) / eacc[0]));
                             y_diff.emplace_back(std::abs((eacc[1] - accpots[1][i]) / eacc[1]));
                             z_diff.emplace_back(std::abs((eacc[2] - accpots[2][i]) / eacc[2]));
-                            pot_diff.emplace_back(std::abs((epot[0] - accpots[3][i]) / epot[0]));
+                            pot_diff.emplace_back(std::abs((epot - accpots[3][i]) / epot));
                         }
                         std::cout << "Results for size=" << s << ", max_leaf_n=" << max_leaf_n << ", ncrit=" << ncrit
                                   << ", soft=" << eps << ".\n=========\n";
@@ -186,7 +186,7 @@ TEST_CASE("accelerations/potentials softening unordered")
                             x_diff.emplace_back(std::abs((eacc[0] - accpots[0][i]) / eacc[0]));
                             y_diff.emplace_back(std::abs((eacc[1] - accpots[1][i]) / eacc[1]));
                             z_diff.emplace_back(std::abs((eacc[2] - accpots[2][i]) / eacc[2]));
-                            pot_diff.emplace_back(std::abs((epot[0] - accpots[3][i]) / epot[0]));
+                            pot_diff.emplace_back(std::abs((epot - accpots[3][i]) / epot));
                         }
                         std::cout << "Results for size=" << s << ", max_leaf_n=" << max_leaf_n << ", ncrit=" << ncrit
                                   << ", soft=" << eps << ".\n=========\n";

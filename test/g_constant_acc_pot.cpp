@@ -96,10 +96,10 @@ TEST_CASE("g constant accelerations/potentials")
         REQUIRE(eacc_u_orig[0] == eacc_u[0] / fp_type(2));
         REQUIRE(eacc_u_orig[1] == eacc_u[1] / fp_type(2));
         REQUIRE(eacc_u_orig[2] == eacc_u[2] / fp_type(2));
-        REQUIRE(epot_u_orig[0] == epot_u[0] / fp_type(2));
+        REQUIRE(epot_u_orig == epot_u / fp_type(2));
         REQUIRE(eacc_o_orig[0] == eacc_o[0] * fp_type(2));
         REQUIRE(eacc_o_orig[1] == eacc_o[1] * fp_type(2));
         REQUIRE(eacc_o_orig[2] == eacc_o[2] * fp_type(2));
-        REQUIRE(epot_o_orig[0] == epot_o[0] * fp_type(2));
+        REQUIRE(epot_o_orig == epot_o * fp_type(2));
     });
 }
