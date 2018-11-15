@@ -98,7 +98,7 @@ int main(int argc, char **argv)
     std::cout << t << '\n';
     std::vector<float> pots;
     t.pots_u(pots, 0.75f);
-    std::cout << pots[t.ord_ind()[idx]] << '\n';
-    auto epot = t.exact_pot_u(t.ord_ind()[idx]);
+    std::cout << pots[t.rev_perm()[idx]] << '\n';
+    auto epot = t.exact_pot_u(t.rev_perm()[idx]);
     std::cout << epot << '\n';
 }

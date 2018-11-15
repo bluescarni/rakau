@@ -898,20 +898,20 @@ private:
             }
         }
     }
-    // Small helper to determine m_ord_ind based on the indirect sorting vector m_isort.
+    // Small helper to determine m_rev_perm based on the indirect sorting vector m_perm.
     // This is used when (re)building the tree.
-    void isort_to_ord_ind()
+    void perm_to_rev_perm()
     {
-        // NOTE: it's *very* important here that we read/write only to/from m_isort and m_ord_ind.
+        // NOTE: it's *very* important here that we read/write only to/from m_perm and m_rev_perm.
         // This function is often run in parallel with other functions that touch other members
         // of the tree, and if we try to access those members here we'll end up with data races.
-        assert(m_isort.size() == m_ord_ind.size());
-        tbb::parallel_for(tbb::blocked_range<size_type>(0u, static_cast<size_type>(m_isort.size())),
+        assert(m_perm.size() == m_rev_perm.size());
+        tbb::parallel_for(tbb::blocked_range<size_type>(0u, static_cast<size_type>(m_perm.size())),
                           [this](const auto &range) {
                               for (auto i = range.begin(); i != range.end(); ++i) {
-                                  assert(i < m_isort.size());
-                                  assert(m_isort[i] < m_ord_ind.size());
-                                  m_ord_ind[m_isort[i]] = i;
+                                  assert(i < m_perm.size());
+                                  assert(m_perm[i] < m_rev_perm.size());
+                                  m_rev_perm[m_perm[i]] = i;
                               }
                           });
     }
@@ -1033,8 +1033,8 @@ private:
         // NOTE: these ensure that, from now on, we can just cast
         // freely between the size types of the masses/coords and codes/indices vectors.
         m_codes.resize(boost::numeric_cast<decltype(m_codes.size())>(N));
-        m_isort.resize(boost::numeric_cast<decltype(m_isort.size())>(N));
-        m_ord_ind.resize(boost::numeric_cast<decltype(m_ord_ind.size())>(N));
+        m_perm.resize(boost::numeric_cast<decltype(m_perm.size())>(N));
+        m_rev_perm.resize(boost::numeric_cast<decltype(m_rev_perm.size())>(N));
         // Deduce the box size, if needed.
         if (m_box_size_deduced) {
             // NOTE: this function works ok if N == 0.
@@ -1055,11 +1055,10 @@ private:
                                   },
                                   tbb::simple_partitioner());
             }
-            // Generate the initial m_isort data (this is just a iota).
+            // Generate the initial m_perm data (this is just a iota).
             tbb::parallel_for(tbb::blocked_range<size_type>(0u, N, boost::numeric_cast<size_type>(data_chunking)),
                               [this](const auto &range) {
-                                  std::iota(m_isort.data() + range.begin(), m_isort.data() + range.end(),
-                                            range.begin());
+                                  std::iota(m_perm.data() + range.begin(), m_perm.data() + range.end(), range.begin());
                               },
                               tbb::simple_partitioner());
         }
@@ -1077,8 +1076,8 @@ private:
                 }
             });
         }
-        // Do the sorting of m_isort.
-        indirect_code_sort(m_isort.begin(), m_isort.end());
+        // Do the sorting of m_perm.
+        indirect_code_sort(m_perm.begin(), m_perm.end());
         {
             // Apply the permutation to the data members.
             // These steps can be done in parallel.
@@ -1088,15 +1087,15 @@ private:
             simple_timer st_p("permute");
             tbb::task_group tg;
             tg.run([this]() {
-                apply_isort(m_codes, m_isort);
+                apply_isort(m_codes, m_perm);
                 // Make sure the sort worked as intended.
                 assert(std::is_sorted(m_codes.begin(), m_codes.end()));
             });
             for (std::size_t j = 0; j < NDim + 1u; ++j) {
-                tg.run([this, j]() { apply_isort(m_parts[j], m_isort); });
+                tg.run([this, j]() { apply_isort(m_parts[j], m_perm); });
             }
             // Establish the indices for ordered iteration.
-            tg.run([this]() { isort_to_ord_ind(); });
+            tg.run([this]() { perm_to_rev_perm(); });
             tg.wait();
         }
         // Now let's proceed to the tree construction.
@@ -1193,7 +1192,7 @@ public:
     tree(tree &&other) noexcept
         : m_box_size(other.m_box_size), m_box_size_deduced(other.m_box_size_deduced), m_max_leaf_n(other.m_max_leaf_n),
           m_ncrit(other.m_ncrit), m_parts(std::move(other.m_parts)), m_codes(std::move(other.m_codes)),
-          m_isort(std::move(other.m_isort)), m_ord_ind(std::move(other.m_ord_ind)), m_tree(std::move(other.m_tree)),
+          m_perm(std::move(other.m_perm)), m_rev_perm(std::move(other.m_rev_perm)), m_tree(std::move(other.m_tree)),
           m_crit_nodes(std::move(other.m_crit_nodes))
     {
         // Make sure other is left in a known state, otherwise we might
@@ -1216,8 +1215,8 @@ public:
                 m_ncrit = other.m_ncrit;
                 m_parts = other.m_parts;
                 m_codes = other.m_codes;
-                m_isort = other.m_isort;
-                m_ord_ind = other.m_ord_ind;
+                m_perm = other.m_perm;
+                m_rev_perm = other.m_rev_perm;
                 m_tree = other.m_tree;
                 m_crit_nodes = other.m_crit_nodes;
             }
@@ -1239,8 +1238,8 @@ public:
             m_ncrit = other.m_ncrit;
             m_parts = std::move(other.m_parts);
             m_codes = std::move(other.m_codes);
-            m_isort = std::move(other.m_isort);
-            m_ord_ind = std::move(other.m_ord_ind);
+            m_perm = std::move(other.m_perm);
+            m_rev_perm = std::move(other.m_rev_perm);
             m_tree = std::move(other.m_tree);
             m_crit_nodes = std::move(other.m_crit_nodes);
             // Make sure other is left in an empty state, otherwise we might
@@ -1262,9 +1261,9 @@ public:
         assert(m_parts[0].size() == m_codes.size());
         // Codes are sorted.
         assert(std::is_sorted(m_codes.begin(), m_codes.end()));
-        // The size of m_isort and m_ord_ind is the number of particles.
-        assert(m_parts[0].size() == m_isort.size());
-        assert(m_parts[0].size() == m_ord_ind.size());
+        // The size of m_perm and m_rev_perm is the number of particles.
+        assert(m_parts[0].size() == m_perm.size());
+        assert(m_parts[0].size() == m_rev_perm.size());
         // All coordinates must fit in the box, and they need to correspond
         // to the correct Morton code.
         std::array<UInt, NDim> tmp_dcoord;
@@ -1277,14 +1276,14 @@ public:
             disc_coords(tmp_dcoord, i);
             assert(m_codes[i] == me(tmp_dcoord.data()));
         }
-        // m_ord_ind and m_isort are consistent with each other.
-        for (decltype(m_isort.size()) i = 0; i < m_isort.size(); ++i) {
-            assert(m_isort[i] < m_ord_ind.size());
-            assert(m_ord_ind[m_isort[i]] == i);
+        // m_rev_perm and m_perm are consistent with each other.
+        for (decltype(m_perm.size()) i = 0; i < m_perm.size(); ++i) {
+            assert(m_perm[i] < m_rev_perm.size());
+            assert(m_rev_perm[m_perm[i]] == i);
         }
-        // m_isort does not contain duplicates.
-        std::sort(m_isort.begin(), m_isort.end());
-        assert(std::unique(m_isort.begin(), m_isort.end()) == m_isort.end());
+        // m_perm does not contain duplicates.
+        std::sort(m_perm.begin(), m_perm.end());
+        assert(std::unique(m_perm.begin(), m_perm.end()) == m_perm.end());
 #endif
     }
     // Reset the state of the tree to a known one, i.e., a def-cted tree.
@@ -1298,8 +1297,8 @@ public:
             p.clear();
         }
         m_codes.clear();
-        m_isort.clear();
-        m_ord_ind.clear();
+        m_perm.clear();
+        m_rev_perm.clear();
         m_tree.clear();
         m_crit_nodes.clear();
     }
@@ -2410,10 +2409,10 @@ private:
                                           + ") is too large, and it results in an overflow condition when computing "
                                             "the accelerations/potentials");
             }
-            using it_t = decltype(boost::make_permutation_iterator(out[0], m_isort.begin()));
+            using it_t = decltype(boost::make_permutation_iterator(out[0], m_perm.begin()));
             std::array<it_t, nvecs_res<Q>> out_pits;
             for (std::size_t j = 0; j < nvecs_res<Q>; ++j) {
-                out_pits[j] = boost::make_permutation_iterator(out[j], m_isort.begin());
+                out_pits[j] = boost::make_permutation_iterator(out[j], m_perm.begin());
             }
             // NOTE: we are checking in the acc_pot_impl() function that we can index into
             // the permuted iterators without overflows (see the use of boost::numeric_cast()).
@@ -2556,7 +2555,7 @@ private:
         const auto size = m_parts[0].size();
         std::array<F, nvecs_res<Q>> retval{};
         std::array<F, NDim> diffs;
-        const auto idx = Ordered ? m_ord_ind[orig_idx] : orig_idx;
+        const auto idx = Ordered ? m_rev_perm[orig_idx] : orig_idx;
         for (size_type i = 0; i < size; ++i) {
             if (i == idx) {
                 continue;
@@ -2617,7 +2616,7 @@ private:
     template <typename Tr>
     static auto ord_p_its_impl(Tr &tr)
     {
-        using it_t = decltype(boost::make_permutation_iterator(tr.m_parts[0].data(), tr.m_ord_ind.begin()));
+        using it_t = decltype(boost::make_permutation_iterator(tr.m_parts[0].data(), tr.m_rev_perm.begin()));
         using diff_t = typename std::iterator_traits<it_t>::difference_type;
         using udiff_t = std::make_unsigned_t<diff_t>;
         // Ensure that the iterators we return can index up to the particle number.
@@ -2628,7 +2627,7 @@ private:
         }
         std::array<it_t, NDim + 1u> retval;
         for (std::size_t j = 0; j < NDim + 1u; ++j) {
-            retval[j] = boost::make_permutation_iterator(tr.m_parts[j].data(), tr.m_ord_ind.begin());
+            retval[j] = boost::make_permutation_iterator(tr.m_parts[j].data(), tr.m_rev_perm.begin());
         }
         return retval;
     }
@@ -2652,9 +2651,9 @@ public:
     {
         return ord_p_its_impl(*this);
     }
-    const auto &ord_ind() const
+    const auto &rev_perm() const
     {
-        return m_ord_ind;
+        return m_rev_perm;
     }
 
 private:
@@ -2707,11 +2706,11 @@ private:
             }
             tg.run([this, &v_ind]() {
                 // Apply the new indirect sorting to the original one.
-                apply_isort(m_isort, v_ind);
+                apply_isort(m_perm, v_ind);
                 // Establish the indices for ordered iteration (in the original order).
-                // NOTE: this goes in the same task as we need m_isort to be sorted
+                // NOTE: this goes in the same task as we need m_perm to be sorted
                 // before calling this function.
-                isort_to_ord_ind();
+                perm_to_rev_perm();
             });
             tg.wait();
         }
@@ -2789,20 +2788,20 @@ private:
     std::vector<UInt, di_aligned_allocator<UInt>> m_codes;
     // The indirect sorting vector. It establishes how to re-order the
     // original particle sequence so that the particles' Morton codes are
-    // sorted in ascending order. E.g., if m_isort is [0, 3, 1, 2, ...],
+    // sorted in ascending order. E.g., if m_perm is [0, 3, 1, 2, ...],
     // then the first particle in Morton order is also the first particle in
     // the original order, the second particle in the Morton order is the
     // particle at index 3 in the original order, and so on.
-    std::vector<size_type, di_aligned_allocator<size_type>> m_isort;
+    std::vector<size_type, di_aligned_allocator<size_type>> m_perm;
     // Indices vector to iterate over the particles' data in the original order.
     // It establishes how to re-order the Morton order to recover the original
-    // particle order. This is the dual of m_isort, and it's always possible to
-    // compute one given the other. E.g., if m_isort is [0, 3, 1, 2, ...] then
-    // m_ord_ind will be [0, 2, 3, 1, ...], meaning that the first particle in
+    // particle order. This is the dual of m_perm, and it's always possible to
+    // compute one given the other. E.g., if m_perm is [0, 3, 1, 2, ...] then
+    // m_rev_perm will be [0, 2, 3, 1, ...], meaning that the first particle in
     // the original order is also the first particle in the Morton order, the second
     // particle in the original order is the particle at index 2 in the Morton order,
     // and so on.
-    std::vector<size_type, di_aligned_allocator<size_type>> m_ord_ind;
+    std::vector<size_type, di_aligned_allocator<size_type>> m_rev_perm;
     // The tree structure.
     tree_type m_tree;
     // The list of critical nodes.
