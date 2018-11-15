@@ -21,7 +21,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
-#include <deque>
 #include <initializer_list>
 #include <iostream>
 #include <iterator>
