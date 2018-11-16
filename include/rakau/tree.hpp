@@ -1108,7 +1108,7 @@ public:
     explicit tree(const std::array<It, NDim + 1u> &cm_it, const size_type &N, Args &&... args)
     {
         // Parse the kwargs.
-        igor::parser p{args...};
+        ::igor::parser p{args...};
 
         // Handle the box size.
         F box_size(0);

@@ -34,7 +34,7 @@ inline namespace detail
 {
 
 template <typename T>
-using uncvref_t = std::remove_cv_t<std::remove_reference_t<T>>;
+using uncvref_t = ::std::remove_cv_t<::std::remove_reference_t<T>>;
 
 template <typename Tag, typename T>
 struct tagged_container {
@@ -47,30 +47,30 @@ struct tagged_container {
 template <typename Tag>
 struct named_argument {
     using tag_type = Tag;
-    template <typename T, std::enable_if_t<!std::is_same_v<named_argument, uncvref_t<T>>, int> = 0>
+    template <typename T, ::std::enable_if_t<!::std::is_same_v<named_argument, uncvref_t<T>>, int> = 0>
     auto operator=(T &&x) const
     {
-        return tagged_container<Tag, T &&>{std::forward<T>(x)};
+        return tagged_container<Tag, T &&>{::std::forward<T>(x)};
     }
     template <typename T>
-    auto operator=(const std::initializer_list<T> &l) const
+    auto operator=(const ::std::initializer_list<T> &l) const
     {
-        return tagged_container<Tag, const std::initializer_list<T> &>{l};
+        return tagged_container<Tag, const ::std::initializer_list<T> &>{l};
     }
     template <typename T>
-    auto operator=(std::initializer_list<T> &l) const
+    auto operator=(::std::initializer_list<T> &l) const
     {
-        return tagged_container<Tag, std::initializer_list<T> &>{l};
+        return tagged_container<Tag, ::std::initializer_list<T> &>{l};
     }
     template <typename T>
-    auto operator=(std::initializer_list<T> &&l) const
+    auto operator=(::std::initializer_list<T> &&l) const
     {
-        return tagged_container<Tag, std::initializer_list<T> &&>{std::move(l)};
+        return tagged_container<Tag, ::std::initializer_list<T> &&>{::std::move(l)};
     }
     template <typename T>
-    auto operator=(const std::initializer_list<T> &&l) const
+    auto operator=(const ::std::initializer_list<T> &&l) const
     {
-        return tagged_container<Tag, const std::initializer_list<T> &&>{std::move(l)};
+        return tagged_container<Tag, const ::std::initializer_list<T> &&>{::std::move(l)};
     }
 };
 
@@ -83,22 +83,22 @@ struct not_provided_t {
 inline constexpr auto not_provided = not_provided_t{};
 
 template <typename Tag, typename T>
-struct is_provided_impl : std::false_type {
+struct is_provided_impl : ::std::false_type {
 };
 
 template <typename Tag1, typename Tag2, typename T>
-struct is_provided_impl<Tag1, tagged_container<Tag2, T>> : std::is_same<Tag1, Tag2> {
+struct is_provided_impl<Tag1, tagged_container<Tag2, T>> : ::std::is_same<Tag1, Tag2> {
 };
 
 inline auto build_parser_tuple()
 {
-    return std::make_tuple();
+    return ::std::make_tuple();
 }
 
 template <typename Tag, typename T, typename... Args>
 inline auto build_parser_tuple(const tagged_container<Tag, T> &arg0, const Args &... args)
 {
-    return std::tuple_cat(std::forward_as_tuple(arg0), build_parser_tuple(args...));
+    return ::std::tuple_cat(::std::forward_as_tuple(arg0), build_parser_tuple(args...));
 }
 
 template <typename Arg0, typename... Args>
@@ -112,23 +112,23 @@ inline auto build_parser_tuple(const Arg0 &, const Args &... args)
 template <typename... ParseArgs>
 class parser
 {
-    using tuple_t = decltype(build_parser_tuple(std::declval<const ParseArgs &>()...));
+    using tuple_t = decltype(build_parser_tuple(::std::declval<const ParseArgs &>()...));
 
 public:
     explicit parser(const ParseArgs &... parse_args) : m_nargs(build_parser_tuple(parse_args...)) {}
 
 private:
-    template <std::size_t I, typename T>
+    template <::std::size_t I, typename T>
     decltype(auto) fetch_one_impl(const T &narg) const
     {
-        if constexpr (I == std::tuple_size_v<tuple_t>) {
+        if constexpr (I == ::std::tuple_size_v<tuple_t>) {
             return static_cast<const not_provided_t &>(not_provided);
-        } else if constexpr (std::is_same_v<typename uncvref_t<std::tuple_element_t<I, tuple_t>>::tag_type,
-                                            typename T::tag_type>) {
-            if constexpr (std::is_rvalue_reference_v<decltype(std::get<I>(m_nargs).value)>) {
-                return std::move(std::get<I>(m_nargs).value);
+        } else if constexpr (::std::is_same_v<typename uncvref_t<::std::tuple_element_t<I, tuple_t>>::tag_type,
+                                              typename T::tag_type>) {
+            if constexpr (::std::is_rvalue_reference_v<decltype(::std::get<I>(m_nargs).value)>) {
+                return ::std::move(::std::get<I>(m_nargs).value);
             } else {
-                return std::get<I>(m_nargs).value;
+                return ::std::get<I>(m_nargs).value;
             }
         } else {
             return fetch_one_impl<I + 1u>(narg);
@@ -149,13 +149,13 @@ public:
         } else if constexpr (sizeof...(T) == 1u) {
             return fetch_one(nargs...);
         } else {
-            return std::forward_as_tuple(fetch_one(nargs)...);
+            return ::std::forward_as_tuple(fetch_one(nargs)...);
         }
     }
     template <typename Tag>
     static constexpr bool is_provided(const named_argument<Tag> &)
     {
-        return std::disjunction_v<is_provided_impl<Tag, uncvref_t<ParseArgs>>...>;
+        return ::std::disjunction_v<is_provided_impl<Tag, uncvref_t<ParseArgs>>...>;
     }
 
 private:
@@ -167,6 +167,6 @@ private:
 #define IGOR_MAKE_KWARG(name)                                                                                          \
     struct name##_tag {                                                                                                \
     };                                                                                                                 \
-    inline constexpr auto name = igor::named_argument<name##_tag> {}
+    inline constexpr auto name = ::igor::named_argument<name##_tag> {}
 
 #endif
