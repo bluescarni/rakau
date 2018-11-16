@@ -36,8 +36,9 @@ TEST_CASE("update positions")
         constexpr auto s = 10000u;
         auto parts = get_uniform_particles<3>(s, bsize, rng);
         octree<fp_type> t({parts.begin() + s, parts.begin() + 2u * s, parts.begin() + 3u * s, parts.begin()}, s,
-                          box_size = bsize, max_leaf_n = 16, ncrit = 256),
+                          box_size = bsize),
             t2(t);
+        REQUIRE(t.perm() == t.last_perm());
         // Select randomly some particle indices to track.
         using size_type = typename decltype(t)::size_type;
         std::vector<size_type> track_idx(100);
