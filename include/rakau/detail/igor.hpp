@@ -77,54 +77,45 @@ struct named_argument {
 inline namespace detail
 {
 
-template <typename T>
-struct is_tagged_container : std::false_type {
-};
-
-template <typename Tag, typename T>
-struct is_tagged_container<tagged_container<Tag, T>> : std::true_type {
-};
-
-template <typename T>
-struct is_named_argument : std::false_type {
-};
-
-template <typename Tag>
-struct is_named_argument<named_argument<Tag>> : std::true_type {
-};
-
 struct not_provided_t {
 };
 
 inline constexpr auto not_provided = not_provided_t{};
+
+template <typename Tag, typename T>
+struct is_provided_impl : std::false_type {
+};
+
+template <typename Tag1, typename Tag2, typename T>
+struct is_provided_impl<Tag1, tagged_container<Tag2, T>> : std::is_same<Tag1, Tag2> {
+};
+
+inline auto build_parser_tuple()
+{
+    return std::make_tuple();
+}
+
+template <typename Tag, typename T, typename... Args>
+inline auto build_parser_tuple(const tagged_container<Tag, T> &arg0, const Args &... args)
+{
+    return std::tuple_cat(std::forward_as_tuple(arg0), build_parser_tuple(args...));
+}
+
+template <typename Arg0, typename... Args>
+inline auto build_parser_tuple(const Arg0 &, const Args &... args)
+{
+    return build_parser_tuple(args...);
+}
 
 } // namespace detail
 
 template <typename... ParseArgs>
 class parser
 {
-    static auto build_container_tuple_impl()
-    {
-        return std::make_tuple();
-    }
-    template <typename Arg0, typename... Args>
-    static auto build_container_tuple_impl(const Arg0 &arg0, const Args &... args)
-    {
-        if constexpr (is_tagged_container<Arg0>::value) {
-            return std::tuple_cat(std::forward_as_tuple(arg0), build_container_tuple_impl(args...));
-        } else {
-            return build_container_tuple_impl(args...);
-        }
-    }
-    template <typename... Args>
-    static auto build_container_tuple(const Args &... args)
-    {
-        return build_container_tuple_impl(args...);
-    }
-    using tuple_t = decltype(build_container_tuple(std::declval<const ParseArgs &>()...));
+    using tuple_t = decltype(build_parser_tuple(std::declval<const ParseArgs &>()...));
 
 public:
-    explicit parser(const ParseArgs &... parse_args) : m_nargs(build_container_tuple(parse_args...)) {}
+    explicit parser(const ParseArgs &... parse_args) : m_nargs(build_parser_tuple(parse_args...)) {}
 
 private:
     template <std::size_t I, typename T>
@@ -161,29 +152,15 @@ public:
             return std::forward_as_tuple(fetch_one(nargs)...);
         }
     }
+    template <typename Tag>
+    static constexpr bool is_provided(const named_argument<Tag> &)
+    {
+        return std::disjunction_v<is_provided_impl<Tag, uncvref_t<ParseArgs>>...>;
+    }
 
 private:
     tuple_t m_nargs;
 };
-
-inline namespace detail
-{
-
-template <typename Tag, typename T>
-struct is_provided_impl : std::false_type {
-};
-
-template <typename Tag1, typename Tag2, typename T>
-struct is_provided_impl<Tag1, tagged_container<Tag2, T>> : std::is_same<Tag1, Tag2> {
-};
-
-} // namespace detail
-
-template <typename... Args, typename Tag>
-constexpr bool is_provided(const named_argument<Tag> &)
-{
-    return std::disjunction_v<is_provided_impl<Tag, uncvref_t<Args>>...>;
-}
 
 } // namespace igor
 

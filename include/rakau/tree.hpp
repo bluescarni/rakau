@@ -1112,23 +1112,22 @@ public:
     {
         // Parse the kwargs.
         igor::parser p{args...};
-        auto [box_size_ref, max_leaf_n_ref, ncrit_ref] = p(kwargs::box_size, kwargs::max_leaf_n, kwargs::ncrit);
 
         // Handle the box size.
         F box_size(0);
         bool box_size_deduced = true;
-        if constexpr (igor::is_provided<Args...>(kwargs::box_size)) {
-            box_size = boost::numeric_cast<F>(box_size_ref);
+        if constexpr (p.is_provided(kwargs::box_size)) {
+            box_size = boost::numeric_cast<F>(p(kwargs::box_size));
             box_size_deduced = false;
         }
 
         // Handle max_leaf_n and ncrit.
         size_type max_leaf_n = default_max_leaf_n, ncrit = default_ncrit;
-        if constexpr (igor::is_provided<Args...>(kwargs::max_leaf_n)) {
-            max_leaf_n = boost::numeric_cast<size_type>(max_leaf_n_ref);
+        if constexpr (p.is_provided(kwargs::max_leaf_n)) {
+            max_leaf_n = boost::numeric_cast<size_type>(p(kwargs::max_leaf_n));
         }
-        if constexpr (igor::is_provided<Args...>(kwargs::ncrit)) {
-            ncrit = boost::numeric_cast<size_type>(ncrit_ref);
+        if constexpr (p.is_provided(kwargs::ncrit)) {
+            ncrit = boost::numeric_cast<size_type>(p(kwargs::ncrit));
         }
 
         // Do the actual construction.
