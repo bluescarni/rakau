@@ -39,8 +39,8 @@ int main(int argc, char **argv)
     std::cout << t << '\n';
     std::array<std::vector<float>, 3> accs;
     t.accs_u(accs, theta);
-    std::cout << accs[0][t.rev_perm()[idx]] << ", " << accs[1][t.rev_perm()[idx]] << ", " << accs[2][t.rev_perm()[idx]]
+    std::cout << accs[0][t.inv_perm()[idx]] << ", " << accs[1][t.inv_perm()[idx]] << ", " << accs[2][t.inv_perm()[idx]]
               << '\n';
-    auto eacc = t.exact_acc_u(t.rev_perm()[idx]);
+    auto eacc = t.exact_acc_u(t.inv_perm()[idx]);
     std::cout << eacc[0] << ", " << eacc[1] << ", " << eacc[2] << '\n';
 }

@@ -895,20 +895,20 @@ private:
             }
         }
     }
-    // Small helper to determine m_rev_perm based on the indirect sorting vector m_perm.
+    // Small helper to determine m_inv_perm based on the indirect sorting vector m_perm.
     // This is used when (re)building the tree.
-    void perm_to_rev_perm()
+    void perm_to_inv_perm()
     {
-        // NOTE: it's *very* important here that we read/write only to/from m_perm and m_rev_perm.
+        // NOTE: it's *very* important here that we read/write only to/from m_perm and m_inv_perm.
         // This function is often run in parallel with other functions that touch other members
         // of the tree, and if we try to access those members here we'll end up with data races.
-        assert(m_perm.size() == m_rev_perm.size());
+        assert(m_perm.size() == m_inv_perm.size());
         tbb::parallel_for(tbb::blocked_range<size_type>(0u, static_cast<size_type>(m_perm.size())),
                           [this](const auto &range) {
                               for (auto i = range.begin(); i != range.end(); ++i) {
                                   assert(i < m_perm.size());
-                                  assert(m_perm[i] < m_rev_perm.size());
-                                  m_rev_perm[m_perm[i]] = i;
+                                  assert(m_perm[i] < m_inv_perm.size());
+                                  m_inv_perm[m_perm[i]] = i;
                               }
                           });
     }
@@ -1031,7 +1031,7 @@ private:
         // freely between the size types of the masses/coords and codes/indices vectors.
         m_codes.resize(boost::numeric_cast<decltype(m_codes.size())>(N));
         m_perm.resize(boost::numeric_cast<decltype(m_perm.size())>(N));
-        m_rev_perm.resize(boost::numeric_cast<decltype(m_rev_perm.size())>(N));
+        m_inv_perm.resize(boost::numeric_cast<decltype(m_inv_perm.size())>(N));
         // Deduce the box size, if needed.
         if (m_box_size_deduced) {
             // NOTE: this function works ok if N == 0.
@@ -1092,7 +1092,7 @@ private:
                 tg.run([this, j]() { apply_isort(m_parts[j], m_perm); });
             }
             // Establish the indices for ordered iteration.
-            tg.run([this]() { perm_to_rev_perm(); });
+            tg.run([this]() { perm_to_inv_perm(); });
             tg.wait();
         }
         // Now let's proceed to the tree construction.
@@ -1188,7 +1188,7 @@ public:
     tree(tree &&other) noexcept
         : m_box_size(other.m_box_size), m_box_size_deduced(other.m_box_size_deduced), m_max_leaf_n(other.m_max_leaf_n),
           m_ncrit(other.m_ncrit), m_parts(std::move(other.m_parts)), m_codes(std::move(other.m_codes)),
-          m_perm(std::move(other.m_perm)), m_rev_perm(std::move(other.m_rev_perm)), m_tree(std::move(other.m_tree)),
+          m_perm(std::move(other.m_perm)), m_inv_perm(std::move(other.m_inv_perm)), m_tree(std::move(other.m_tree)),
           m_crit_nodes(std::move(other.m_crit_nodes))
     {
         // Make sure other is left in a known state, otherwise we might
@@ -1212,7 +1212,7 @@ public:
                 m_parts = other.m_parts;
                 m_codes = other.m_codes;
                 m_perm = other.m_perm;
-                m_rev_perm = other.m_rev_perm;
+                m_inv_perm = other.m_inv_perm;
                 m_tree = other.m_tree;
                 m_crit_nodes = other.m_crit_nodes;
             }
@@ -1235,7 +1235,7 @@ public:
             m_parts = std::move(other.m_parts);
             m_codes = std::move(other.m_codes);
             m_perm = std::move(other.m_perm);
-            m_rev_perm = std::move(other.m_rev_perm);
+            m_inv_perm = std::move(other.m_inv_perm);
             m_tree = std::move(other.m_tree);
             m_crit_nodes = std::move(other.m_crit_nodes);
             // Make sure other is left in an empty state, otherwise we might
@@ -1257,9 +1257,9 @@ public:
         assert(m_parts[0].size() == m_codes.size());
         // Codes are sorted.
         assert(std::is_sorted(m_codes.begin(), m_codes.end()));
-        // The size of m_perm and m_rev_perm is the number of particles.
+        // The size of m_perm and m_inv_perm is the number of particles.
         assert(m_parts[0].size() == m_perm.size());
-        assert(m_parts[0].size() == m_rev_perm.size());
+        assert(m_parts[0].size() == m_inv_perm.size());
         // All coordinates must fit in the box, and they need to correspond
         // to the correct Morton code.
         std::array<UInt, NDim> tmp_dcoord;
@@ -1272,10 +1272,10 @@ public:
             disc_coords(tmp_dcoord, i);
             assert(m_codes[i] == me(tmp_dcoord.data()));
         }
-        // m_rev_perm and m_perm are consistent with each other.
+        // m_inv_perm and m_perm are consistent with each other.
         for (decltype(m_perm.size()) i = 0; i < m_perm.size(); ++i) {
-            assert(m_perm[i] < m_rev_perm.size());
-            assert(m_rev_perm[m_perm[i]] == i);
+            assert(m_perm[i] < m_inv_perm.size());
+            assert(m_inv_perm[m_perm[i]] == i);
         }
         // m_perm does not contain duplicates.
         std::sort(m_perm.begin(), m_perm.end());
@@ -1294,7 +1294,7 @@ public:
         }
         m_codes.clear();
         m_perm.clear();
-        m_rev_perm.clear();
+        m_inv_perm.clear();
         m_tree.clear();
         m_crit_nodes.clear();
     }
@@ -2551,7 +2551,7 @@ private:
         const auto size = m_parts[0].size();
         std::array<F, nvecs_res<Q>> retval{};
         std::array<F, NDim> diffs;
-        const auto idx = Ordered ? m_rev_perm[orig_idx] : orig_idx;
+        const auto idx = Ordered ? m_inv_perm[orig_idx] : orig_idx;
         for (size_type i = 0; i < size; ++i) {
             if (i == idx) {
                 continue;
@@ -2612,7 +2612,7 @@ private:
     template <typename Tr>
     static auto ord_p_its_impl(Tr &tr)
     {
-        using it_t = decltype(boost::make_permutation_iterator(tr.m_parts[0].data(), tr.m_rev_perm.begin()));
+        using it_t = decltype(boost::make_permutation_iterator(tr.m_parts[0].data(), tr.m_inv_perm.begin()));
         using diff_t = typename std::iterator_traits<it_t>::difference_type;
         using udiff_t = std::make_unsigned_t<diff_t>;
         // Ensure that the iterators we return can index up to the particle number.
@@ -2623,7 +2623,7 @@ private:
         }
         std::array<it_t, NDim + 1u> retval;
         for (std::size_t j = 0; j < NDim + 1u; ++j) {
-            retval[j] = boost::make_permutation_iterator(tr.m_parts[j].data(), tr.m_rev_perm.begin());
+            retval[j] = boost::make_permutation_iterator(tr.m_parts[j].data(), tr.m_inv_perm.begin());
         }
         return retval;
     }
@@ -2647,9 +2647,9 @@ public:
     {
         return ord_p_its_impl(*this);
     }
-    const auto &rev_perm() const
+    const auto &inv_perm() const
     {
-        return m_rev_perm;
+        return m_inv_perm;
     }
 
 private:
@@ -2706,7 +2706,7 @@ private:
                 // Establish the indices for ordered iteration (in the original order).
                 // NOTE: this goes in the same task as we need m_perm to be sorted
                 // before calling this function.
-                perm_to_rev_perm();
+                perm_to_inv_perm();
             });
             tg.wait();
         }
@@ -2793,11 +2793,11 @@ private:
     // It establishes how to re-order the Morton order to recover the original
     // particle order. This is the dual of m_perm, and it's always possible to
     // compute one given the other. E.g., if m_perm is [0, 3, 1, 2, ...] then
-    // m_rev_perm will be [0, 2, 3, 1, ...], meaning that the first particle in
+    // m_inv_perm will be [0, 2, 3, 1, ...], meaning that the first particle in
     // the original order is also the first particle in the Morton order, the second
     // particle in the original order is the particle at index 2 in the Morton order,
     // and so on.
-    std::vector<size_type, di_aligned_allocator<size_type>> m_rev_perm;
+    std::vector<size_type, di_aligned_allocator<size_type>> m_inv_perm;
     // The tree structure.
     tree_type m_tree;
     // The list of critical nodes.
