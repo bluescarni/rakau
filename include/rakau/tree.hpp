@@ -331,9 +331,6 @@ inline constexpr unsigned default_ncrit =
 #endif
     ;
 
-template <typename T>
-using uncvref_t = std::remove_cv_t<std::remove_reference_t<T>>;
-
 } // namespace detail
 
 namespace kwargs
