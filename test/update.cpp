@@ -97,7 +97,7 @@ TEST_CASE("update positions")
         // Now let's use an updater that swaps around the coordinates.
         // Let's also save the x coordinate in Morton order for reference later.
         std::vector<fp_type> x_morton_old(t.p_its_u()[0], t.p_its_u()[0] + s), x_morton_orig(x_morton_old);
-        t.update_particles_o([s](const auto &p_its) {
+        t.update_particles_o([](const auto &p_its) {
             auto x_it = p_its[0], y_it = p_its[1], z_it = p_its[2];
             for (size_type idx = 0; idx < s; ++idx) {
                 // x, y, z -> y, x, z
@@ -123,7 +123,7 @@ TEST_CASE("update positions")
         // We moved the x coordinate into the z coordinate. Verify that they match.
         REQUIRE(std::equal(x_morton_new.begin(), x_morton_new.end(), t.p_its_u()[2]));
         // Let's swap back to the original order.
-        t.update_particles_o([s](const auto &p_its) {
+        t.update_particles_o([](const auto &p_its) {
             auto x_it = p_its[0], y_it = p_its[1], z_it = p_its[2];
             for (size_type idx = 0; idx < s; ++idx) {
                 // y, z, x -> y, x, z
@@ -148,7 +148,7 @@ TEST_CASE("update positions")
         REQUIRE(std::equal(x_morton_new.begin(), x_morton_new.end(), t.p_its_u()[0]));
         REQUIRE(x_morton_new == x_morton_orig);
         // Add a constant to all coordinates.
-        t.update_particles_u([s](const auto &p_its) {
+        t.update_particles_u([](const auto &p_its) {
             for (size_type idx = 0; idx < s; ++idx) {
                 for (std::size_t j = 0; j < 3; ++j) {
                     *(p_its[j] + static_cast<oit_diff_t>(idx)) += fp_type(1);
@@ -169,7 +169,7 @@ TEST_CASE("update positions")
         }
         REQUIRE(std::equal(x_morton_new.begin(), x_morton_new.end(), t.p_its_u()[0]));
         // Divide by 2 all coordinates.
-        t.update_particles_u([s](const auto &p_its) {
+        t.update_particles_u([](const auto &p_its) {
             for (size_type idx = 0; idx < s; ++idx) {
                 for (std::size_t j = 0; j < 3; ++j) {
                     *(p_its[j] + static_cast<oit_diff_t>(idx)) /= fp_type(2);
