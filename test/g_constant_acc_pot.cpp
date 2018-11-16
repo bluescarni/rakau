@@ -39,7 +39,7 @@ TEST_CASE("g constant accelerations/potentials")
         constexpr auto theta = fp_type(0.75);
         auto parts = get_uniform_particles<3>(s, bsize, rng);
         octree<fp_type> t({parts.begin() + s, parts.begin() + 2u * s, parts.begin() + 3u * s, parts.begin()}, s,
-                          box_size = bsize, max_leaf_n = 16, ncrit = 256);
+                          box_size = bsize);
         std::array<std::vector<fp_type>, 4> accpots;
         t.accs_pots_u(accpots, theta);
         auto accs_pots_u_orig(accpots);

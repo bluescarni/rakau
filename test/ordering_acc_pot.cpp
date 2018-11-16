@@ -41,7 +41,7 @@ TEST_CASE("accelerations/potentials ordering")
         // Get random particles in a box 1/10th the size of the domain.
         auto parts = get_uniform_particles<3>(s, bsize / fp_type(10), rng);
         octree<fp_type> t({parts.begin() + s, parts.begin() + 2u * s, parts.begin() + 3u * s, parts.begin()}, s,
-                          box_size = bsize, max_leaf_n = 16, ncrit = 256);
+                          box_size = bsize);
         // Select randomly some particle indices to track.
         using size_type = typename decltype(t)::size_type;
         std::vector<size_type> track_idx(100);
