@@ -343,12 +343,6 @@ IGOR_MAKE_KWARG(ncrit);
 } // namespace kwargs
 
 // NOTE: possible improvements:
-// - add checks on the finiteness of the internal computations. For instance, we need all particles
-//   distances to be finite (including padding particles in the self-interaction routine), and
-//   we also need all possible accelerations to be finite. Can we do this check fast?
-// - try replace TBB with another task based library. TBB seems to have an increasingly
-//   large overhead as the number of cores increases. If we do this, we need to provide a parallel
-//   sort implementation - most likely a radix based one, to improve performance.
 // - it is still not yet clear to me what the NUMA picture is here. During tree traversal, the results
 //   and the target node data are stored in thread local caches, so maybe we can try to ensure that
 //   at the beginning of traversal we re-init these caches in order to make sure they are allocated
@@ -361,8 +355,6 @@ IGOR_MAKE_KWARG(ncrit);
 // - we should probably also think about replacing the morton encoder with some generic solution. It does not
 //   need to be super high performance, as morton encoding is hardly a bottleneck here. It's more important for it
 //   to be generic (i.e., work on a general number of dimensions), correct and compact.
-// - consider turning the compile time recursion in the tree builder into a runtime recursion. Generally speaking,
-//   review the tree creation code for better performance, possibly when we switch to another task library.
 // - add more MACs (e.g., the one from bonsai and the one from the gothic paper from Warren et al).
 // - double precision benchmarking/tuning.
 // - tuning for the potential computation (possibly not much improvement to be had there, but it should be investigated
@@ -373,6 +365,10 @@ IGOR_MAKE_KWARG(ncrit);
 //   will fail often). It's probably best to start experimenting with such size as a free parameter, check the
 //   performance with various values and then try to understand if there's any heuristic we can deduce from that.
 // - quadrupole moments.
+// - radix sort.
+// - would be interesting to see if we can do the permutations in-place efficiently. If that worked, it would probably
+//   help simplifying things on the GPU side. See for instance:
+//   https://stackoverflow.com/questions/7365814/in-place-array-reordering
 template <std::size_t NDim, typename F, typename UInt = std::size_t>
 class tree
 {
@@ -1031,6 +1027,7 @@ private:
         // freely between the size types of the masses/coords and codes/indices vectors.
         m_codes.resize(boost::numeric_cast<decltype(m_codes.size())>(N));
         m_perm.resize(boost::numeric_cast<decltype(m_perm.size())>(N));
+        m_last_perm.resize(boost::numeric_cast<decltype(m_last_perm.size())>(N));
         m_inv_perm.resize(boost::numeric_cast<decltype(m_inv_perm.size())>(N));
         // Deduce the box size, if needed.
         if (m_box_size_deduced) {
@@ -1091,8 +1088,17 @@ private:
             for (std::size_t j = 0; j < NDim + 1u; ++j) {
                 tg.run([this, j]() { apply_isort(m_parts[j], m_perm); });
             }
-            // Establish the indices for ordered iteration.
+            // Establish the inverse permutation vector.
             tg.run([this]() { perm_to_inv_perm(); });
+            // Copy over m_perm to m_last_perm.
+            tg.run([this, N]() {
+                tbb::parallel_for(tbb::blocked_range<size_type>(0u, N, boost::numeric_cast<size_type>(data_chunking)),
+                                  [this](const auto &range) {
+                                      std::copy(m_perm.data() + range.begin(), m_perm.data() + range.end(),
+                                                m_last_perm.data() + range.begin());
+                                  },
+                                  tbb::simple_partitioner());
+            });
             tg.wait();
         }
         // Now let's proceed to the tree construction.
@@ -1188,7 +1194,8 @@ public:
     tree(tree &&other) noexcept
         : m_box_size(other.m_box_size), m_box_size_deduced(other.m_box_size_deduced), m_max_leaf_n(other.m_max_leaf_n),
           m_ncrit(other.m_ncrit), m_parts(std::move(other.m_parts)), m_codes(std::move(other.m_codes)),
-          m_perm(std::move(other.m_perm)), m_inv_perm(std::move(other.m_inv_perm)), m_tree(std::move(other.m_tree)),
+          m_perm(std::move(other.m_perm)), m_last_perm(std::move(other.m_last_perm)),
+          m_inv_perm(std::move(other.m_inv_perm)), m_tree(std::move(other.m_tree)),
           m_crit_nodes(std::move(other.m_crit_nodes))
     {
         // Make sure other is left in a known state, otherwise we might
@@ -1212,6 +1219,7 @@ public:
                 m_parts = other.m_parts;
                 m_codes = other.m_codes;
                 m_perm = other.m_perm;
+                m_last_perm = other.m_last_perm;
                 m_inv_perm = other.m_inv_perm;
                 m_tree = other.m_tree;
                 m_crit_nodes = other.m_crit_nodes;
@@ -1235,6 +1243,7 @@ public:
             m_parts = std::move(other.m_parts);
             m_codes = std::move(other.m_codes);
             m_perm = std::move(other.m_perm);
+            m_last_perm = std::move(other.m_last_perm);
             m_inv_perm = std::move(other.m_inv_perm);
             m_tree = std::move(other.m_tree);
             m_crit_nodes = std::move(other.m_crit_nodes);
@@ -1257,8 +1266,9 @@ public:
         assert(m_parts[0].size() == m_codes.size());
         // Codes are sorted.
         assert(std::is_sorted(m_codes.begin(), m_codes.end()));
-        // The size of m_perm and m_inv_perm is the number of particles.
+        // The size of m_perm, m_last_perm and m_inv_perm is the number of particles.
         assert(m_parts[0].size() == m_perm.size());
+        assert(m_parts[0].size() == m_last_perm.size());
         assert(m_parts[0].size() == m_inv_perm.size());
         // All coordinates must fit in the box, and they need to correspond
         // to the correct Morton code.
@@ -1280,6 +1290,14 @@ public:
         // m_perm does not contain duplicates.
         std::sort(m_perm.begin(), m_perm.end());
         assert(std::unique(m_perm.begin(), m_perm.end()) == m_perm.end());
+        // m_last_perm does not contain duplicates.
+        std::sort(m_last_perm.begin(), m_last_perm.end());
+        assert(std::unique(m_last_perm.begin(), m_last_perm.end()) == m_last_perm.end());
+        // Check min/max as well.
+        if (m_parts[0].size()) {
+            assert(m_last_perm[0] == 0u);
+            assert(m_last_perm.back() == m_parts[0].size() - 1u);
+        }
 #endif
     }
     // Reset the state of the tree to a known one, i.e., a def-cted tree.
@@ -1294,6 +1312,7 @@ public:
         }
         m_codes.clear();
         m_perm.clear();
+        m_last_perm.clear();
         m_inv_perm.clear();
         m_tree.clear();
         m_crit_nodes.clear();
@@ -2647,6 +2666,14 @@ public:
     {
         return ord_p_its_impl(*this);
     }
+    const auto &perm() const
+    {
+        return m_perm;
+    }
+    const auto &last_perm() const
+    {
+        return m_last_perm;
+    }
     const auto &inv_perm() const
     {
         return m_inv_perm;
@@ -2674,35 +2701,31 @@ private:
             }
         });
 
-        // Create an auxiliary indices vector for reordering.
-        std::vector<size_type, di_aligned_allocator<size_type>> v_ind;
-        // NOTE: we are never changing the number of particles in a tree, thus we are sure
-        // that v_ind's size type can represent nparts (because of the checks
-        // we run in the ctor).
-        v_ind.resize(static_cast<decltype(v_ind.size())>(nparts));
+        // Reset m_last_perm to a iota.
         tbb::parallel_for(tbb::blocked_range<size_type>(0u, nparts, boost::numeric_cast<size_type>(data_chunking)),
-                          [&v_ind](const auto &range) {
-                              std::iota(v_ind.data() + range.begin(), v_ind.data() + range.end(), range.begin());
+                          [this](const auto &range) {
+                              std::iota(m_last_perm.data() + range.begin(), m_last_perm.data() + range.end(),
+                                        range.begin());
                           },
                           tbb::simple_partitioner());
-        // Do the sorting.
-        indirect_code_sort(v_ind.begin(), v_ind.end());
+        // Do the indirect sorting onto m_last_perm.
+        indirect_code_sort(m_last_perm.begin(), m_last_perm.end());
         {
             // Apply the indirect sorting.
             tbb::task_group tg;
             // NOTE: upon tree construction, we already checked that the number of particles does not
             // overflow the limit imposed by apply_isort().
-            tg.run([this, &v_ind]() {
-                apply_isort(m_codes, v_ind);
+            tg.run([this]() {
+                apply_isort(m_codes, m_last_perm);
                 // Make sure the sort worked as intended.
                 assert(std::is_sorted(m_codes.begin(), m_codes.end()));
             });
             for (std::size_t j = 0; j < NDim + 1u; ++j) {
-                tg.run([this, j, &v_ind]() { apply_isort(m_parts[j], v_ind); });
+                tg.run([this, j]() { apply_isort(m_parts[j], m_last_perm); });
             }
-            tg.run([this, &v_ind]() {
+            tg.run([this]() {
                 // Apply the new indirect sorting to the original one.
-                apply_isort(m_perm, v_ind);
+                apply_isort(m_perm, m_last_perm);
                 // Establish the indices for ordered iteration (in the original order).
                 // NOTE: this goes in the same task as we need m_perm to be sorted
                 // before calling this function.
@@ -2789,9 +2812,17 @@ private:
     // the original order, the second particle in the Morton order is the
     // particle at index 3 in the original order, and so on.
     std::vector<size_type, di_aligned_allocator<size_type>> m_perm;
+    // m_perm stores the permutation necessary to re-order the particles
+    // from the *original* order (i.e., the order used during the construction
+    // of the tree) to the current internal Morton order. m_last_perm is similar,
+    // but it contains the permutation needed to bring the particle order *before*
+    // the last call to update_particles() to the current internal Morton order.
+    // In other words, m_last_perm tells us how update_particles() re-ordered the internal
+    // order.
+    std::vector<size_type, di_aligned_allocator<size_type>> m_last_perm;
     // Indices vector to iterate over the particles' data in the original order.
-    // It establishes how to re-order the Morton order to recover the original
-    // particle order. This is the dual of m_perm, and it's always possible to
+    // It establishes how to re-order the current internal Morton order to recover the original
+    // particle order. This is the inverse of m_perm, and it's always possible to
     // compute one given the other. E.g., if m_perm is [0, 3, 1, 2, ...] then
     // m_inv_perm will be [0, 2, 3, 1, ...], meaning that the first particle in
     // the original order is also the first particle in the Morton order, the second
