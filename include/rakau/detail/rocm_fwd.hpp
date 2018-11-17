@@ -39,7 +39,7 @@ public:
     ~rocm_state();
 
     template <unsigned Q>
-    void acc_pot(const std::array<F *, tree_nvecs_res<Q, NDim>> &out, F theta2, F G, F eps2) const;
+    void acc_pot(int, int, const std::array<F *, tree_nvecs_res<Q, NDim>> &out, F theta2, F G, F eps2) const;
 
 private:
     void *m_state;

@@ -2340,7 +2340,11 @@ private:
     template <unsigned Q, typename It>
     void acc_pot_impl(const std::array<It, nvecs_res<Q>> &out, F theta2, F G, F eps2) const
     {
-        auto cpu_run = [&]() {
+        using c_size_type = decltype(m_crit_nodes.size());
+        auto cpu_run = [&](c_size_type c_begin, c_size_type c_end) {
+            assert(c_begin <= c_end);
+            assert(c_end <= m_crit_nodes.size());
+
             // NOTE: we will be adding padding to the target node data when SIMD is active,
             // in order to be able to use SIMD instructions on all the particles of the node.
             // The padding data must be crafted so that it does not interfere with the useful
@@ -2372,108 +2376,107 @@ private:
                     "The calculation of the SIMD padding coordinate produced the non-finite value "
                     + std::to_string(pad_coord));
             }
-            tbb::parallel_for(
-                tbb::blocked_range<decltype(m_crit_nodes.size())>(0u, m_crit_nodes.size()),
-                [this, theta2, G, eps2, pad_coord, &out](const auto &range) {
-                    // Get references to the local temporary data.
-                    auto &tmp_res = acc_pot_tmp_res<Q>();
-                    auto &tmp_tgt = tgt_tmp_data();
-                    for (auto i = range.begin(); i != range.end(); ++i) {
-                        const auto tgt_code = get<0>(m_crit_nodes[i]);
-                        const auto tgt_begin = get<1>(m_crit_nodes[i]);
-                        const auto tgt_size = static_cast<size_type>(get<2>(m_crit_nodes[i]) - tgt_begin);
-                        // Size of the temporary vectors that will be used to store the target node
-                        // data and the total accelerations/potentials on its particles. If simd is not enabled, this
-                        // value will be tgt_size. Otherwise, we add extra padding at the end based on the
-                        // simd vector size.
-                        const auto pdata_size = [tgt_size]() {
+            tbb::parallel_for(tbb::blocked_range(c_begin, c_end), [this, theta2, G, eps2, pad_coord,
+                                                                   &out](const auto &range) {
+                // Get references to the local temporary data.
+                auto &tmp_res = acc_pot_tmp_res<Q>();
+                auto &tmp_tgt = tgt_tmp_data();
+                for (auto i = range.begin(); i != range.end(); ++i) {
+                    const auto tgt_code = get<0>(m_crit_nodes[i]);
+                    const auto tgt_begin = get<1>(m_crit_nodes[i]);
+                    const auto tgt_size = static_cast<size_type>(get<2>(m_crit_nodes[i]) - tgt_begin);
+                    // Size of the temporary vectors that will be used to store the target node
+                    // data and the total accelerations/potentials on its particles. If simd is not enabled, this
+                    // value will be tgt_size. Otherwise, we add extra padding at the end based on the
+                    // simd vector size.
+                    const auto pdata_size = [tgt_size]() {
+                        if constexpr (simd_enabled) {
+                            using batch_type = xsimd::simd_type<F>;
+                            constexpr auto batch_size = batch_type::size;
+                            static_assert(batch_size);
+                            // NOTE: we will need batch_size - 1 extra elements at the end of the
+                            // temp vectors, to ensure we can load/store a simd vector starting from
+                            // the last element.
+                            if ((batch_size - 1u) > (std::numeric_limits<size_type>::max() - tgt_size)) {
+                                throw std::overflow_error("The number of particles in a critical node ("
+                                                          + std::to_string(tgt_size)
+                                                          + ") is too large, and it results in an overflow condition");
+                            }
+                            return static_cast<size_type>(tgt_size + (batch_size - 1u));
+                        } else {
+                            return tgt_size;
+                        }
+                    }();
+                    // Prepare the temporary vectors containing the result.
+                    for (std::size_t j = 0; j < nvecs_res<Q>; ++j) {
+                        // Resize and fill with zeroes (everything, including the padding data).
+                        tmp_res[j].resize(pdata_size);
+                        std::fill(tmp_res[j].data(), tmp_res[j].data() + pdata_size, F(0));
+                    }
+                    // Prepare the temporary vectors containing the target node's data.
+                    for (std::size_t j = 0; j < NDim; ++j) {
+                        tmp_tgt[j].resize(pdata_size);
+                        // From 0 to tgt_size we copy the actual node coordinates.
+                        std::copy(m_parts[j].data() + tgt_begin, m_parts[j].data() + tgt_begin + tgt_size,
+                                  tmp_tgt[j].data());
+                        // From tgt_size to pdata_size (the padding values) we insert the padding coordinate.
+                        std::fill(tmp_tgt[j].data() + tgt_size, tmp_tgt[j].data() + pdata_size, pad_coord);
+                    }
+                    // Copy the particle masses and set the padding masses to zero.
+                    tmp_tgt[NDim].resize(pdata_size);
+                    std::copy(m_parts[NDim].data() + tgt_begin, m_parts[NDim].data() + tgt_begin + tgt_size,
+                              tmp_tgt[NDim].data());
+                    std::fill(tmp_tgt[NDim].data() + tgt_size, tmp_tgt[NDim].data() + pdata_size, F(0));
+                    // Prepare arrays of pointers to the temporary data.
+                    std::array<F *, nvecs_res<Q>> res_ptrs;
+                    for (std::size_t j = 0; j < nvecs_res<Q>; ++j) {
+                        res_ptrs[j] = tmp_res[j].data();
+                    }
+                    std::array<const F *, NDim + 1u> p_ptrs;
+                    for (std::size_t j = 0; j < NDim + 1u; ++j) {
+                        p_ptrs[j] = tmp_tgt[j].data();
+                    }
+                    // Do the computation.
+                    tree_acc_pot<Q>(theta2, eps2, tgt_size, tgt_code, p_ptrs, res_ptrs);
+                    // Multiply by G, if needed.
+                    if (G != F(1)) {
+                        for (std::size_t j = 0; j < nvecs_res<Q>; ++j) {
+                            auto r_ptr = res_ptrs[j];
                             if constexpr (simd_enabled) {
                                 using batch_type = xsimd::simd_type<F>;
                                 constexpr auto batch_size = batch_type::size;
-                                static_assert(batch_size);
-                                // NOTE: we will need batch_size - 1 extra elements at the end of the
-                                // temp vectors, to ensure we can load/store a simd vector starting from
-                                // the last element.
-                                if ((batch_size - 1u) > (std::numeric_limits<size_type>::max() - tgt_size)) {
-                                    throw std::overflow_error(
-                                        "The number of particles in a critical node (" + std::to_string(tgt_size)
-                                        + ") is too large, and it results in an overflow condition");
+                                const batch_type Gvec(G);
+                                for (size_type k = 0; k < tgt_size; k += batch_size) {
+                                    (xsimd::load_aligned(r_ptr + k) * Gvec).store_aligned(r_ptr + k);
                                 }
-                                return static_cast<size_type>(tgt_size + (batch_size - 1u));
                             } else {
-                                return tgt_size;
-                            }
-                        }();
-                        // Prepare the temporary vectors containing the result.
-                        for (std::size_t j = 0; j < nvecs_res<Q>; ++j) {
-                            // Resize and fill with zeroes (everything, including the padding data).
-                            tmp_res[j].resize(pdata_size);
-                            std::fill(tmp_res[j].data(), tmp_res[j].data() + pdata_size, F(0));
-                        }
-                        // Prepare the temporary vectors containing the target node's data.
-                        for (std::size_t j = 0; j < NDim; ++j) {
-                            tmp_tgt[j].resize(pdata_size);
-                            // From 0 to tgt_size we copy the actual node coordinates.
-                            std::copy(m_parts[j].data() + tgt_begin, m_parts[j].data() + tgt_begin + tgt_size,
-                                      tmp_tgt[j].data());
-                            // From tgt_size to pdata_size (the padding values) we insert the padding coordinate.
-                            std::fill(tmp_tgt[j].data() + tgt_size, tmp_tgt[j].data() + pdata_size, pad_coord);
-                        }
-                        // Copy the particle masses and set the padding masses to zero.
-                        tmp_tgt[NDim].resize(pdata_size);
-                        std::copy(m_parts[NDim].data() + tgt_begin, m_parts[NDim].data() + tgt_begin + tgt_size,
-                                  tmp_tgt[NDim].data());
-                        std::fill(tmp_tgt[NDim].data() + tgt_size, tmp_tgt[NDim].data() + pdata_size, F(0));
-                        // Prepare arrays of pointers to the temporary data.
-                        std::array<F *, nvecs_res<Q>> res_ptrs;
-                        for (std::size_t j = 0; j < nvecs_res<Q>; ++j) {
-                            res_ptrs[j] = tmp_res[j].data();
-                        }
-                        std::array<const F *, NDim + 1u> p_ptrs;
-                        for (std::size_t j = 0; j < NDim + 1u; ++j) {
-                            p_ptrs[j] = tmp_tgt[j].data();
-                        }
-                        // Do the computation.
-                        tree_acc_pot<Q>(theta2, eps2, tgt_size, tgt_code, p_ptrs, res_ptrs);
-                        // Multiply by G, if needed.
-                        if (G != F(1)) {
-                            for (std::size_t j = 0; j < nvecs_res<Q>; ++j) {
-                                auto r_ptr = res_ptrs[j];
-                                if constexpr (simd_enabled) {
-                                    using batch_type = xsimd::simd_type<F>;
-                                    constexpr auto batch_size = batch_type::size;
-                                    const batch_type Gvec(G);
-                                    for (size_type k = 0; k < tgt_size; k += batch_size) {
-                                        (xsimd::load_aligned(r_ptr + k) * Gvec).store_aligned(r_ptr + k);
-                                    }
-                                } else {
-                                    for (size_type k = 0; k < tgt_size; ++k) {
-                                        *(r_ptr + k) *= G;
-                                    }
+                                for (size_type k = 0; k < tgt_size; ++k) {
+                                    *(r_ptr + k) *= G;
                                 }
                             }
-                        }
-                        // Write out the result.
-                        for (std::size_t j = 0; j < nvecs_res<Q>; ++j) {
-                            std::copy(res_ptrs[j], res_ptrs[j] + tgt_size,
-                                      out[j]
-                                          + boost::numeric_cast<typename std::iterator_traits<It>::difference_type>(
-                                                tgt_begin));
                         }
                     }
+                    // Write out the result.
+                    for (std::size_t j = 0; j < nvecs_res<Q>; ++j) {
+                        std::copy(
+                            res_ptrs[j], res_ptrs[j] + tgt_size,
+                            out[j]
+                                + boost::numeric_cast<typename std::iterator_traits<It>::difference_type>(tgt_begin));
+                    }
+                }
 #if defined(RAKAU_WITH_SIMD_COUNTERS)
-                    // For the current thread, add the thread local counters
-                    // to the global atomic ones, then reset them.
-                    simd_fma_counter += simd_fma_counter_tl;
-                    simd_fma_counter_tl = 0;
+                // For the current thread, add the thread local counters
+                // to the global atomic ones, then reset them.
+                simd_fma_counter += simd_fma_counter_tl;
+                simd_fma_counter_tl = 0;
 
-                    simd_sqrt_counter += simd_sqrt_counter_tl;
-                    simd_sqrt_counter_tl = 0;
+                simd_sqrt_counter += simd_sqrt_counter_tl;
+                simd_sqrt_counter_tl = 0;
 
-                    simd_rsqrt_counter += simd_rsqrt_counter_tl;
-                    simd_rsqrt_counter_tl = 0;
+                simd_rsqrt_counter += simd_rsqrt_counter_tl;
+                simd_rsqrt_counter_tl = 0;
 #endif
-                });
+            });
         };
 #if defined(RAKAU_WITH_ROCM)
         if constexpr (NDim == 3u
@@ -2484,15 +2487,15 @@ private:
             if (m_rocm && nparts() >= rocm_min_size()) {
                 // Actually run the ROCm implementation only if we have an accelerator
                 // and enough particles.
-                m_rocm->template acc_pot<Q>(out, theta2, G, eps2);
+                m_rocm->template acc_pot<Q>(0, boost::numeric_cast<int>(nparts()), out, theta2, G, eps2);
             } else {
-                cpu_run();
+                cpu_run(0, m_crit_nodes.size());
             }
         } else {
-            cpu_run();
+            cpu_run(0, m_crit_nodes.size());
         }
 #else
-        cpu_run();
+        cpu_run(0, m_crit_nodes.size());
 #endif
     }
     // Small helper to check the value of the softening length and its square.

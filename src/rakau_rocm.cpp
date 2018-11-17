@@ -1,4 +1,5 @@
 #include <array>
+#include <cassert>
 #include <cstddef>
 #include <cstdint>
 #include <tuple>
@@ -130,22 +131,26 @@ rocm_state<NDim, F, UInt>::~rocm_state()
 // and then traverse the tree computing the acceleration for each particle.
 template <std::size_t NDim, typename F, typename UInt>
 template <unsigned Q>
-void rocm_state<NDim, F, UInt>::acc_pot(const std::array<F *, tree_nvecs_res<Q, NDim>> &out, F theta2, F G,
-                                        F eps2) const
+void rocm_state<NDim, F, UInt>::acc_pot(int p_begin, int p_end, const std::array<F *, tree_nvecs_res<Q, NDim>> &out,
+                                        F theta2, F G, F eps2) const
 {
+    assert(p_begin <= p_end);
+
     auto &state = *static_cast<const rocm_state_impl<NDim, F, UInt> *>(m_state);
     const auto nparts = state.m_nparts;
     auto rt = ap2tv(out, nparts);
 
+    assert(p_end <= nparts);
+
     hc::parallel_for_each(
-        hc::extent<1>(nparts).tile(__HSA_WAVEFRONT_SIZE__),
+        hc::extent<1>(p_end - p_begin).tile(__HSA_WAVEFRONT_SIZE__),
         [
-            pt = state.m_pav, codes_view = state.m_codes_view, nparts, tree_view = state.m_tree_view,
+            p_begin, pt = state.m_pav, codes_view = state.m_codes_view, nparts, tree_view = state.m_tree_view,
             tree_size = state.m_tree_size, rt, theta2, G,
             eps2
         ](hc::tiled_index<1> thread_id) [[hc]] {
             // Get the global particle index.
-            const auto pidx = thread_id.global[0];
+            const auto pidx = thread_id.global[0] + p_begin;
             if (pidx >= nparts) {
                 // Don't do anything if we are in the remainder
                 // of the last tile.
@@ -330,8 +335,8 @@ void rocm_state<NDim, F, UInt>::acc_pot(const std::array<F *, tree_nvecs_res<Q, 
 
 // Explicit instantiations. We need two separate macros, as the state class does not depend on Q.
 #define RAKAU_ROCM_EXPLICIT_INST(Q, NDim, F, UInt)                                                                     \
-    template void rocm_state<NDim, F, UInt>::acc_pot<Q>(const std::array<F *, tree_nvecs_res<Q, NDim>> &out, F theta2, \
-                                                        F G, F eps2) const
+    template void rocm_state<NDim, F, UInt>::acc_pot<Q>(int, int, const std::array<F *, tree_nvecs_res<Q, NDim>> &out, \
+                                                        F theta2, F G, F eps2) const
 
 #define RAKAU_ROCM_EXPLICIT_STATE_INST(NDim, F, UInt) template class rocm_state<NDim, F, UInt>
 
