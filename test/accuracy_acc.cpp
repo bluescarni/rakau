@@ -50,8 +50,8 @@ TEST_CASE("acceleration accuracy ordered")
                 for (auto ncrit : ncrits) {
                     std::vector<fp_type> x_diff, y_diff, z_diff;
                     octree<fp_type> t(
-                        bsize, {parts.begin() + s, parts.begin() + 2u * s, parts.begin() + 3u * s, parts.begin()}, s,
-                        max_leaf_n, ncrit);
+                        {parts.begin() + s, parts.begin() + 2u * s, parts.begin() + 3u * s, parts.begin()}, s,
+                        kwargs::box_size = bsize, kwargs::max_leaf_n = max_leaf_n, kwargs::ncrit = ncrit);
                     t.accs_o(accs, theta);
                     // Check that all accelerations are finite.
                     REQUIRE(std::all_of(accs[0].begin(), accs[0].end(), [](auto c) { return std::isfinite(c); }));
@@ -117,8 +117,8 @@ TEST_CASE("acceleration accuracy unordered")
                 for (auto ncrit : ncrits) {
                     std::vector<fp_type> x_diff, y_diff, z_diff;
                     octree<fp_type> t(
-                        bsize, {parts.begin() + s, parts.begin() + 2u * s, parts.begin() + 3u * s, parts.begin()}, s,
-                        max_leaf_n, ncrit);
+                        {parts.begin() + s, parts.begin() + 2u * s, parts.begin() + 3u * s, parts.begin()}, s,
+                        kwargs::box_size = bsize, kwargs::max_leaf_n = max_leaf_n, kwargs::ncrit = ncrit);
                     t.accs_u(accs, theta);
                     // Check that all accelerations are finite.
                     REQUIRE(std::all_of(accs[0].begin(), accs[0].end(), [](auto c) { return std::isfinite(c); }));

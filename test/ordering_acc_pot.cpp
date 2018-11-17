@@ -25,6 +25,7 @@
 #include "test_utils.hpp"
 
 using namespace rakau;
+using namespace rakau::kwargs;
 using namespace rakau_test;
 
 using fp_types = std::tuple<float, double>;
@@ -39,8 +40,8 @@ TEST_CASE("accelerations/potentials ordering")
         constexpr auto s = 10000u;
         // Get random particles in a box 1/10th the size of the domain.
         auto parts = get_uniform_particles<3>(s, bsize / fp_type(10), rng);
-        octree<fp_type> t(bsize, {parts.begin() + s, parts.begin() + 2u * s, parts.begin() + 3u * s, parts.begin()}, s,
-                          16, 256);
+        octree<fp_type> t({parts.begin() + s, parts.begin() + 2u * s, parts.begin() + 3u * s, parts.begin()}, s,
+                          box_size = bsize);
         // Select randomly some particle indices to track.
         using size_type = typename decltype(t)::size_type;
         std::vector<size_type> track_idx(100);
@@ -48,7 +49,7 @@ TEST_CASE("accelerations/potentials ordering")
         std::generate(track_idx.begin(), track_idx.end(), [&idist]() { return idist(rng); });
         // Get the exact accelerations/potentials on the particles.
         std::vector<std::array<fp_type, 3>> exact_accs;
-        std::vector<std::array<fp_type, 1>> exact_pots;
+        std::vector<fp_type> exact_pots;
         for (auto idx : track_idx) {
             exact_accs.emplace_back(t.exact_acc_o(idx));
             exact_pots.emplace_back(t.exact_pot_o(idx));
@@ -77,7 +78,7 @@ TEST_CASE("accelerations/potentials ordering")
         for (size_type i = 0; i < track_idx.size(); ++i) {
             const auto eacc = std::sqrt(exact_accs[i][0] * exact_accs[i][0] + exact_accs[i][1] * exact_accs[i][1]
                                         + exact_accs[i][2] * exact_accs[i][2]);
-            const auto epot = exact_pots[i][0];
+            const auto epot = exact_pots[i];
             const auto tacc = std::sqrt(t_accpots[0][track_idx[i]] * t_accpots[0][track_idx[i]]
                                         + t_accpots[1][track_idx[i]] * t_accpots[1][track_idx[i]]
                                         + t_accpots[2][track_idx[i]] * t_accpots[2][track_idx[i]]);
@@ -114,7 +115,7 @@ TEST_CASE("accelerations/potentials ordering")
         for (size_type i = 0; i < track_idx.size(); ++i) {
             const auto eacc = std::sqrt(exact_accs[i][0] * exact_accs[i][0] + exact_accs[i][1] * exact_accs[i][1]
                                         + exact_accs[i][2] * exact_accs[i][2]);
-            const auto epot = exact_pots[i][0];
+            const auto epot = exact_pots[i];
             const auto tacc = std::sqrt(t_accpots[0][track_idx[i]] * t_accpots[0][track_idx[i]]
                                         + t_accpots[1][track_idx[i]] * t_accpots[1][track_idx[i]]
                                         + t_accpots[2][track_idx[i]] * t_accpots[2][track_idx[i]]);
@@ -143,7 +144,7 @@ TEST_CASE("accelerations/potentials ordering")
         for (size_type i = 0; i < track_idx.size(); ++i) {
             const auto eacc = std::sqrt(exact_accs[i][0] * exact_accs[i][0] + exact_accs[i][1] * exact_accs[i][1]
                                         + exact_accs[i][2] * exact_accs[i][2]);
-            const auto epot = exact_pots[i][0];
+            const auto epot = exact_pots[i];
             const auto tacc = std::sqrt(t_accpots[0][track_idx[i]] * t_accpots[0][track_idx[i]]
                                         + t_accpots[1][track_idx[i]] * t_accpots[1][track_idx[i]]
                                         + t_accpots[2][track_idx[i]] * t_accpots[2][track_idx[i]]);
@@ -179,7 +180,7 @@ TEST_CASE("accelerations/potentials ordering")
             const auto xrdiff = std::abs((ex - t_accpots[0][track_idx[i]]) / ex);
             const auto yrdiff = std::abs((ey - t_accpots[1][track_idx[i]]) / ey);
             const auto zrdiff = std::abs((ez - t_accpots[2][track_idx[i]]) / ez);
-            const auto potdiff = std::abs((exact_pots[i][0] - t_accpots[3][track_idx[i]]) / exact_pots[i][0]);
+            const auto potdiff = std::abs((exact_pots[i] - t_accpots[3][track_idx[i]]) / exact_pots[i]);
             if (std::numeric_limits<fp_type>::is_iec559) {
                 if (std::is_same_v<fp_type, double>) {
                     REQUIRE(xrdiff <= fp_type(2E-11));

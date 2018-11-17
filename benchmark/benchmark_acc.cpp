@@ -35,12 +35,12 @@ int main(int argc, char **argv)
     auto parts = get_plummer_sphere(nparts, a, bsize, parinit);
 
     tree<3, float> t({parts.data() + nparts, parts.data() + 2 * nparts, parts.data() + 3 * nparts, parts.data()},
-                     nparts, max_leaf_n, ncrit);
+                     nparts, kwargs::max_leaf_n = max_leaf_n, kwargs::ncrit = ncrit);
     std::cout << t << '\n';
     std::array<std::vector<float>, 3> accs;
     t.accs_u(accs, theta);
-    std::cout << accs[0][t.ord_ind()[idx]] << ", " << accs[1][t.ord_ind()[idx]] << ", " << accs[2][t.ord_ind()[idx]]
+    std::cout << accs[0][t.inv_perm()[idx]] << ", " << accs[1][t.inv_perm()[idx]] << ", " << accs[2][t.inv_perm()[idx]]
               << '\n';
-    auto eacc = t.exact_acc_u(t.ord_ind()[idx]);
+    auto eacc = t.exact_acc_u(t.inv_perm()[idx]);
     std::cout << eacc[0] << ", " << eacc[1] << ", " << eacc[2] << '\n';
 }
