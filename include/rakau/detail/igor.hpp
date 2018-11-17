@@ -153,9 +153,19 @@ public:
         }
     }
     template <typename Tag>
-    static constexpr bool is_provided(const named_argument<Tag> &)
+    static constexpr bool is_provided([[maybe_unused]] const named_argument<Tag> &narg)
     {
         return ::std::disjunction_v<is_provided_impl<Tag, uncvref_t<ParseArgs>>...>;
+    }
+    template <typename... Tags>
+    static constexpr bool has_all(const named_argument<Tags> &... nargs)
+    {
+        return (... && is_provided(nargs));
+    }
+    template <typename... Tags>
+    static constexpr bool has_extra(const named_argument<Tags> &... nargs)
+    {
+        return (std::size_t(0) + ... + static_cast<std::size_t>(is_provided(nargs))) < sizeof...(ParseArgs);
     }
 
 private:
