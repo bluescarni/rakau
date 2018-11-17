@@ -12,6 +12,7 @@
 #include <cstddef>
 #include <cstdlib>
 #include <new>
+#include <type_traits>
 #include <utility>
 
 namespace rakau
@@ -42,6 +43,10 @@ struct di_aligned_allocator {
     struct rebind {
         using other = di_aligned_allocator<U, Alignment>;
     };
+    // Match the behaviour of std::allocator on these type traits.
+    // https://en.cppreference.com/w/cpp/memory/allocator
+    using is_always_equal = std::true_type;
+    using propagate_on_container_move_assignment = std::true_type;
     // Allocation.
     T *allocate(size_type n) const
     {

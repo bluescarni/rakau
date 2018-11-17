@@ -50,8 +50,8 @@ TEST_CASE("acceleration/potential accuracy ordered")
                 for (auto ncrit : ncrits) {
                     std::vector<fp_type> x_diff, y_diff, z_diff, pot_diff;
                     octree<fp_type> t(
-                        bsize, {parts.begin() + s, parts.begin() + 2u * s, parts.begin() + 3u * s, parts.begin()}, s,
-                        max_leaf_n, ncrit);
+                        {parts.begin() + s, parts.begin() + 2u * s, parts.begin() + 3u * s, parts.begin()}, s,
+                        kwargs::box_size = bsize, kwargs::max_leaf_n = max_leaf_n, kwargs::ncrit = ncrit);
                     t.accs_pots_o(accpots, theta);
                     // Check that all accelerations/potentials are finite.
                     REQUIRE(std::all_of(accpots[0].begin(), accpots[0].end(), [](auto c) { return std::isfinite(c); }));
@@ -127,8 +127,8 @@ TEST_CASE("acceleration/potential accuracy unordered")
                 for (auto ncrit : ncrits) {
                     std::vector<fp_type> x_diff, y_diff, z_diff, pot_diff;
                     octree<fp_type> t(
-                        bsize, {parts.begin() + s, parts.begin() + 2u * s, parts.begin() + 3u * s, parts.begin()}, s,
-                        max_leaf_n, ncrit);
+                        {parts.begin() + s, parts.begin() + 2u * s, parts.begin() + 3u * s, parts.begin()}, s,
+                        kwargs::box_size = bsize, kwargs::max_leaf_n = max_leaf_n, kwargs::ncrit = ncrit);
                     t.accs_pots_u(accpots, theta);
                     // Check that all accelerations/potentials are finite.
                     REQUIRE(std::all_of(accpots[0].begin(), accpots[0].end(), [](auto c) { return std::isfinite(c); }));

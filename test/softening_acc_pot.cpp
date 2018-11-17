@@ -53,9 +53,9 @@ TEST_CASE("accelerations/potentials softening ordered")
                     for (auto eps : softs) {
                         std::vector<fp_type> x_diff, y_diff, z_diff, pot_diff;
                         octree<fp_type> t(
-                            bsize, {parts.begin() + s, parts.begin() + 2u * s, parts.begin() + 3u * s, parts.begin()},
-                            s, max_leaf_n, ncrit);
-                        t.accs_pots_o(accpots, theta, fp_type(1), eps);
+                            {parts.begin() + s, parts.begin() + 2u * s, parts.begin() + 3u * s, parts.begin()}, s,
+                            kwargs::box_size = bsize, kwargs::max_leaf_n = max_leaf_n, kwargs::ncrit = ncrit);
+                        t.accs_pots_o(accpots, theta, kwargs::eps = eps);
                         // Check that all accelerations/potentials are finite.
                         REQUIRE(
                             std::all_of(accpots[0].begin(), accpots[0].end(), [](auto c) { return std::isfinite(c); }));
@@ -66,12 +66,12 @@ TEST_CASE("accelerations/potentials softening ordered")
                         REQUIRE(
                             std::all_of(accpots[3].begin(), accpots[3].end(), [](auto c) { return std::isfinite(c); }));
                         for (auto i = 0u; i < s; ++i) {
-                            auto eacc = t.exact_acc_o(i, fp_type(1), eps);
-                            auto epot = t.exact_pot_o(i, fp_type(1), eps);
+                            auto eacc = t.exact_acc_o(i, kwargs::eps = eps);
+                            auto epot = t.exact_pot_o(i, kwargs::eps = eps);
                             x_diff.emplace_back(std::abs((eacc[0] - accpots[0][i]) / eacc[0]));
                             y_diff.emplace_back(std::abs((eacc[1] - accpots[1][i]) / eacc[1]));
                             z_diff.emplace_back(std::abs((eacc[2] - accpots[2][i]) / eacc[2]));
-                            pot_diff.emplace_back(std::abs((epot[0] - accpots[3][i]) / epot[0]));
+                            pot_diff.emplace_back(std::abs((epot - accpots[3][i]) / epot));
                         }
                         std::cout << "Results for size=" << s << ", max_leaf_n=" << max_leaf_n << ", ncrit=" << ncrit
                                   << ", soft=" << eps << ".\n=========\n";
@@ -112,14 +112,14 @@ TEST_CASE("accelerations/potentials softening ordered")
                                 *(new_parts.begin() + 3u * s + idx) = *(new_parts.begin() + 3u * s + idx + 1u);
                             }
                             // Create a new tree.
-                            t = octree<fp_type>(bsize,
-                                                {new_parts.begin() + s, new_parts.begin() + 2u * s,
+                            t = octree<fp_type>({new_parts.begin() + s, new_parts.begin() + 2u * s,
                                                  new_parts.begin() + 3u * s, new_parts.begin()},
-                                                s, max_leaf_n, ncrit);
+                                                s, kwargs::box_size = bsize, kwargs::max_leaf_n = max_leaf_n,
+                                                kwargs::ncrit = ncrit);
                             // Compute the accelerations/potentials.
                             // Try with the init list overload as well.
                             t.accs_pots_u({accpots[0].data(), accpots[1].data(), accpots[2].data(), accpots[3].data()},
-                                          theta, fp_type(1), eps);
+                                          theta, kwargs::eps = eps);
                             // Verify all values are finite.
                             REQUIRE(std::all_of(accpots[0].begin(), accpots[0].end(),
                                                 [](auto c) { return std::isfinite(c); }));
@@ -168,9 +168,9 @@ TEST_CASE("accelerations/potentials softening unordered")
                     for (auto eps : softs) {
                         std::vector<fp_type> x_diff, y_diff, z_diff, pot_diff;
                         octree<fp_type> t(
-                            bsize, {parts.begin() + s, parts.begin() + 2u * s, parts.begin() + 3u * s, parts.begin()},
-                            s, max_leaf_n, ncrit);
-                        t.accs_pots_u(accpots, theta, fp_type(1), eps);
+                            {parts.begin() + s, parts.begin() + 2u * s, parts.begin() + 3u * s, parts.begin()}, s,
+                            kwargs::box_size = bsize, kwargs::max_leaf_n = max_leaf_n, kwargs::ncrit = ncrit);
+                        t.accs_pots_u(accpots, theta, kwargs::eps = eps);
                         // Check that all accelerations/potentials are finite.
                         REQUIRE(
                             std::all_of(accpots[0].begin(), accpots[0].end(), [](auto c) { return std::isfinite(c); }));
@@ -181,12 +181,12 @@ TEST_CASE("accelerations/potentials softening unordered")
                         REQUIRE(
                             std::all_of(accpots[3].begin(), accpots[3].end(), [](auto c) { return std::isfinite(c); }));
                         for (auto i = 0u; i < s; ++i) {
-                            auto eacc = t.exact_acc_u(i, fp_type(1), eps);
-                            auto epot = t.exact_pot_u(i, fp_type(1), eps);
+                            auto eacc = t.exact_acc_u(i, kwargs::eps = eps);
+                            auto epot = t.exact_pot_u(i, kwargs::eps = eps);
                             x_diff.emplace_back(std::abs((eacc[0] - accpots[0][i]) / eacc[0]));
                             y_diff.emplace_back(std::abs((eacc[1] - accpots[1][i]) / eacc[1]));
                             z_diff.emplace_back(std::abs((eacc[2] - accpots[2][i]) / eacc[2]));
-                            pot_diff.emplace_back(std::abs((epot[0] - accpots[3][i]) / epot[0]));
+                            pot_diff.emplace_back(std::abs((epot - accpots[3][i]) / epot));
                         }
                         std::cout << "Results for size=" << s << ", max_leaf_n=" << max_leaf_n << ", ncrit=" << ncrit
                                   << ", soft=" << eps << ".\n=========\n";
@@ -227,14 +227,14 @@ TEST_CASE("accelerations/potentials softening unordered")
                                 *(new_parts.begin() + 3u * s + idx) = *(new_parts.begin() + 3u * s + idx + 1u);
                             }
                             // Create a new tree.
-                            t = octree<fp_type>(bsize,
-                                                {new_parts.begin() + s, new_parts.begin() + 2u * s,
+                            t = octree<fp_type>({new_parts.begin() + s, new_parts.begin() + 2u * s,
                                                  new_parts.begin() + 3u * s, new_parts.begin()},
-                                                s, max_leaf_n, ncrit);
+                                                s, kwargs::box_size = bsize, kwargs::max_leaf_n = max_leaf_n,
+                                                kwargs::ncrit = ncrit);
                             // Compute the accelerations/potentials.
                             // Try with the init list overload as well.
                             t.accs_pots_u({accpots[0].data(), accpots[1].data(), accpots[2].data(), accpots[3].data()},
-                                          theta, fp_type(1), eps);
+                                          theta, kwargs::eps = eps);
                             // Verify all values are finite.
                             REQUIRE(std::all_of(accpots[0].begin(), accpots[0].end(),
                                                 [](auto c) { return std::isfinite(c); }));
