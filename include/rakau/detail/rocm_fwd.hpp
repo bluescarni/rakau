@@ -19,12 +19,31 @@ namespace rakau
 inline namespace detail
 {
 
-unsigned hcc_min_size() __attribute__((visibility("default")));
+unsigned rocm_min_size() __attribute__((visibility("default")));
 
-template <unsigned Q, std::size_t NDim, typename F, typename UInt>
-void hcc_acc_pot_impl(const std::array<F *, tree_nvecs_res<Q, NDim>> &, const tree_node_t<NDim, F, UInt> *,
-                      tree_size_t<F>, const std::array<const F *, NDim + 1u> &, const UInt *, tree_size_t<F>, F, F, F,
-                      tree_size_t<F>) __attribute__((visibility("default")));
+bool rocm_has_accelerator() __attribute__((visibility("default")));
+
+template <std::size_t NDim, typename F, typename UInt>
+class __attribute__((visibility("default"))) rocm_state
+{
+public:
+    explicit rocm_state(const std::array<const F *, NDim + 1u> &, const UInt *, int, const tree_node_t<NDim, F, UInt> *,
+                        int);
+
+    // NOTE: make sure we don't end up accidentally copying/moving
+    // objects of this class.
+    rocm_state(const rocm_state &) = delete;
+    rocm_state(rocm_state &&) = delete;
+    rocm_state &operator=(const rocm_state &) = delete;
+    rocm_state &operator=(rocm_state &&) = delete;
+    ~rocm_state();
+
+    template <unsigned Q>
+    void acc_pot(const std::array<F *, tree_nvecs_res<Q, NDim>> &out, F theta2, F G, F eps2) const;
+
+private:
+    void *m_state;
+};
 
 } // namespace detail
 } // namespace rakau

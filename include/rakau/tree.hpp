@@ -26,6 +26,7 @@
 #include <iterator>
 #include <limits>
 #include <numeric>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <tuple>
@@ -1119,10 +1120,49 @@ private:
         // NOTE: this function works ok if N == 0.
         build_tree();
     }
+    // ROCm init/reset functions. If ROCm is not enabled, they will be empty.
+    // These are marked as noexcept because otherwise it becomes difficult
+    // to reason about exception safety. I *think* the only possible exceptions
+    // are memory allocation failures, but let's keep an eye on this.
+    //
+    // The init state function is called whenever we have finished setting up the internal
+    // data of the tree, and we need to create views to it.
+    void rocm_init_state() noexcept
+    {
+#if defined(RAKAU_WITH_ROCM)
+        // Not supposed to be called if m_rocm stores already something
+        // (m_rocm must either be def-cted, or rocm_reset_state() must
+        // have been called prior to calling this function).
+        assert(!m_rocm);
+        // If no accelerator is available, don't bother and leave m_rocm empty.
+        if (rocm_has_accelerator()) {
+            std::array<const F *, NDim + 1u> parts_ptrs;
+            for (std::size_t j = 0; j < NDim + 1u; ++j) {
+                parts_ptrs[j] = m_parts[j].data();
+            }
+            m_rocm.emplace(parts_ptrs, m_codes.data(), boost::numeric_cast<int>(nparts()), m_tree.data(),
+                           boost::numeric_cast<int>(m_tree.size()));
+        }
+#endif
+    }
+    // The reset state function. We need to call this before destroying the internal tree data,
+    // as we don't want to have active views to non-existing data.
+    void rocm_reset_state() noexcept
+    {
+#if defined(RAKAU_WITH_ROCM)
+        // NOTE: don't assert(m_rocm), as in some cases we may end up
+        // calling this function twice in a row (e.g., during exception handling
+        // in the copy assignment operator or in the particles update functions).
+        m_rocm.reset();
+#endif
+    }
 
 public:
     // Default constructor.
-    tree() : m_box_size(0), m_box_size_deduced(false), m_max_leaf_n(default_max_leaf_n), m_ncrit(default_ncrit) {}
+    tree() : m_box_size(0), m_box_size_deduced(false), m_max_leaf_n(default_max_leaf_n), m_ncrit(default_ncrit)
+    {
+        rocm_init_state();
+    }
     // Constructor from array of iterators.
     template <typename It, typename... KwArgs>
     explicit tree(const std::array<It, NDim + 1u> &cm_it, const size_type &N, KwArgs &&... args)
@@ -1149,6 +1189,9 @@ public:
 
         // Do the actual construction.
         construct_impl(box_size, box_size_deduced, cm_it, N, max_leaf_n, ncrit);
+
+        // NOTE: perhaps we can fold this into construct_impl() eventually.
+        rocm_init_state();
     }
 
 private:
@@ -1205,7 +1248,15 @@ public:
                std::forward<KwArgs>(args)...)
     {
     }
-    tree(const tree &) = default;
+    tree(const tree &other)
+        : m_box_size(other.m_box_size), m_box_size_deduced(other.m_box_size_deduced), m_max_leaf_n(other.m_max_leaf_n),
+          m_ncrit(other.m_ncrit), m_parts(other.m_parts), m_codes(other.m_codes), m_perm(other.m_perm),
+          m_last_perm(other.m_last_perm), m_inv_perm(other.m_inv_perm), m_tree(other.m_tree),
+          m_crit_nodes(other.m_crit_nodes)
+    {
+        // We made deep copies from other, setup the views.
+        rocm_init_state();
+    }
     tree(tree &&other) noexcept
         : m_box_size(other.m_box_size), m_box_size_deduced(other.m_box_size_deduced), m_max_leaf_n(other.m_max_leaf_n),
           m_ncrit(other.m_ncrit), m_parts(std::move(other.m_parts)), m_codes(std::move(other.m_codes)),
@@ -1222,11 +1273,19 @@ public:
         // to confirm this independently. So for now let's keep custom
         // implementations of move semantics until this is clarified.
         other.clear();
+
+        // Setup the ROCm views.
+        // NOTE: with other.clear() above we ensured the ROCm state of other
+        // is reset to a def-cted state.
+        rocm_init_state();
     }
     tree &operator=(const tree &other)
     {
         try {
             if (this != &other) {
+                // Destroy the current views before doing anything.
+                rocm_reset_state();
+
                 m_box_size = other.m_box_size;
                 m_box_size_deduced = other.m_box_size_deduced;
                 m_max_leaf_n = other.m_max_leaf_n;
@@ -1238,12 +1297,18 @@ public:
                 m_inv_perm = other.m_inv_perm;
                 m_tree = other.m_tree;
                 m_crit_nodes = other.m_crit_nodes;
+
+                // Re-init the views.
+                rocm_init_state();
             }
             return *this;
         } catch (...) {
             // NOTE: if we triggered an exception, this might now be
             // in an inconsistent state. Call clear()
             // to reset to a consistent state before re-throwing.
+            // NOTE: we will end up calling rocm_reset_state()
+            // twice, once above and once now in the clear() method.
+            // This is ok.
             clear();
             throw;
         }
@@ -1251,6 +1316,9 @@ public:
     tree &operator=(tree &&other) noexcept
     {
         if (this != &other) {
+            // Destroy the current views before doing anything.
+            rocm_reset_state();
+
             m_box_size = other.m_box_size;
             m_box_size_deduced = other.m_box_size_deduced;
             m_max_leaf_n = other.m_max_leaf_n;
@@ -1266,11 +1334,20 @@ public:
             // have in principle assertion failures in the destructor of other
             // in debug mode.
             other.clear();
+
+            // Re-init the views.
+            rocm_init_state();
         }
         return *this;
     }
     ~tree()
     {
+        // NOTE: regarding the ROCm views: the C++ standard guarantees
+        // that the members of a structure are destroyed in inverse
+        // order wrt the order of declaration, so, as long as m_rocm
+        // is the last member, it will be destroyed before any other member.
+        // We just need to be careful that in the debug checks we don't end
+        // up pre-destroying data to which we have an active view.
 #if !defined(NDEBUG)
         // Run various debug checks.
         for (std::size_t j = 0; j < NDim; ++j) {
@@ -1318,6 +1395,9 @@ public:
     // Reset the state of the tree to a known one, i.e., a def-cted tree.
     void clear() noexcept
     {
+        // First destroy the views.
+        rocm_reset_state();
+
         m_box_size = F(0);
         m_box_size_deduced = false;
         m_max_leaf_n = default_max_leaf_n;
@@ -1331,6 +1411,9 @@ public:
         m_inv_perm.clear();
         m_tree.clear();
         m_crit_nodes.clear();
+
+        // Re-init the views with the new (empty) data.
+        rocm_init_state();
     }
     // Tree pretty printing. Will print up to max_nodes, or all the nodes if max_nodes is zero.
     std::ostream &pprint(std::ostream &os, size_type max_nodes = 0) const
@@ -2398,14 +2481,10 @@ private:
                              std::is_same<It, F *>,
                              std::disjunction<std::is_same<UInt, std::uint64_t>, std::is_same<UInt, std::uint32_t>>,
                              std::disjunction<std::is_same<F, float>, std::is_same<F, double>>>) {
-            const auto nparts = m_parts[0].size();
-            if (nparts >= hcc_min_size()) {
-                std::array<const F *, NDim + 1u> part_ptrs;
-                for (std::size_t i = 0; i < NDim + 1u; ++i) {
-                    part_ptrs[i] = m_parts[i].data();
-                }
-                hcc_acc_pot_impl<Q>(out, m_tree.data(), m_tree.size(), part_ptrs, m_codes.data(), nparts, theta2, G,
-                                    eps2, m_ncrit);
+            if (m_rocm && nparts() >= rocm_min_size()) {
+                // Actually run the ROCm implementation only if we have an accelerator
+                // and enough particles.
+                m_rocm->template acc_pot<Q>(out, theta2, G, eps2);
             } else {
                 cpu_run();
             }
@@ -2765,6 +2844,9 @@ private:
     // to reconstruct the other data members according to the new positions.
     void sync()
     {
+        // Before destroying the internal state, make sure we delete the views.
+        rocm_reset_state();
+
         // Get the number of particles.
         const auto nparts = m_parts[0].size();
         // Re-deduce the box size, if needed.
@@ -2819,6 +2901,9 @@ private:
         m_tree.clear();
         m_crit_nodes.clear();
         build_tree();
+
+        // Re-init the views.
+        rocm_init_state();
     }
     // Invoke the particle update function with an
     // exception safe wrapper.
@@ -2918,6 +3003,9 @@ private:
     tree_type m_tree;
     // The list of critical nodes.
     cnode_list_type m_crit_nodes;
+#if defined(RAKAU_WITH_ROCM)
+    std::optional<rocm_state<NDim, F, UInt>> m_rocm;
+#endif
 };
 
 template <typename F>
