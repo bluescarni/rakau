@@ -55,7 +55,7 @@ TEST_CASE("accelerations softening ordered")
                         octree<fp_type> t(
                             {parts.begin() + s, parts.begin() + 2u * s, parts.begin() + 3u * s, parts.begin()}, s,
                             kwargs::box_size = bsize, kwargs::max_leaf_n = max_leaf_n, kwargs::ncrit = ncrit);
-                        t.accs_o(accs, theta, fp_type(1), eps);
+                        t.accs_o(accs, theta, kwargs::eps = eps);
                         // Check that all accelerations are finite.
                         REQUIRE(std::all_of(accs[0].begin(), accs[0].end(), [](auto c) { return std::isfinite(c); }));
                         REQUIRE(std::all_of(accs[1].begin(), accs[1].end(), [](auto c) { return std::isfinite(c); }));
@@ -104,7 +104,7 @@ TEST_CASE("accelerations softening ordered")
                                                 kwargs::ncrit = ncrit);
                             // Compute the accelerations.
                             // Try with the init list overload as well.
-                            t.accs_u({accs[0].data(), accs[1].data(), accs[2].data()}, theta, fp_type(1), eps);
+                            t.accs_u({accs[0].data(), accs[1].data(), accs[2].data()}, theta, kwargs::eps = eps);
                             // Verify all values are finite.
                             REQUIRE(
                                 std::all_of(accs[0].begin(), accs[0].end(), [](auto c) { return std::isfinite(c); }));
@@ -151,7 +151,7 @@ TEST_CASE("accelerations softening unordered")
                         octree<fp_type> t(
                             {parts.begin() + s, parts.begin() + 2u * s, parts.begin() + 3u * s, parts.begin()}, s,
                             kwargs::box_size = bsize, kwargs::max_leaf_n = max_leaf_n, kwargs::ncrit = ncrit);
-                        t.accs_u(accs, theta, fp_type(1), eps);
+                        t.accs_u(accs, theta, kwargs::eps = eps);
                         // Check that all accelerations are finite.
                         REQUIRE(std::all_of(accs[0].begin(), accs[0].end(), [](auto c) { return std::isfinite(c); }));
                         REQUIRE(std::all_of(accs[1].begin(), accs[1].end(), [](auto c) { return std::isfinite(c); }));
@@ -200,7 +200,7 @@ TEST_CASE("accelerations softening unordered")
                                                 kwargs::ncrit = ncrit);
                             // Compute the accelerations.
                             // Try with the init list overload as well.
-                            t.accs_u({accs[0].data(), accs[1].data(), accs[2].data()}, theta, fp_type(1), eps);
+                            t.accs_u({accs[0].data(), accs[1].data(), accs[2].data()}, theta, kwargs::eps = eps);
                             // Verify all values are finite.
                             REQUIRE(
                                 std::all_of(accs[0].begin(), accs[0].end(), [](auto c) { return std::isfinite(c); }));

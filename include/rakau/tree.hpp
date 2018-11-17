@@ -340,6 +340,9 @@ IGOR_MAKE_KWARG(box_size);
 IGOR_MAKE_KWARG(max_leaf_n);
 IGOR_MAKE_KWARG(ncrit);
 
+IGOR_MAKE_KWARG(G);
+IGOR_MAKE_KWARG(eps);
+
 } // namespace kwargs
 
 // NOTE: possible improvements:
@@ -1115,8 +1118,8 @@ public:
     // Default constructor.
     tree() : m_box_size(0), m_box_size_deduced(false), m_max_leaf_n(default_max_leaf_n), m_ncrit(default_ncrit) {}
     // Constructor from array of iterators.
-    template <typename It, typename... Args>
-    explicit tree(const std::array<It, NDim + 1u> &cm_it, const size_type &N, Args &&... args)
+    template <typename It, typename... KwArgs>
+    explicit tree(const std::array<It, NDim + 1u> &cm_it, const size_type &N, KwArgs &&... args)
     {
         // Parse the kwargs.
         ::igor::parser p{args...};
@@ -1160,9 +1163,9 @@ private:
 
 public:
     // Convenience overload with init list instead of array.
-    template <typename It, typename... Args>
-    explicit tree(std::initializer_list<It> cm_it, const size_type &N, Args &&... args)
-        : tree(ctor_ilist_to_array(cm_it), N, std::forward<Args>(args)...)
+    template <typename It, typename... KwArgs>
+    explicit tree(std::initializer_list<It> cm_it, const size_type &N, KwArgs &&... args)
+        : tree(ctor_ilist_to_array(cm_it), N, std::forward<KwArgs>(args)...)
     {
     }
 
@@ -1190,9 +1193,10 @@ private:
 
 public:
     // Convenience overload for the construction from an array of vectors of coords/masses.
-    template <typename Allocator, typename... Args>
-    explicit tree(const std::array<std::vector<F, Allocator>, NDim + 1u> &coords, Args &&... args)
-        : tree(ctor_vecs_to_its(coords), boost::numeric_cast<size_type>(coords[0].size()), std::forward<Args>(args)...)
+    template <typename Allocator, typename... KwArgs>
+    explicit tree(const std::array<std::vector<F, Allocator>, NDim + 1u> &coords, KwArgs &&... args)
+        : tree(ctor_vecs_to_its(coords), boost::numeric_cast<size_type>(coords[0].size()),
+               std::forward<KwArgs>(args)...)
     {
     }
     tree(const tree &) = default;
@@ -2479,87 +2483,115 @@ private:
         std::copy(ilist.begin(), ilist.end(), retval.begin());
         return retval;
     }
+    // Helper to parse the keyword arguments for the acc/pot functions.
+    template <typename... Args>
+    static auto parse_accpot_kwargs(Args &&... args)
+    {
+        ::igor::parser p{args...};
+
+        F G(1), eps(0);
+        if constexpr (p.is_provided(kwargs::G)) {
+            G = boost::numeric_cast<F>(p(kwargs::G));
+        }
+        if constexpr (p.is_provided(kwargs::eps)) {
+            eps = boost::numeric_cast<F>(p(kwargs::eps));
+        }
+
+        return std::make_tuple(G, eps);
+    }
 
 public:
-    template <typename Allocator>
-    void accs_u(std::array<std::vector<F, Allocator>, NDim> &out, F theta, F G = F(1), F eps = F(0)) const
+    template <typename Allocator, typename... KwArgs>
+    void accs_u(std::array<std::vector<F, Allocator>, NDim> &out, F theta, KwArgs &&... args) const
     {
+        const auto [G, eps] = parse_accpot_kwargs(std::forward<KwArgs>(args)...);
         acc_pot_dispatch<false, 0>(out, theta, G, eps);
     }
-    template <typename It>
-    void accs_u(const std::array<It, NDim> &out, F theta, F G = F(1), F eps = F(0)) const
+    template <typename It, typename... KwArgs>
+    void accs_u(const std::array<It, NDim> &out, F theta, KwArgs &&... args) const
     {
+        const auto [G, eps] = parse_accpot_kwargs(std::forward<KwArgs>(args)...);
         acc_pot_dispatch<false, 0>(out, theta, G, eps);
     }
-    template <typename It>
-    void accs_u(std::initializer_list<It> out, F theta, F G = F(1), F eps = F(0)) const
+    template <typename It, typename... KwArgs>
+    void accs_u(std::initializer_list<It> out, F theta, KwArgs &&... args) const
     {
-        accs_u(acc_pot_ilist_to_array<0>(out), theta, G, eps);
+        accs_u(acc_pot_ilist_to_array<0>(out), theta, std::forward<KwArgs>(args)...);
     }
-    template <typename Allocator>
-    void pots_u(std::vector<F, Allocator> &out, F theta, F G = F(1), F eps = F(0)) const
+    template <typename Allocator, typename... KwArgs>
+    void pots_u(std::vector<F, Allocator> &out, F theta, KwArgs &&... args) const
     {
+        const auto [G, eps] = parse_accpot_kwargs(std::forward<KwArgs>(args)...);
         acc_pot_dispatch<false, 1>(out, theta, G, eps);
     }
-    template <typename It>
-    void pots_u(It out, F theta, F G = F(1), F eps = F(0)) const
+    template <typename It, typename... KwArgs>
+    void pots_u(It out, F theta, KwArgs &&... args) const
     {
+        const auto [G, eps] = parse_accpot_kwargs(std::forward<KwArgs>(args)...);
         acc_pot_dispatch<false, 1>(std::array{out}, theta, G, eps);
     }
-    template <typename Allocator>
-    void accs_pots_u(std::array<std::vector<F, Allocator>, NDim + 1u> &out, F theta, F G = F(1), F eps = F(0)) const
+    template <typename Allocator, typename... KwArgs>
+    void accs_pots_u(std::array<std::vector<F, Allocator>, NDim + 1u> &out, F theta, KwArgs &&... args) const
     {
+        const auto [G, eps] = parse_accpot_kwargs(std::forward<KwArgs>(args)...);
         acc_pot_dispatch<false, 2>(out, theta, G, eps);
     }
-    template <typename It>
-    void accs_pots_u(const std::array<It, NDim + 1u> &out, F theta, F G = F(1), F eps = F(0)) const
+    template <typename It, typename... KwArgs>
+    void accs_pots_u(const std::array<It, NDim + 1u> &out, F theta, KwArgs &&... args) const
     {
+        const auto [G, eps] = parse_accpot_kwargs(std::forward<KwArgs>(args)...);
         acc_pot_dispatch<false, 2>(out, theta, G, eps);
     }
-    template <typename It>
-    void accs_pots_u(std::initializer_list<It> out, F theta, F G = F(1), F eps = F(0)) const
+    template <typename It, typename... KwArgs>
+    void accs_pots_u(std::initializer_list<It> out, F theta, KwArgs &&... args) const
     {
-        accs_pots_u(acc_pot_ilist_to_array<2>(out), theta, G, eps);
+        accs_pots_u(acc_pot_ilist_to_array<2>(out), theta, std::forward<KwArgs>(args)...);
     }
-    template <typename Allocator>
-    void accs_o(std::array<std::vector<F, Allocator>, NDim> &out, F theta, F G = F(1), F eps = F(0)) const
+    template <typename Allocator, typename... KwArgs>
+    void accs_o(std::array<std::vector<F, Allocator>, NDim> &out, F theta, KwArgs &&... args) const
     {
+        const auto [G, eps] = parse_accpot_kwargs(std::forward<KwArgs>(args)...);
         acc_pot_dispatch<true, 0>(out, theta, G, eps);
     }
-    template <typename It>
-    void accs_o(const std::array<It, NDim> &out, F theta, F G = F(1), F eps = F(0)) const
+    template <typename It, typename... KwArgs>
+    void accs_o(const std::array<It, NDim> &out, F theta, KwArgs &&... args) const
     {
+        const auto [G, eps] = parse_accpot_kwargs(std::forward<KwArgs>(args)...);
         acc_pot_dispatch<true, 0>(out, theta, G, eps);
     }
-    template <typename It>
-    void accs_o(std::initializer_list<It> out, F theta, F G = F(1), F eps = F(0)) const
+    template <typename It, typename... KwArgs>
+    void accs_o(std::initializer_list<It> out, F theta, KwArgs &&... args) const
     {
-        accs_o(acc_pot_ilist_to_array<0>(out), theta, G, eps);
+        accs_o(acc_pot_ilist_to_array<0>(out), theta, std::forward<KwArgs>(args)...);
     }
-    template <typename Allocator>
-    void pots_o(std::vector<F, Allocator> &out, F theta, F G = F(1), F eps = F(0)) const
+    template <typename Allocator, typename... KwArgs>
+    void pots_o(std::vector<F, Allocator> &out, F theta, KwArgs &&... args) const
     {
+        const auto [G, eps] = parse_accpot_kwargs(std::forward<KwArgs>(args)...);
         acc_pot_dispatch<true, 1>(out, theta, G, eps);
     }
-    template <typename It>
-    void pots_o(It out, F theta, F G = F(1), F eps = F(0)) const
+    template <typename It, typename... KwArgs>
+    void pots_o(It out, F theta, KwArgs &&... args) const
     {
+        const auto [G, eps] = parse_accpot_kwargs(std::forward<KwArgs>(args)...);
         acc_pot_dispatch<true, 1>(std::array{out}, theta, G, eps);
     }
-    template <typename Allocator>
-    void accs_pots_o(std::array<std::vector<F, Allocator>, NDim + 1u> &out, F theta, F G = F(1), F eps = F(0)) const
+    template <typename Allocator, typename... KwArgs>
+    void accs_pots_o(std::array<std::vector<F, Allocator>, NDim + 1u> &out, F theta, KwArgs &&... args) const
     {
+        const auto [G, eps] = parse_accpot_kwargs(std::forward<KwArgs>(args)...);
         acc_pot_dispatch<true, 2>(out, theta, G, eps);
     }
-    template <typename It>
-    void accs_pots_o(const std::array<It, NDim + 1u> &out, F theta, F G = F(1), F eps = F(0)) const
+    template <typename It, typename... KwArgs>
+    void accs_pots_o(const std::array<It, NDim + 1u> &out, F theta, KwArgs &&... args) const
     {
+        const auto [G, eps] = parse_accpot_kwargs(std::forward<KwArgs>(args)...);
         acc_pot_dispatch<true, 2>(out, theta, G, eps);
     }
-    template <typename It>
-    void accs_pots_o(std::initializer_list<It> out, F theta, F G = F(1), F eps = F(0)) const
+    template <typename It, typename... KwArgs>
+    void accs_pots_o(std::initializer_list<It> out, F theta, KwArgs &&... args) const
     {
-        accs_pots_o(acc_pot_ilist_to_array<2>(out), theta, G, eps);
+        accs_pots_o(acc_pot_ilist_to_array<2>(out), theta, std::forward<KwArgs>(args)...);
     }
 
 private:

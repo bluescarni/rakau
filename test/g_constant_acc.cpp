@@ -45,11 +45,11 @@ TEST_CASE("g constant accelerations")
         auto accs_u_orig(accs);
         t.accs_o(accs, theta);
         auto accs_o_orig(accs);
-        t.accs_u(accs, theta, fp_type(0));
+        t.accs_u(accs, theta, kwargs::G = fp_type(0));
         REQUIRE(std::all_of(accs[0].begin(), accs[0].end(), [](fp_type x) { return x == fp_type(0); }));
         REQUIRE(std::all_of(accs[1].begin(), accs[1].end(), [](fp_type x) { return x == fp_type(0); }));
         REQUIRE(std::all_of(accs[2].begin(), accs[2].end(), [](fp_type x) { return x == fp_type(0); }));
-        t.accs_u(accs, theta, fp_type(2));
+        t.accs_u(accs, theta, kwargs::G = fp_type(2));
         REQUIRE(std::all_of(boost::make_zip_iterator(boost::make_tuple(accs[0].begin(), accs_u_orig[0].begin())),
                             boost::make_zip_iterator(boost::make_tuple(accs[0].end(), accs_u_orig[0].end())),
                             [](auto t) { return boost::get<0>(t) == fp_type(2) * boost::get<1>(t); }));
@@ -59,7 +59,7 @@ TEST_CASE("g constant accelerations")
         REQUIRE(std::all_of(boost::make_zip_iterator(boost::make_tuple(accs[2].begin(), accs_u_orig[2].begin())),
                             boost::make_zip_iterator(boost::make_tuple(accs[2].end(), accs_u_orig[2].end())),
                             [](auto t) { return boost::get<0>(t) == fp_type(2) * boost::get<1>(t); }));
-        t.accs_o(accs, theta, fp_type(1) / fp_type(2));
+        t.accs_o(accs, theta, kwargs::G = fp_type(1) / fp_type(2));
         REQUIRE(std::all_of(boost::make_zip_iterator(boost::make_tuple(accs[0].begin(), accs_o_orig[0].begin())),
                             boost::make_zip_iterator(boost::make_tuple(accs[0].end(), accs_o_orig[0].end())),
                             [](auto t) { return boost::get<0>(t) == boost::get<1>(t) / fp_type(2); }));

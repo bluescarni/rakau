@@ -54,7 +54,7 @@ TEST_CASE("potentials softening ordered")
                         octree<fp_type> t(
                             {parts.begin() + s, parts.begin() + 2u * s, parts.begin() + 3u * s, parts.begin()}, s,
                             kwargs::box_size = bsize, kwargs::max_leaf_n = max_leaf_n, kwargs::ncrit = ncrit);
-                        t.pots_o(pots, theta, fp_type(1), eps);
+                        t.pots_o(pots, theta, kwargs::eps = eps);
                         // Check that all potentials are finite.
                         REQUIRE(std::all_of(pots.begin(), pots.end(), [](auto c) { return std::isfinite(c); }));
                         for (auto i = 0u; i < s; ++i) {
@@ -87,7 +87,7 @@ TEST_CASE("potentials softening ordered")
                                                 kwargs::ncrit = ncrit);
                             // Compute the potentials.
                             // Try with the other overload as well.
-                            t.pots_u(pots.data(), theta, fp_type(1), eps);
+                            t.pots_u(pots.data(), theta, kwargs::eps = eps);
                             // Verify all values are finite.
                             REQUIRE(std::all_of(pots.begin(), pots.end(), [](auto c) { return std::isfinite(c); }));
                         }
@@ -125,7 +125,7 @@ TEST_CASE("potentials softening unordered")
                         octree<fp_type> t(
                             {parts.begin() + s, parts.begin() + 2u * s, parts.begin() + 3u * s, parts.begin()}, s,
                             kwargs::box_size = bsize, kwargs::max_leaf_n = max_leaf_n, kwargs::ncrit = ncrit);
-                        t.pots_u(pots, theta, fp_type(1), eps);
+                        t.pots_u(pots, theta, kwargs::eps = eps);
                         // Check that all potentials are finite.
                         REQUIRE(std::all_of(pots.begin(), pots.end(), [](auto c) { return std::isfinite(c); }));
                         for (auto i = 0u; i < s; ++i) {
@@ -158,7 +158,7 @@ TEST_CASE("potentials softening unordered")
                                                 kwargs::ncrit = ncrit);
                             // Compute the potentials.
                             // Try with the other overload as well.
-                            t.pots_u(pots.data(), theta, fp_type(1), eps);
+                            t.pots_u(pots.data(), theta, kwargs::eps = eps);
                             // Verify all values are finite.
                             REQUIRE(std::all_of(pots.begin(), pots.end(), [](auto c) { return std::isfinite(c); }));
                         }

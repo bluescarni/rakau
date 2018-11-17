@@ -44,13 +44,13 @@ TEST_CASE("g constant accelerations")
         auto pots_u_orig(pots);
         t.pots_o(pots, theta);
         auto pots_o_orig(pots);
-        t.pots_u(pots, theta, fp_type(0));
+        t.pots_u(pots, theta, kwargs::G = fp_type(0));
         REQUIRE(std::all_of(pots.begin(), pots.end(), [](fp_type x) { return x == fp_type(0); }));
-        t.pots_u(pots, theta, fp_type(2));
+        t.pots_u(pots, theta, kwargs::G = fp_type(2));
         REQUIRE(std::all_of(boost::make_zip_iterator(boost::make_tuple(pots.begin(), pots_u_orig.begin())),
                             boost::make_zip_iterator(boost::make_tuple(pots.end(), pots_u_orig.end())),
                             [](auto t) { return boost::get<0>(t) == fp_type(2) * boost::get<1>(t); }));
-        t.pots_o(pots, theta, fp_type(1) / fp_type(2));
+        t.pots_o(pots, theta, kwargs::G = fp_type(1) / fp_type(2));
         REQUIRE(std::all_of(boost::make_zip_iterator(boost::make_tuple(pots.begin(), pots_o_orig.begin())),
                             boost::make_zip_iterator(boost::make_tuple(pots.end(), pots_o_orig.end())),
                             [](auto t) { return boost::get<0>(t) == boost::get<1>(t) / fp_type(2); }));

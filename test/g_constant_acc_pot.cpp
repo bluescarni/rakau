@@ -45,12 +45,12 @@ TEST_CASE("g constant accelerations/potentials")
         auto accs_pots_u_orig(accpots);
         t.accs_pots_o(accpots, theta);
         auto accs_pots_o_orig(accpots);
-        t.accs_pots_u(accpots, theta, fp_type(0));
+        t.accs_pots_u(accpots, theta, kwargs::G = fp_type(0));
         REQUIRE(std::all_of(accpots[0].begin(), accpots[0].end(), [](fp_type x) { return x == fp_type(0); }));
         REQUIRE(std::all_of(accpots[1].begin(), accpots[1].end(), [](fp_type x) { return x == fp_type(0); }));
         REQUIRE(std::all_of(accpots[2].begin(), accpots[2].end(), [](fp_type x) { return x == fp_type(0); }));
         REQUIRE(std::all_of(accpots[3].begin(), accpots[3].end(), [](fp_type x) { return x == fp_type(0); }));
-        t.accs_pots_u(accpots, theta, fp_type(2));
+        t.accs_pots_u(accpots, theta, kwargs::G = fp_type(2));
         REQUIRE(
             std::all_of(boost::make_zip_iterator(boost::make_tuple(accpots[0].begin(), accs_pots_u_orig[0].begin())),
                         boost::make_zip_iterator(boost::make_tuple(accpots[0].end(), accs_pots_u_orig[0].end())),
@@ -67,7 +67,7 @@ TEST_CASE("g constant accelerations/potentials")
             std::all_of(boost::make_zip_iterator(boost::make_tuple(accpots[3].begin(), accs_pots_u_orig[3].begin())),
                         boost::make_zip_iterator(boost::make_tuple(accpots[3].end(), accs_pots_u_orig[3].end())),
                         [](auto t) { return boost::get<0>(t) == fp_type(2) * boost::get<1>(t); }));
-        t.accs_pots_o(accpots, theta, fp_type(1) / fp_type(2));
+        t.accs_pots_o(accpots, theta, kwargs::G = fp_type(1) / fp_type(2));
         REQUIRE(
             std::all_of(boost::make_zip_iterator(boost::make_tuple(accpots[0].begin(), accs_pots_o_orig[0].begin())),
                         boost::make_zip_iterator(boost::make_tuple(accpots[0].end(), accs_pots_o_orig[0].end())),
