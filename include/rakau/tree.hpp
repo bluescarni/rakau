@@ -1009,19 +1009,21 @@ private:
             throw std::invalid_argument("The critical number of particles for the vectorised computation of the "
                                         "potentials/accelerations must be nonzero");
         }
-        // Prepare the vectors.
-        for (auto &vc : m_parts) {
-            vc.resize(N);
-        }
+
         // NOTE: in the parallel for loops below, we need to index into the random-access iterator
         // type It up to the value N. Make sure we can do that.
         using it_diff_t = typename std::iterator_traits<It>::difference_type;
         // NOTE: for use in make_unsigned, it_diff_t must be a C++ integral. This should be ensured
         // by iterator_traits, at least for input iterators:
         // https://en.cppreference.com/w/cpp/iterator/iterator_traits
-        if (m_parts[0].size() > static_cast<std::make_unsigned_t<it_diff_t>>(std::numeric_limits<it_diff_t>::max())) {
+        if (N > static_cast<std::make_unsigned_t<it_diff_t>>(std::numeric_limits<it_diff_t>::max())) {
             throw std::overflow_error("The number of particles (" + std::to_string(m_parts[0].size())
                                       + ") is too large, and it results in an overflow condition");
+        }
+
+        // Prepare the vectors.
+        for (auto &vc : m_parts) {
+            vc.resize(N);
         }
         // NOTE: these ensure that, from now on, we can just cast
         // freely between the size types of the masses/coords and codes/indices vectors.
@@ -1029,11 +1031,7 @@ private:
         m_perm.resize(boost::numeric_cast<decltype(m_perm.size())>(N));
         m_last_perm.resize(boost::numeric_cast<decltype(m_last_perm.size())>(N));
         m_inv_perm.resize(boost::numeric_cast<decltype(m_inv_perm.size())>(N));
-        // Deduce the box size, if needed.
-        if (m_box_size_deduced) {
-            // NOTE: this function works ok if N == 0.
-            m_box_size = determine_box_size(cm_it, N);
-        }
+
         {
             // Copy the input data.
             simple_timer st_m("data movement");
@@ -1056,6 +1054,13 @@ private:
                               },
                               tbb::simple_partitioner());
         }
+
+        // Deduce the box size, if needed.
+        if (m_box_size_deduced) {
+            // NOTE: this function works ok if N == 0.
+            m_box_size = determine_box_size(p_its_u(), N);
+        }
+
         {
             // Do the Morton encoding.
             simple_timer st_m("morton encoding");
