@@ -49,8 +49,8 @@
 
 #include <rakau/config.hpp>
 #include <rakau/detail/di_aligned_allocator.hpp>
-#if defined(__HCC__)
-#include <rakau/detail/hc_fwd.hpp>
+#if defined(RAKAU_WITH_ROCM)
+#include <rakau/detail/rocm_fwd.hpp>
 #endif
 #include <rakau/detail/igor.hpp>
 #include <rakau/detail/simd.hpp>
@@ -2392,7 +2392,7 @@ private:
 #endif
                 });
         };
-#if defined(__HCC__)
+#if defined(RAKAU_WITH_ROCM)
         if constexpr (NDim == 3u
                       && std::conjunction_v<
                              std::is_same<It, F *>,

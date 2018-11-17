@@ -6,8 +6,8 @@
 // Public License v. 2.0. If a copy of the MPL was not distributed
 // with this file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
-#ifndef RAKAU_DETAIL_HC_FWD_HPP
-#define RAKAU_DETAIL_HC_FWD_HPP
+#ifndef RAKAU_DETAIL_ROCM_FWD_HPP
+#define RAKAU_DETAIL_ROCM_FWD_HPP
 
 #include <array>
 #include <cstddef>

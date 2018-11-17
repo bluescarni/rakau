@@ -18,6 +18,7 @@ endif()
 option(RAKAU_BUILD_TESTS "Build unit tests." OFF)
 option(RAKAU_BUILD_BENCHMARKS "Build benchmarks." OFF)
 option(RAKAU_ENABLE_RSQRT "Enable the use of rsqrt intrinsics." ON)
+option(RAKAU_WITH_ROCM "Enable support for ROCm." OFF)
 
 if(NOT RAKAU_ENABLE_RSQRT)
   set(RAKAU_DISABLE_RSQRT "#define RAKAU_DISABLE_RSQRT")
@@ -25,6 +26,13 @@ endif()
 
 include(YACMACompilerLinkerSettings)
 include(CheckCXXCompilerFlag)
+
+if(RAKAU_WITH_ROCM)
+  if(NOT YACMA_COMPILER_IS_HCC)
+    message(FATAL_ERROR "ROCm support requires hcc compiler.")
+  endif()
+  set(RAKAU_ENABLE_ROCM "#define RAKAU_WITH_ROCM")
+endif()
 
 # Assemble the flags.
 set(RAKAU_CXX_FLAGS_DEBUG ${YACMA_CXX_FLAGS} ${YACMA_CXX_FLAGS_DEBUG})
@@ -93,19 +101,21 @@ target_include_directories(rakau INTERFACE
     $<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}/include>
     $<INSTALL_INTERFACE:include>)
 
-if(YACMA_COMPILER_IS_HCC)
-  set(RAKAU_HC_DEVICE_FLAGS "" CACHE STRING "Flags for device code compilation.")
-  mark_as_advanced(RAKAU_HC_DEVICE_FLAGS)
-  string(REPLACE " " ";" RAKAU_HC_DEVICE_FLAGS_ "${RAKAU_HC_DEVICE_FLAGS}")
-  add_library(rakau_hc SHARED "${CMAKE_CURRENT_SOURCE_DIR}/src/rakau_hc.cpp")
-  set_target_properties(rakau_hc PROPERTIES LINK_FLAGS "-hc ${RAKAU_HC_DEVICE_FLAGS}")
-  target_compile_options(rakau_hc PRIVATE "$<$<CONFIG:DEBUG>:${RAKAU_CXX_FLAGS_DEBUG}>" "$<$<CONFIG:RELEASE>:${RAKAU_CXX_FLAGS_RELEASE}>"
-    "-hc" "-Wno-unused-command-line-argument" "${RAKAU_HC_DEVICE_FLAGS_}")
-  unset(RAKAU_HC_DEVICE_FLAGS_)
-  target_link_libraries(rakau_hc PRIVATE rakau)
-  set_property(TARGET rakau_hc PROPERTY CXX_STANDARD 17)
-  set_property(TARGET rakau_hc PROPERTY CXX_STANDARD_REQUIRED YES)
-  set_property(TARGET rakau_hc PROPERTY CXX_EXTENSIONS NO)
+if(RAKAU_WITH_ROCM)
+  set(RAKAU_ROCM_DEVICE_FLAGS "" CACHE STRING "Flags for ROCm device code compilation.")
+  mark_as_advanced(RAKAU_ROCM_DEVICE_FLAGS)
+  string(REPLACE " " ";" RAKAU_ROCM_DEVICE_FLAGS_ "${RAKAU_ROCM_DEVICE_FLAGS}")
+  add_library(rakau_rocm SHARED "${CMAKE_CURRENT_SOURCE_DIR}/src/rakau_rocm.cpp")
+  set_target_properties(rakau_rocm PROPERTIES LINK_FLAGS "-hc ${RAKAU_ROCM_DEVICE_FLAGS}")
+  target_compile_options(rakau_rocm PRIVATE "$<$<CONFIG:DEBUG>:${RAKAU_CXX_FLAGS_DEBUG}>" "$<$<CONFIG:RELEASE>:${RAKAU_CXX_FLAGS_RELEASE}>"
+    "-hc" "-Wno-unused-command-line-argument" "${RAKAU_ROCM_DEVICE_FLAGS_}")
+  unset(RAKAU_ROCM_DEVICE_FLAGS_)
+  set_property(TARGET rakau_rocm PROPERTY CXX_STANDARD 17)
+  set_property(TARGET rakau_rocm PROPERTY CXX_STANDARD_REQUIRED YES)
+  set_property(TARGET rakau_rocm PROPERTY CXX_EXTENSIONS NO)
+
+  target_link_libraries(rakau INTERFACE rakau_rocm)
+  target_link_libraries(rakau_rocm PRIVATE rakau)
 endif()
 
 # Configure config.hpp.
@@ -114,6 +124,9 @@ configure_file("${CMAKE_CURRENT_SOURCE_DIR}/config.hpp.in" "${CMAKE_CURRENT_BINA
 # Installation.
 # Setup of the export.
 install(TARGETS rakau EXPORT rakau_export)
+if(RAKAU_WITH_ROCM)
+  install(TARGETS rakau_rocm EXPORT rakau_export LIBRARY DESTINATION "lib")
+endif()
 install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/rakau-config.cmake" DESTINATION "lib/cmake/rakau")
 install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RakauFindBoost.cmake" DESTINATION "lib/cmake/rakau")
 install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/cmake/FindTBB.cmake" DESTINATION "lib/cmake/rakau")
