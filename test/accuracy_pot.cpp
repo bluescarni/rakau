@@ -12,7 +12,6 @@
 #include "catch.hpp"
 
 #include <algorithm>
-#include <array>
 #include <cinttypes>
 #include <cmath>
 #include <cstdint>
@@ -42,7 +41,7 @@ TEST_CASE("potential accuracy ordered")
         auto sizes = {10u, 100u, 1000u, 2000u};
         auto max_leaf_ns = {1u, 2u, 8u, 16u};
         auto ncrits = {1u, 16u, 128u, 256u};
-        std::array<std::vector<fp_type>, 1> pots;
+        std::vector<fp_type> pots;
         fp_type tot_max_diff(0);
         for (auto s : sizes) {
             auto parts = get_uniform_particles<3>(s, bsize, rng);
@@ -50,14 +49,14 @@ TEST_CASE("potential accuracy ordered")
                 for (auto ncrit : ncrits) {
                     std::vector<fp_type> diff;
                     octree<fp_type> t(
-                        bsize, {parts.begin() + s, parts.begin() + 2u * s, parts.begin() + 3u * s, parts.begin()}, s,
-                        max_leaf_n, ncrit);
+                        {parts.begin() + s, parts.begin() + 2u * s, parts.begin() + 3u * s, parts.begin()}, s,
+                        kwargs::box_size = bsize, kwargs::max_leaf_n = max_leaf_n, kwargs::ncrit = ncrit);
                     t.pots_o(pots, theta);
                     // Check that all potentials are finite.
-                    REQUIRE(std::all_of(pots[0].begin(), pots[0].end(), [](auto c) { return std::isfinite(c); }));
+                    REQUIRE(std::all_of(pots.begin(), pots.end(), [](auto c) { return std::isfinite(c); }));
                     for (auto i = 0u; i < s; ++i) {
                         auto epot = t.exact_pot_o(i);
-                        diff.emplace_back(std::abs((epot[0] - pots[0][i]) / epot[0]));
+                        diff.emplace_back(std::abs((epot - pots[i]) / epot));
                     }
                     std::cout << "Results for size=" << s << ", max_leaf_n=" << max_leaf_n << ", ncrit=" << ncrit
                               << ".\n=========\n";
@@ -89,7 +88,7 @@ TEST_CASE("potential accuracy unordered")
         auto sizes = {10u, 100u, 1000u, 2000u};
         auto max_leaf_ns = {1u, 2u, 8u, 16u};
         auto ncrits = {1u, 16u, 128u, 256u};
-        std::array<std::vector<fp_type>, 1> pots;
+        std::vector<fp_type> pots;
         fp_type tot_max_diff(0);
         for (auto s : sizes) {
             auto parts = get_uniform_particles<3>(s, bsize, rng);
@@ -97,14 +96,14 @@ TEST_CASE("potential accuracy unordered")
                 for (auto ncrit : ncrits) {
                     std::vector<fp_type> diff;
                     octree<fp_type> t(
-                        bsize, {parts.begin() + s, parts.begin() + 2u * s, parts.begin() + 3u * s, parts.begin()}, s,
-                        max_leaf_n, ncrit);
+                        {parts.begin() + s, parts.begin() + 2u * s, parts.begin() + 3u * s, parts.begin()}, s,
+                        kwargs::box_size = bsize, kwargs::max_leaf_n = max_leaf_n, kwargs::ncrit = ncrit);
                     t.pots_u(pots, theta);
                     // Check that all potentials are finite.
-                    REQUIRE(std::all_of(pots[0].begin(), pots[0].end(), [](auto c) { return std::isfinite(c); }));
+                    REQUIRE(std::all_of(pots.begin(), pots.end(), [](auto c) { return std::isfinite(c); }));
                     for (auto i = 0u; i < s; ++i) {
                         auto epot = t.exact_pot_u(i);
-                        diff.emplace_back(std::abs((epot[0] - pots[0][i]) / epot[0]));
+                        diff.emplace_back(std::abs((epot - pots[i]) / epot));
                     }
                     std::cout << "Results for size=" << s << ", max_leaf_n=" << max_leaf_n << ", ncrit=" << ncrit
                               << ".\n=========\n";

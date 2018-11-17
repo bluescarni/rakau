@@ -6,7 +6,6 @@
 // Public License v. 2.0. If a copy of the MPL was not distributed
 // with this file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
-#include <array>
 #include <initializer_list>
 #include <memory>
 #include <random>
@@ -94,13 +93,12 @@ int main(int argc, char **argv)
 
     // auto parts = get_uniform_particles<3>(nparts, bsize);
     auto parts = get_plummer_sphere(nparts, bsize);
-    tree<3, float> t(bsize,
-                     {parts.begin() + nparts, parts.begin() + 2 * nparts, parts.begin() + 3 * nparts, parts.begin()},
-                     nparts, max_leaf_n, ncrit);
+    tree<3, float> t({parts.begin() + nparts, parts.begin() + 2 * nparts, parts.begin() + 3 * nparts, parts.begin()},
+                     nparts, kwargs::box_size = bsize, kwargs::max_leaf_n = max_leaf_n, kwargs::ncrit = ncrit);
     std::cout << t << '\n';
-    std::array<std::vector<float>, 1> pots;
+    std::vector<float> pots;
     t.pots_u(pots, 0.75f);
-    std::cout << pots[0][t.ord_ind()[idx]] << '\n';
-    auto epot = t.exact_pot_u(t.ord_ind()[idx]);
-    std::cout << epot[0] << '\n';
+    std::cout << pots[t.inv_perm()[idx]] << '\n';
+    auto epot = t.exact_pot_u(t.inv_perm()[idx]);
+    std::cout << epot << '\n';
 }
