@@ -336,10 +336,12 @@ inline constexpr unsigned default_ncrit =
 namespace kwargs
 {
 
+// kwargs for tree construction.
 IGOR_MAKE_KWARG(box_size);
 IGOR_MAKE_KWARG(max_leaf_n);
 IGOR_MAKE_KWARG(ncrit);
 
+// kwargs for acc/pot computation.
 IGOR_MAKE_KWARG(G);
 IGOR_MAKE_KWARG(eps);
 
@@ -372,6 +374,7 @@ IGOR_MAKE_KWARG(eps);
 // - would be interesting to see if we can do the permutations in-place efficiently. If that worked, it would probably
 //   help simplifying things on the GPU side. See for instance:
 //   https://stackoverflow.com/questions/7365814/in-place-array-reordering
+// - constructor from rvalue reference of array of vectors (to take ownership of data created from outside).
 template <std::size_t NDim, typename F, typename UInt = std::size_t>
 class tree
 {
@@ -2837,6 +2840,10 @@ public:
     size_type ncrit() const
     {
         return m_ncrit;
+    }
+    size_type nparts() const
+    {
+        return m_parts[0].size();
     }
 
 private:

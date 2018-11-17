@@ -11,6 +11,7 @@
 #define CATCH_CONFIG_MAIN
 #include "catch.hpp"
 
+#include <algorithm>
 #include <array>
 #include <initializer_list>
 #include <limits>
@@ -18,6 +19,7 @@
 #include <stdexcept>
 #include <tuple>
 #include <utility>
+#include <vector>
 
 #include "test_utils.hpp"
 
@@ -32,6 +34,7 @@ static std::mt19937 rng;
 TEST_CASE("ctors")
 {
     tuple_for_each(fp_types{}, [](auto x) {
+        using Catch::Matchers::Contains;
         using fp_type = decltype(x);
         constexpr fp_type bsize = 10;
         constexpr unsigned N = 100;
@@ -85,6 +88,33 @@ TEST_CASE("ctors")
         REQUIRE(t2a.ncrit() == 5u);
         REQUIRE(t2a.perm() == t2a.last_perm());
         REQUIRE(t2a.inv_perm().size() == N);
+        // Ctors from vectors.
+        std::array<std::vector<fp_type>, 4> arr_vec;
+        for (auto &vec : arr_vec) {
+            vec.resize(N);
+            std::uniform_real_distribution<fp_type> urd(-fp_type(1), fp_type(1));
+            std::generate(vec.begin(), vec.end(), [&urd]() { return urd(rng); });
+        }
+        tree_t tvec1{arr_vec};
+        REQUIRE(tvec1.nparts() == N);
+        REQUIRE(std::equal(arr_vec[0].begin(), arr_vec[0].end(), tvec1.p_its_o()[0]));
+        REQUIRE(std::equal(arr_vec[1].begin(), arr_vec[1].end(), tvec1.p_its_o()[1]));
+        REQUIRE(std::equal(arr_vec[2].begin(), arr_vec[2].end(), tvec1.p_its_o()[2]));
+        REQUIRE(std::equal(arr_vec[3].begin(), arr_vec[3].end(), tvec1.p_its_o()[3]));
+        tree_t tvec2{arr_vec, box_size = 100};
+        REQUIRE(tvec2.nparts() == N);
+        REQUIRE(tvec2.box_size() == fp_type(100));
+        REQUIRE(std::equal(arr_vec[0].begin(), arr_vec[0].end(), tvec2.p_its_o()[0]));
+        REQUIRE(std::equal(arr_vec[1].begin(), arr_vec[1].end(), tvec2.p_its_o()[1]));
+        REQUIRE(std::equal(arr_vec[2].begin(), arr_vec[2].end(), tvec2.p_its_o()[2]));
+        REQUIRE(std::equal(arr_vec[3].begin(), arr_vec[3].end(), tvec2.p_its_o()[3]));
+        arr_vec[2].clear();
+        REQUIRE_THROWS_WITH((tree_t{arr_vec, box_size = 3, max_leaf_n = 4, ncrit = 5}),
+                            Contains("Inconsistent sizes detected in the construction of a tree from an array "
+                                     "of vectors: the first vector has a size of "
+                                     + std::to_string(N)
+                                     + ", while the vector at index 2 has a size of 0 (all the vectors in the input "
+                                       "array must have the same size)"));
         // Ctors with deduced box size.
         fp_type xcoords[] = {-10, 1, 2, 10}, ycoords[] = {-10, 1, 2, 10}, zcoords[] = {-10, 1, 2, 10},
                 masses[] = {1, 1, 1, 1};
@@ -118,7 +148,6 @@ TEST_CASE("ctors")
         REQUIRE(t4a.inv_perm().size() == 4u);
         // Provide explicit box size of zero, which generates an infinity
         // when trying to discretise.
-        using Catch::Matchers::Contains;
         REQUIRE_THROWS_WITH((tree_t{{xcoords, ycoords, zcoords, masses}, 4, box_size = 0., max_leaf_n = 4, ncrit = 5}),
                             Contains("While trying to discretise the input coordinate"));
         // Box size too small.
