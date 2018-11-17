@@ -141,31 +141,39 @@ private:
     }
 
 public:
-    template <typename... T>
-    decltype(auto) operator()(const named_argument<T> &... nargs) const
+    template <typename... Tags>
+    decltype(auto) operator()([[maybe_unused]] const named_argument<Tags> &... nargs) const
     {
-        if constexpr (sizeof...(T) == 0u) {
+        if constexpr (sizeof...(Tags) == 0u) {
             return;
-        } else if constexpr (sizeof...(T) == 1u) {
+        } else if constexpr (sizeof...(Tags) == 1u) {
             return fetch_one(nargs...);
         } else {
             return ::std::forward_as_tuple(fetch_one(nargs)...);
         }
     }
+
+private:
     template <typename Tag>
     static constexpr bool is_provided([[maybe_unused]] const named_argument<Tag> &narg)
     {
         return ::std::disjunction_v<is_provided_impl<Tag, uncvref_t<ParseArgs>>...>;
     }
+
+public:
     template <typename... Tags>
-    static constexpr bool has_all(const named_argument<Tags> &... nargs)
+    static constexpr bool has([[maybe_unused]] const named_argument<Tags> &... nargs)
     {
-        return (... && is_provided(nargs));
+        if constexpr (sizeof...(Tags) > 0u) {
+            return (... && is_provided(nargs));
+        } else {
+            return false;
+        }
     }
     template <typename... Tags>
     static constexpr bool has_extra(const named_argument<Tags> &... nargs)
     {
-        return (std::size_t(0) + ... + static_cast<std::size_t>(is_provided(nargs))) < sizeof...(ParseArgs);
+        return (::std::size_t(0) + ... + static_cast<::std::size_t>(is_provided(nargs))) < sizeof...(ParseArgs);
     }
 
 private:
@@ -174,7 +182,7 @@ private:
 
 } // namespace igor
 
-#define IGOR_MAKE_KWARG(name)                                                                                          \
+#define IGOR_MAKE_NAMED_ARG(name)                                                                                      \
     struct name##_tag {                                                                                                \
     };                                                                                                                 \
     inline constexpr auto name = ::igor::named_argument<name##_tag> {}

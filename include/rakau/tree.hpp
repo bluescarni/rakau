@@ -337,13 +337,13 @@ namespace kwargs
 {
 
 // kwargs for tree construction.
-IGOR_MAKE_KWARG(box_size);
-IGOR_MAKE_KWARG(max_leaf_n);
-IGOR_MAKE_KWARG(ncrit);
+IGOR_MAKE_NAMED_ARG(box_size);
+IGOR_MAKE_NAMED_ARG(max_leaf_n);
+IGOR_MAKE_NAMED_ARG(ncrit);
 
 // kwargs for acc/pot computation.
-IGOR_MAKE_KWARG(G);
-IGOR_MAKE_KWARG(eps);
+IGOR_MAKE_NAMED_ARG(G);
+IGOR_MAKE_NAMED_ARG(eps);
 
 } // namespace kwargs
 
@@ -1130,17 +1130,17 @@ public:
         // Handle the box size.
         F box_size(0);
         bool box_size_deduced = true;
-        if constexpr (p.is_provided(kwargs::box_size)) {
+        if constexpr (p.has(kwargs::box_size)) {
             box_size = boost::numeric_cast<F>(p(kwargs::box_size));
             box_size_deduced = false;
         }
 
         // Handle max_leaf_n and ncrit.
         size_type max_leaf_n = default_max_leaf_n, ncrit = default_ncrit;
-        if constexpr (p.is_provided(kwargs::max_leaf_n)) {
+        if constexpr (p.has(kwargs::max_leaf_n)) {
             max_leaf_n = boost::numeric_cast<size_type>(p(kwargs::max_leaf_n));
         }
-        if constexpr (p.is_provided(kwargs::ncrit)) {
+        if constexpr (p.has(kwargs::ncrit)) {
             ncrit = boost::numeric_cast<size_type>(p(kwargs::ncrit));
         }
 
@@ -2493,10 +2493,10 @@ private:
         ::igor::parser p{args...};
 
         F G(1), eps(0);
-        if constexpr (p.is_provided(kwargs::G)) {
+        if constexpr (p.has(kwargs::G)) {
             G = boost::numeric_cast<F>(p(kwargs::G));
         }
-        if constexpr (p.is_provided(kwargs::eps)) {
+        if constexpr (p.has(kwargs::eps)) {
             eps = boost::numeric_cast<F>(p(kwargs::eps));
         }
 
