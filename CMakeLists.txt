@@ -85,7 +85,6 @@ include(RakauFindBoost)
 unset(_RAKAU_BOOST_COMPONENTS)
 
 # Find xsimd.
-# NOTE: we have some AVX512 code in here, so require xsimd at least version 5.
 find_package(xsimd REQUIRED)
 
 # Find TBB.
