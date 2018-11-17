@@ -58,7 +58,7 @@ TEST_CASE("potentials softening ordered")
                         // Check that all potentials are finite.
                         REQUIRE(std::all_of(pots.begin(), pots.end(), [](auto c) { return std::isfinite(c); }));
                         for (auto i = 0u; i < s; ++i) {
-                            auto epot = t.exact_pot_o(i, fp_type(1), eps);
+                            auto epot = t.exact_pot_o(i, kwargs::eps = eps);
                             diff.emplace_back(std::abs((epot - pots[i]) / epot));
                         }
                         std::cout << "Results for size=" << s << ", max_leaf_n=" << max_leaf_n << ", ncrit=" << ncrit
@@ -129,7 +129,7 @@ TEST_CASE("potentials softening unordered")
                         // Check that all potentials are finite.
                         REQUIRE(std::all_of(pots.begin(), pots.end(), [](auto c) { return std::isfinite(c); }));
                         for (auto i = 0u; i < s; ++i) {
-                            auto epot = t.exact_pot_u(i, fp_type(1), eps);
+                            auto epot = t.exact_pot_u(i, kwargs::eps = eps);
                             diff.emplace_back(std::abs((epot - pots[i]) / epot));
                         }
                         std::cout << "Results for size=" << s << ", max_leaf_n=" << max_leaf_n << ", ncrit=" << ncrit

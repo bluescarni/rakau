@@ -2637,28 +2637,40 @@ private:
     }
 
 public:
-    std::array<F, NDim> exact_acc_u(size_type idx, F G = F(1), F eps = F(0)) const
+    template <typename... KwArgs>
+    std::array<F, NDim> exact_acc_u(size_type idx, KwArgs &&... args) const
     {
+        const auto [G, eps] = parse_accpot_kwargs(std::forward<KwArgs>(args)...);
         return exact_acc_pot_impl<false, 0>(idx, G, eps);
     }
-    F exact_pot_u(size_type idx, F G = F(1), F eps = F(0)) const
+    template <typename... KwArgs>
+    F exact_pot_u(size_type idx, KwArgs &&... args) const
     {
+        const auto [G, eps] = parse_accpot_kwargs(std::forward<KwArgs>(args)...);
         return exact_acc_pot_impl<false, 1>(idx, G, eps)[0];
     }
-    std::array<F, NDim + 1u> exact_acc_pot_u(size_type idx, F G = F(1), F eps = F(0)) const
+    template <typename... KwArgs>
+    std::array<F, NDim + 1u> exact_acc_pot_u(size_type idx, KwArgs &&... args) const
     {
+        const auto [G, eps] = parse_accpot_kwargs(std::forward<KwArgs>(args)...);
         return exact_acc_pot_impl<false, 2>(idx, G, eps);
     }
-    std::array<F, NDim> exact_acc_o(size_type idx, F G = F(1), F eps = F(0)) const
+    template <typename... KwArgs>
+    std::array<F, NDim> exact_acc_o(size_type idx, KwArgs &&... args) const
     {
+        const auto [G, eps] = parse_accpot_kwargs(std::forward<KwArgs>(args)...);
         return exact_acc_pot_impl<true, 0>(idx, G, eps);
     }
-    F exact_pot_o(size_type idx, F G = F(1), F eps = F(0)) const
+    template <typename... KwArgs>
+    F exact_pot_o(size_type idx, KwArgs &&... args) const
     {
+        const auto [G, eps] = parse_accpot_kwargs(std::forward<KwArgs>(args)...);
         return exact_acc_pot_impl<true, 1>(idx, G, eps)[0];
     }
-    std::array<F, NDim + 1u> exact_acc_pot_o(size_type idx, F G = F(1), F eps = F(0)) const
+    template <typename... KwArgs>
+    std::array<F, NDim + 1u> exact_acc_pot_o(size_type idx, KwArgs &&... args) const
     {
+        const auto [G, eps] = parse_accpot_kwargs(std::forward<KwArgs>(args)...);
         return exact_acc_pot_impl<true, 2>(idx, G, eps);
     }
 

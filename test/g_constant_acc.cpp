@@ -72,8 +72,8 @@ TEST_CASE("g constant accelerations")
         // Check the exact accs as well.
         const auto eacc_u_orig = t.exact_acc_u(42);
         const auto eacc_o_orig = t.exact_acc_o(42);
-        const auto eacc_u = t.exact_acc_u(42, fp_type(2));
-        const auto eacc_o = t.exact_acc_o(42, fp_type(1) / fp_type(2));
+        const auto eacc_u = t.exact_acc_u(42, kwargs::G = fp_type(2));
+        const auto eacc_o = t.exact_acc_o(42, kwargs::G = fp_type(1) / fp_type(2));
         REQUIRE(eacc_u_orig[0] == eacc_u[0] / fp_type(2));
         REQUIRE(eacc_u_orig[1] == eacc_u[1] / fp_type(2));
         REQUIRE(eacc_u_orig[2] == eacc_u[2] / fp_type(2));

@@ -57,8 +57,8 @@ TEST_CASE("g constant accelerations")
         // Check the exact pots as well.
         const auto epot_u_orig = t.exact_pot_u(42);
         const auto epot_o_orig = t.exact_pot_o(42);
-        const auto epot_u = t.exact_pot_u(42, fp_type(2));
-        const auto epot_o = t.exact_pot_o(42, fp_type(1) / fp_type(2));
+        const auto epot_u = t.exact_pot_u(42, kwargs::G = fp_type(2));
+        const auto epot_o = t.exact_pot_o(42, kwargs::G = fp_type(1) / fp_type(2));
         REQUIRE(epot_u_orig == epot_u / fp_type(2));
         REQUIRE(epot_o_orig == epot_o * fp_type(2));
     });

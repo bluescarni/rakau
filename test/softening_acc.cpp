@@ -61,7 +61,7 @@ TEST_CASE("accelerations softening ordered")
                         REQUIRE(std::all_of(accs[1].begin(), accs[1].end(), [](auto c) { return std::isfinite(c); }));
                         REQUIRE(std::all_of(accs[2].begin(), accs[2].end(), [](auto c) { return std::isfinite(c); }));
                         for (auto i = 0u; i < s; ++i) {
-                            auto eacc = t.exact_acc_o(i, fp_type(1), eps);
+                            auto eacc = t.exact_acc_o(i, kwargs::eps = eps);
                             x_diff.emplace_back(std::abs((eacc[0] - accs[0][i]) / eacc[0]));
                             y_diff.emplace_back(std::abs((eacc[1] - accs[1][i]) / eacc[1]));
                             z_diff.emplace_back(std::abs((eacc[2] - accs[2][i]) / eacc[2]));
@@ -157,7 +157,7 @@ TEST_CASE("accelerations softening unordered")
                         REQUIRE(std::all_of(accs[1].begin(), accs[1].end(), [](auto c) { return std::isfinite(c); }));
                         REQUIRE(std::all_of(accs[2].begin(), accs[2].end(), [](auto c) { return std::isfinite(c); }));
                         for (auto i = 0u; i < s; ++i) {
-                            auto eacc = t.exact_acc_u(i, fp_type(1), eps);
+                            auto eacc = t.exact_acc_u(i, kwargs::eps = eps);
                             x_diff.emplace_back(std::abs((eacc[0] - accs[0][i]) / eacc[0]));
                             y_diff.emplace_back(std::abs((eacc[1] - accs[1][i]) / eacc[1]));
                             z_diff.emplace_back(std::abs((eacc[2] - accs[2][i]) / eacc[2]));

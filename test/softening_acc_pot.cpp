@@ -66,8 +66,8 @@ TEST_CASE("accelerations/potentials softening ordered")
                         REQUIRE(
                             std::all_of(accpots[3].begin(), accpots[3].end(), [](auto c) { return std::isfinite(c); }));
                         for (auto i = 0u; i < s; ++i) {
-                            auto eacc = t.exact_acc_o(i, fp_type(1), eps);
-                            auto epot = t.exact_pot_o(i, fp_type(1), eps);
+                            auto eacc = t.exact_acc_o(i, kwargs::eps = eps);
+                            auto epot = t.exact_pot_o(i, kwargs::eps = eps);
                             x_diff.emplace_back(std::abs((eacc[0] - accpots[0][i]) / eacc[0]));
                             y_diff.emplace_back(std::abs((eacc[1] - accpots[1][i]) / eacc[1]));
                             z_diff.emplace_back(std::abs((eacc[2] - accpots[2][i]) / eacc[2]));
@@ -181,8 +181,8 @@ TEST_CASE("accelerations/potentials softening unordered")
                         REQUIRE(
                             std::all_of(accpots[3].begin(), accpots[3].end(), [](auto c) { return std::isfinite(c); }));
                         for (auto i = 0u; i < s; ++i) {
-                            auto eacc = t.exact_acc_u(i, fp_type(1), eps);
-                            auto epot = t.exact_pot_u(i, fp_type(1), eps);
+                            auto eacc = t.exact_acc_u(i, kwargs::eps = eps);
+                            auto epot = t.exact_pot_u(i, kwargs::eps = eps);
                             x_diff.emplace_back(std::abs((eacc[0] - accpots[0][i]) / eacc[0]));
                             y_diff.emplace_back(std::abs((eacc[1] - accpots[1][i]) / eacc[1]));
                             z_diff.emplace_back(std::abs((eacc[2] - accpots[2][i]) / eacc[2]));
