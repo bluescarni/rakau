@@ -31,8 +31,8 @@ TEST_CASE("automatic box size")
             fp_type x_coords[] = {0, 1, 2, 3}, y_coords[] = {-4, -5, -6, -7}, z_coords[] = {4, 5, 3, 1},
                     masses[] = {1, 1, 1, 1};
             octree<fp_type> t({x_coords, y_coords, z_coords, masses}, 4, max_leaf_n = 1, ncrit = 1);
-            REQUIRE(t.get_box_size_deduced());
-            REQUIRE(t.get_box_size() == 14 + fp_type(0.7));
+            REQUIRE(t.box_size_deduced());
+            REQUIRE(t.box_size() == 14 + fp_type(0.7));
             t.update_particles_u([](const auto &its) {
                 for (std::size_t i = 0; i < 4u; ++i) {
                     for (std::size_t j = 0; j < 3u; ++j) {
@@ -40,8 +40,8 @@ TEST_CASE("automatic box size")
                     }
                 }
             });
-            REQUIRE(t.get_box_size_deduced());
-            REQUIRE(t.get_box_size() == 28 + fp_type(1.4));
+            REQUIRE(t.box_size_deduced());
+            REQUIRE(t.box_size() == 28 + fp_type(1.4));
             t.update_particles_u([](const auto &its) {
                 for (std::size_t i = 0; i < 4u; ++i) {
                     for (std::size_t j = 0; j < 3u; ++j) {
@@ -49,8 +49,8 @@ TEST_CASE("automatic box size")
                     }
                 }
             });
-            REQUIRE(t.get_box_size_deduced());
-            REQUIRE(t.get_box_size() == 7 + fp_type(0.35));
+            REQUIRE(t.box_size_deduced());
+            REQUIRE(t.box_size() == 7 + fp_type(0.35));
             auto its = t.p_its_o();
 
             REQUIRE(its[0][0] == 0);

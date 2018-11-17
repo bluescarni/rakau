@@ -38,10 +38,10 @@ TEST_CASE("ctors")
         using tree_t = octree<fp_type>;
         // Default ctor.
         tree_t t0;
-        REQUIRE(t0.get_box_size() == fp_type(0));
-        REQUIRE(!t0.get_box_size_deduced());
-        REQUIRE(t0.get_ncrit() == default_ncrit);
-        REQUIRE(t0.get_max_leaf_n() == default_max_leaf_n);
+        REQUIRE(t0.box_size() == fp_type(0));
+        REQUIRE(!t0.box_size_deduced());
+        REQUIRE(t0.ncrit() == default_ncrit);
+        REQUIRE(t0.max_leaf_n() == default_max_leaf_n);
         REQUIRE(t0.perm().empty());
         REQUIRE(t0.last_perm().empty());
         REQUIRE(t0.inv_perm().empty());
@@ -50,28 +50,28 @@ TEST_CASE("ctors")
         // Ctor from array of iterators, box size given, default ncrit/max_leaf_n.
         tree_t t1{std::array{parts.begin() + N, parts.begin() + 2u * N, parts.begin() + 3u * N, parts.begin()}, N,
                   box_size = bsize};
-        REQUIRE(t1.get_box_size() == bsize);
-        REQUIRE(!t1.get_box_size_deduced());
-        REQUIRE(t1.get_max_leaf_n() == default_max_leaf_n);
-        REQUIRE(t1.get_ncrit() == default_ncrit);
+        REQUIRE(t1.box_size() == bsize);
+        REQUIRE(!t1.box_size_deduced());
+        REQUIRE(t1.max_leaf_n() == default_max_leaf_n);
+        REQUIRE(t1.ncrit() == default_ncrit);
         REQUIRE(t1.perm() == t1.last_perm());
         REQUIRE(t1.inv_perm().size() == N);
         // Non-default ncrit/max_leaf_n.
         tree_t t2{std::array{parts.begin() + N, parts.begin() + 2u * N, parts.begin() + 3u * N, parts.begin()}, N,
                   max_leaf_n = 4, ncrit = 5, box_size = bsize};
-        REQUIRE(t2.get_box_size() == bsize);
-        REQUIRE(!t2.get_box_size_deduced());
-        REQUIRE(t2.get_max_leaf_n() == 4u);
-        REQUIRE(t2.get_ncrit() == 5u);
+        REQUIRE(t2.box_size() == bsize);
+        REQUIRE(!t2.box_size_deduced());
+        REQUIRE(t2.max_leaf_n() == 4u);
+        REQUIRE(t2.ncrit() == 5u);
         REQUIRE(t2.perm() == t2.last_perm());
         REQUIRE(t2.inv_perm().size() == N);
         // Same, with ctors from init lists.
         tree_t t1a{
             {parts.begin() + N, parts.begin() + 2u * N, parts.begin() + 3u * N, parts.begin()}, N, box_size = bsize};
-        REQUIRE(t1a.get_box_size() == bsize);
-        REQUIRE(!t1a.get_box_size_deduced());
-        REQUIRE(t1a.get_max_leaf_n() == default_max_leaf_n);
-        REQUIRE(t1a.get_ncrit() == default_ncrit);
+        REQUIRE(t1a.box_size() == bsize);
+        REQUIRE(!t1a.box_size_deduced());
+        REQUIRE(t1a.max_leaf_n() == default_max_leaf_n);
+        REQUIRE(t1a.ncrit() == default_ncrit);
         REQUIRE(t1a.perm() == t1a.last_perm());
         REQUIRE(t1a.inv_perm().size() == N);
         tree_t t2a{{parts.begin() + N, parts.begin() + 2u * N, parts.begin() + 3u * N, parts.begin()},
@@ -79,41 +79,41 @@ TEST_CASE("ctors")
                    box_size = bsize,
                    max_leaf_n = 4,
                    ncrit = 5};
-        REQUIRE(t2a.get_box_size() == bsize);
-        REQUIRE(!t2a.get_box_size_deduced());
-        REQUIRE(t2a.get_max_leaf_n() == 4u);
-        REQUIRE(t2a.get_ncrit() == 5u);
+        REQUIRE(t2a.box_size() == bsize);
+        REQUIRE(!t2a.box_size_deduced());
+        REQUIRE(t2a.max_leaf_n() == 4u);
+        REQUIRE(t2a.ncrit() == 5u);
         REQUIRE(t2a.perm() == t2a.last_perm());
         REQUIRE(t2a.inv_perm().size() == N);
         // Ctors with deduced box size.
         fp_type xcoords[] = {-10, 1, 2, 10}, ycoords[] = {-10, 1, 2, 10}, zcoords[] = {-10, 1, 2, 10},
                 masses[] = {1, 1, 1, 1};
         tree_t t3{std::array{xcoords, ycoords, zcoords, masses}, 4};
-        REQUIRE(t3.get_box_size() == fp_type(21));
-        REQUIRE(t3.get_box_size_deduced());
-        REQUIRE(t3.get_max_leaf_n() == default_max_leaf_n);
-        REQUIRE(t3.get_ncrit() == default_ncrit);
+        REQUIRE(t3.box_size() == fp_type(21));
+        REQUIRE(t3.box_size_deduced());
+        REQUIRE(t3.max_leaf_n() == default_max_leaf_n);
+        REQUIRE(t3.ncrit() == default_ncrit);
         REQUIRE(t3.perm() == t3.last_perm());
         REQUIRE(t3.inv_perm().size() == 4u);
         tree_t t4{std::array{xcoords, ycoords, zcoords, masses}, 4, max_leaf_n = 4, ncrit = 5};
-        REQUIRE(t4.get_box_size() == fp_type(21));
-        REQUIRE(t4.get_box_size_deduced());
-        REQUIRE(t4.get_max_leaf_n() == 4u);
-        REQUIRE(t4.get_ncrit() == 5u);
+        REQUIRE(t4.box_size() == fp_type(21));
+        REQUIRE(t4.box_size_deduced());
+        REQUIRE(t4.max_leaf_n() == 4u);
+        REQUIRE(t4.ncrit() == 5u);
         REQUIRE(t4.perm() == t4.last_perm());
         REQUIRE(t4.inv_perm().size() == 4u);
         tree_t t3a{{xcoords, ycoords, zcoords, masses}, 4};
-        REQUIRE(t3a.get_box_size() == fp_type(21));
-        REQUIRE(t3a.get_box_size_deduced());
-        REQUIRE(t3a.get_max_leaf_n() == default_max_leaf_n);
-        REQUIRE(t3a.get_ncrit() == default_ncrit);
+        REQUIRE(t3a.box_size() == fp_type(21));
+        REQUIRE(t3a.box_size_deduced());
+        REQUIRE(t3a.max_leaf_n() == default_max_leaf_n);
+        REQUIRE(t3a.ncrit() == default_ncrit);
         REQUIRE(t3a.perm() == t3a.last_perm());
         REQUIRE(t3a.inv_perm().size() == 4u);
         tree_t t4a{{xcoords, ycoords, zcoords, masses}, 4, max_leaf_n = 4, ncrit = 5};
-        REQUIRE(t4a.get_box_size() == fp_type(21));
-        REQUIRE(t4a.get_box_size_deduced());
-        REQUIRE(t4a.get_max_leaf_n() == 4u);
-        REQUIRE(t4a.get_ncrit() == 5u);
+        REQUIRE(t4a.box_size() == fp_type(21));
+        REQUIRE(t4a.box_size_deduced());
+        REQUIRE(t4a.max_leaf_n() == 4u);
+        REQUIRE(t4a.ncrit() == 5u);
         REQUIRE(t4a.perm() == t4a.last_perm());
         REQUIRE(t4a.inv_perm().size() == 4u);
         // Provide explicit box size of zero, which generates an infinity
@@ -148,58 +148,58 @@ TEST_CASE("ctors")
                                      "for the coordinates, 1 for the masses)"));
         // Copy ctor.
         tree_t t4a_copy(t4a);
-        REQUIRE(t4a_copy.get_box_size() == fp_type(21));
-        REQUIRE(t4a_copy.get_box_size_deduced());
-        REQUIRE(t4a_copy.get_max_leaf_n() == 4u);
-        REQUIRE(t4a_copy.get_ncrit() == 5u);
+        REQUIRE(t4a_copy.box_size() == fp_type(21));
+        REQUIRE(t4a_copy.box_size_deduced());
+        REQUIRE(t4a_copy.max_leaf_n() == 4u);
+        REQUIRE(t4a_copy.ncrit() == 5u);
         REQUIRE(t4a_copy.perm() == t4a.perm());
         REQUIRE(t4a_copy.last_perm() == t4a.last_perm());
         REQUIRE(t4a_copy.inv_perm() == t4a.inv_perm());
         // Move ctor.
         tree_t t4a_move(std::move(t4a_copy));
-        REQUIRE(t4a_move.get_box_size() == fp_type(21));
-        REQUIRE(t4a_move.get_box_size_deduced());
-        REQUIRE(t4a_move.get_max_leaf_n() == 4u);
-        REQUIRE(t4a_move.get_ncrit() == 5u);
-        REQUIRE(t4a_copy.get_box_size() == fp_type(0));
-        REQUIRE(!t4a_copy.get_box_size_deduced());
-        REQUIRE(t4a_copy.get_max_leaf_n() == default_max_leaf_n);
-        REQUIRE(t4a_copy.get_ncrit() == default_ncrit);
+        REQUIRE(t4a_move.box_size() == fp_type(21));
+        REQUIRE(t4a_move.box_size_deduced());
+        REQUIRE(t4a_move.max_leaf_n() == 4u);
+        REQUIRE(t4a_move.ncrit() == 5u);
+        REQUIRE(t4a_copy.box_size() == fp_type(0));
+        REQUIRE(!t4a_copy.box_size_deduced());
+        REQUIRE(t4a_copy.max_leaf_n() == default_max_leaf_n);
+        REQUIRE(t4a_copy.ncrit() == default_ncrit);
         REQUIRE(t4a_copy.perm().empty());
         REQUIRE(t4a_copy.last_perm().empty());
         REQUIRE(t4a_copy.inv_perm().empty());
         // Copy assignment.
         t4a = t3a;
-        REQUIRE(t4a.get_box_size() == fp_type(21));
-        REQUIRE(t4a.get_box_size_deduced());
-        REQUIRE(t4a.get_max_leaf_n() == default_max_leaf_n);
-        REQUIRE(t4a.get_ncrit() == default_ncrit);
+        REQUIRE(t4a.box_size() == fp_type(21));
+        REQUIRE(t4a.box_size_deduced());
+        REQUIRE(t4a.max_leaf_n() == default_max_leaf_n);
+        REQUIRE(t4a.ncrit() == default_ncrit);
         REQUIRE(t4a.perm() == t3a.perm());
         REQUIRE(t4a.last_perm() == t3a.last_perm());
         REQUIRE(t4a.inv_perm() == t3a.inv_perm());
         // Move assignment.
         t4a = std::move(t3);
-        REQUIRE(t4a.get_box_size() == fp_type(21));
-        REQUIRE(t4a.get_box_size_deduced());
-        REQUIRE(t4a.get_max_leaf_n() == default_max_leaf_n);
-        REQUIRE(t4a.get_ncrit() == default_ncrit);
-        REQUIRE(t3.get_box_size() == fp_type(0));
-        REQUIRE(!t3.get_box_size_deduced());
-        REQUIRE(t3.get_max_leaf_n() == default_max_leaf_n);
-        REQUIRE(t3.get_ncrit() == default_ncrit);
+        REQUIRE(t4a.box_size() == fp_type(21));
+        REQUIRE(t4a.box_size_deduced());
+        REQUIRE(t4a.max_leaf_n() == default_max_leaf_n);
+        REQUIRE(t4a.ncrit() == default_ncrit);
+        REQUIRE(t3.box_size() == fp_type(0));
+        REQUIRE(!t3.box_size_deduced());
+        REQUIRE(t3.max_leaf_n() == default_max_leaf_n);
+        REQUIRE(t3.ncrit() == default_ncrit);
         REQUIRE(t3.perm().empty());
         REQUIRE(t3.last_perm().empty());
         REQUIRE(t3.inv_perm().empty());
         // Self assignments.
         t4a = *&t4a;
-        REQUIRE(t4a.get_box_size() == fp_type(21));
-        REQUIRE(t4a.get_box_size_deduced());
-        REQUIRE(t4a.get_max_leaf_n() == default_max_leaf_n);
-        REQUIRE(t4a.get_ncrit() == default_ncrit);
+        REQUIRE(t4a.box_size() == fp_type(21));
+        REQUIRE(t4a.box_size_deduced());
+        REQUIRE(t4a.max_leaf_n() == default_max_leaf_n);
+        REQUIRE(t4a.ncrit() == default_ncrit);
         t4a = std::move(t4a);
-        REQUIRE(t4a.get_box_size() == fp_type(21));
-        REQUIRE(t4a.get_box_size_deduced());
-        REQUIRE(t4a.get_max_leaf_n() == default_max_leaf_n);
-        REQUIRE(t4a.get_ncrit() == default_ncrit);
+        REQUIRE(t4a.box_size() == fp_type(21));
+        REQUIRE(t4a.box_size_deduced());
+        REQUIRE(t4a.max_leaf_n() == default_max_leaf_n);
+        REQUIRE(t4a.ncrit() == default_ncrit);
     });
 }

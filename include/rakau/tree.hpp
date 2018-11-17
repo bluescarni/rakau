@@ -2810,21 +2810,21 @@ public:
     {
         update_particles_dispatch<true>(std::forward<Func>(f));
     }
-    F get_box_size() const
+    F box_size() const
     {
         return m_box_size;
     }
-    bool get_box_size_deduced() const
+    bool box_size_deduced() const
     {
         return m_box_size_deduced;
     }
-    size_type get_ncrit() const
-    {
-        return m_ncrit;
-    }
-    size_type get_max_leaf_n() const
+    size_type max_leaf_n() const
     {
         return m_max_leaf_n;
+    }
+    size_type ncrit() const
+    {
+        return m_ncrit;
     }
 
 private:
