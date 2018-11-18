@@ -703,7 +703,7 @@ private:
 
         // Compute the root node's properties. Do it concurrently with other computations.
         tbb::task_group tg;
-        tg.run([&]() { compute_node_properties(m_tree.back()); });
+        tg.run([this]() { compute_node_properties(m_tree.back()); });
 
         // Check if the root node is a critical node. It is a critical node if the number of particles is leq m_ncrit
         // (the definition of critical node) or m_max_leaf_n (in which case it will have no children).
@@ -721,7 +721,7 @@ private:
         tg.wait();
 
         // NOTE: the merge of the subtrees and of the critical nodes lists can be done independently.
-        tg.run([&]() {
+        tg.run([&trees, this]() {
             // NOTE: this sorting and the computation of the cumulative sizes can be done also in parallel,
             // but it's probably not worth it since the size of trees should be rather small.
             //
@@ -748,7 +748,7 @@ private:
                 [this, &cum_sizes, &trees](const auto &out_range) {
                     for (auto i = out_range.begin(); i != out_range.end(); ++i) {
                         tbb::parallel_for(tbb::blocked_range<decltype(trees[i].size())>(0, trees[i].size()),
-                                          [&](const auto &in_range) {
+                                          [&trees, this, &cum_sizes, i](const auto &in_range) {
                                               std::copy(trees[i].data() + in_range.begin(),
                                                         trees[i].data() + in_range.end(),
                                                         m_tree.data() + cum_sizes[i] + in_range.begin());
@@ -757,7 +757,7 @@ private:
                 });
         });
 
-        tg.run([&]() {
+        tg.run([&crit_nodes, this]() {
             // NOTE: as above, we could do some of these things in parallel but it does not seem worth it at this time.
             // Sort the critical nodes lists according to the starting points of the ranges.
             std::sort(crit_nodes.begin(), crit_nodes.end(), [](const auto &v1, const auto &v2) {
@@ -789,7 +789,7 @@ private:
                 [this, &cum_sizes, &crit_nodes](const auto &out_range) {
                     for (auto i = out_range.begin(); i != out_range.end(); ++i) {
                         tbb::parallel_for(tbb::blocked_range<decltype(crit_nodes[i].size())>(0, crit_nodes[i].size()),
-                                          [&](const auto &in_range) {
+                                          [&crit_nodes, this, &cum_sizes, i](const auto &in_range) {
                                               std::copy(crit_nodes[i].data() + in_range.begin(),
                                                         crit_nodes[i].data() + in_range.end(),
                                                         m_crit_nodes.data() + cum_sizes[i] + in_range.begin());
@@ -2341,7 +2341,7 @@ private:
     void acc_pot_impl(const std::array<It, nvecs_res<Q>> &out, F theta2, F G, F eps2) const
     {
         using c_size_type = decltype(m_crit_nodes.size());
-        auto cpu_run = [&](c_size_type c_begin, c_size_type c_end) {
+        auto cpu_run = [this, &out, theta2, G, eps2](c_size_type c_begin, c_size_type c_end) {
             assert(c_begin <= c_end);
             assert(c_end <= m_crit_nodes.size());
 
