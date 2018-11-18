@@ -39,7 +39,7 @@ bool rocm_has_accelerator()
 {
     // NOTE: it seems like at the moment the CPU is also seen as
     // an accelerator, so we always have at least 1 device.
-    // We are interested in using ROCm only in the presence
+    // We are interested in using ROCm only in presence
     // of actual GPU accelerators, so we check if there are at
     // least 2 accelerators on the system.
     return hc::accelerator::get_all().size() > 1u;
@@ -47,7 +47,7 @@ bool rocm_has_accelerator()
 
 // Machinery to transform an array of pointers into a tuple of array views.
 // NOTE: these tuple <-> array conversions are temporarily needed as hcc
-// seems not to support capturing arrays of views in a paralle_for, but
+// does not seem to support capturing arrays of views in a parallel_for(), but
 // tuples are apparently ok.
 template <typename T, std::size_t N, std::size_t... I>
 inline auto ap2tv_impl(const std::array<T *, N> &a, int size, std::index_sequence<I...>)
@@ -136,11 +136,21 @@ void rocm_state<NDim, F, UInt>::acc_pot(int p_begin, int p_end, const std::array
 {
     assert(p_begin <= p_end);
 
+    // Fetch the state structure.
     auto &state = *static_cast<const rocm_state_impl<NDim, F, UInt> *>(m_state);
-    const auto nparts = state.m_nparts;
-    auto rt = ap2tv(out, nparts);
 
+    const auto nparts = state.m_nparts;
     assert(p_end <= nparts);
+
+    // Offset the original output pointers: we want to create
+    // a view only to the memory area into which we will actually
+    // be writing.
+    std::array<F *, tree_nvecs_res<Q, NDim>> out_offset;
+    for (std::size_t j = 0; j < tree_nvecs_res<Q, NDim>; ++j) {
+        out_offset[j] = out[j] + p_begin;
+    }
+    // Create the output views.
+    auto rt = ap2tv(out_offset, p_end - p_begin);
 
     hc::parallel_for_each(
         hc::extent<1>(p_end - p_begin).tile(__HSA_WAVEFRONT_SIZE__),
@@ -149,7 +159,7 @@ void rocm_state<NDim, F, UInt>::acc_pot(int p_begin, int p_end, const std::array
             tree_size = state.m_tree_size, rt, theta2, G,
             eps2
         ](hc::tiled_index<1> thread_id) [[hc]] {
-            // Get the global particle index.
+            // Get the global particle index into the tree data.
             const auto pidx = thread_id.global[0] + p_begin;
             if (pidx >= nparts) {
                 // Don't do anything if we are in the remainder
@@ -324,7 +334,9 @@ void rocm_state<NDim, F, UInt>::acc_pot(int p_begin, int p_end, const std::array
 
             // Handle the G constant and write out the result.
             for (std::size_t j = 0; j < tree_nvecs_res<Q, NDim>; ++j) {
-                res_view[j][pidx] = G * res_array[j];
+                // NOTE: for writing the results, we use the loop index
+                // without offset.
+                res_view[j][thread_id.global[0]] = G * res_array[j];
             }
         })
         .get();
