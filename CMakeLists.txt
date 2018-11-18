@@ -92,8 +92,11 @@ find_package(xsimd REQUIRED)
 # Find TBB.
 find_package(TBB REQUIRED)
 
+# Find the threading library.
+include(RakauFindThreads)
+
 # Link the deps.
-target_link_libraries(rakau INTERFACE Boost::boost xsimd TBB::tbb)
+target_link_libraries(rakau INTERFACE Boost::boost xsimd TBB::tbb Threads::Threads)
 
 # Finish setting up the rakau interface target.
 target_include_directories(rakau INTERFACE
@@ -130,6 +133,7 @@ endif()
 install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/rakau-config.cmake" DESTINATION "lib/cmake/rakau")
 install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RakauFindBoost.cmake" DESTINATION "lib/cmake/rakau")
 install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/cmake/FindTBB.cmake" DESTINATION "lib/cmake/rakau")
+install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RakauFindThreads.cmake" DESTINATION "lib/cmake/rakau")
 install(EXPORT rakau_export NAMESPACE rakau:: DESTINATION lib/cmake/rakau)
 # Take care of versioning.
 include(CMakePackageConfigHelpers)
