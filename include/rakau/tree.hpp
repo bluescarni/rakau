@@ -21,6 +21,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
+#include <future>
 #include <initializer_list>
 #include <iostream>
 #include <iterator>
@@ -348,6 +349,7 @@ IGOR_MAKE_NAMED_ARG(ncrit);
 // kwargs for acc/pot computation.
 IGOR_MAKE_NAMED_ARG(G);
 IGOR_MAKE_NAMED_ARG(eps);
+IGOR_MAKE_NAMED_ARG(split);
 
 } // namespace kwargs
 
@@ -2338,8 +2340,20 @@ private:
     // theta2 the square of the opening angle, G the grav constant, eps2 the square of the softening length. Q indicates
     // which quantities will be computed (accs, potentials, or both).
     template <unsigned Q, typename It>
-    void acc_pot_impl(const std::array<It, nvecs_res<Q>> &out, F theta2, F G, F eps2) const
+    void acc_pot_impl(const std::array<It, nvecs_res<Q>> &out, F theta2, F G, F eps2,
+                      const std::vector<double> &split) const
     {
+        // Validation of split, common to all codepaths.
+        if (std::any_of(split.begin(), split.end(), [](const double &x) { return !std::isfinite(x); })) {
+            throw std::invalid_argument("The 'split' parameter cannot contain non-finite values");
+        }
+        if (std::any_of(split.begin(), split.end(), [](const double &x) { return x < 0.; })) {
+            throw std::invalid_argument("The 'split' parameter must contain only non-negative values");
+        }
+        if (std::all_of(split.begin(), split.end(), [](const double &x) { return x == 0.; })) {
+            throw std::invalid_argument("The values in the 'split' parameter cannot all be zero");
+        }
+
         using c_size_type = decltype(m_crit_nodes.size());
         auto cpu_run = [this, &out, theta2, G, eps2](c_size_type c_begin, c_size_type c_end) {
             assert(c_begin <= c_end);
@@ -2479,22 +2493,96 @@ private:
             });
         };
 #if defined(RAKAU_WITH_ROCM)
+        // Validation of split specific to ROCm.
+        //
+        // Only CPU + 1 accelerator is supported at this time.
+        if (split.size() > 2u) {
+            throw std::invalid_argument(
+                "Cannot split the computation of accelerations/potentials between more than 2 devices");
+        }
+        // Cannot offload to the accelerator if none is available.
+        if (!m_rocm && split.size() == 2u) {
+            throw std::invalid_argument(
+                "Cannot split the computation of accelerations/potentials: no accelerator has been detected");
+        }
+
         if constexpr (NDim == 3u
                       && std::conjunction_v<
                              std::is_same<It, F *>,
                              std::disjunction<std::is_same<UInt, std::uint64_t>, std::is_same<UInt, std::uint32_t>>,
                              std::disjunction<std::is_same<F, float>, std::is_same<F, double>>>) {
-            if (m_rocm && nparts() >= rocm_min_size()) {
-                // Actually run the ROCm implementation only if we have an accelerator
-                // and enough particles.
-                m_rocm->template acc_pot<Q>(0, boost::numeric_cast<int>(nparts()), out, theta2, G, eps2);
+            if (m_rocm && nparts() >= rocm_min_size() && (split.empty() || split.size() == 2u)) {
+                // Actually run the ROCm implementation only if:
+                // - we have an accelerator,
+                // - we have enough particles,
+                // - split is empty (default config) or it contains 2 entries.
+
+                // Determine the particle index at which we will split the computation
+                // between the 2 devices.
+                size_type particle_split_idx;
+                if (split.empty()) {
+                    // No split specified, divide 50/50.
+                    particle_split_idx = nparts() / 2u;
+                } else {
+                    // Split was specified: normalise the 1st component wrt the
+                    // accumulation, then project onto nparts.
+                    particle_split_idx = boost::numeric_cast<size_type>((split[0] / (split[0] + split[1])) * nparts());
+                }
+
+                // Now we need to adjust particle_split_idx so that it sits at a
+                // critical node boundary. We locate the first node that
+                // starts with an index >= particle_split_idx (note that this could yield
+                // an end() iterator).
+                const auto cn_it = std::lower_bound(m_crit_nodes.begin(), m_crit_nodes.end(), particle_split_idx,
+                                                    [](const auto &cn, size_type value) { return get<1>(cn) < value; });
+                if (cn_it == m_crit_nodes.end()) {
+                    // We found the end() iterator. This means that all computations
+                    // will go on the cpu, i.e., we will be splitting at nparts.
+                    particle_split_idx = nparts();
+                } else {
+                    // We found a non-end() iterator. Fetch its starting index
+                    // and use that as a splitting index.
+                    particle_split_idx = get<1>(*cn_it);
+                }
+                // Make sure we can compute the iterator difference below.
+                using cn_it_diff_t = typename std::iterator_traits<decltype(m_crit_nodes.begin())>::difference_type;
+                using cn_it_udiff_t = std::make_unsigned_t<cn_it_diff_t>;
+                if (m_crit_nodes.size() > static_cast<cn_it_udiff_t>(std::numeric_limits<cn_it_diff_t>::max())) {
+                    throw std::overflow_error("The size of the critical nodes list ("
+                                              + std::to_string(m_crit_nodes.size())
+                                              + ") is too large, and it results in an overflow condition");
+                }
+
+                // Run the ROCm computation in async mode.
+                // NOTE: futures returned by async() will block on destruction. Thus, even if
+                // cpu_run() throws, we will be sure that this thread will end before the exception
+                // is handled.
+                auto roc_fut = std::async(std::launch::async, [this, particle_split_idx, &out, theta2, G, eps2]() {
+                    m_rocm->template acc_pot<Q>(boost::numeric_cast<int>(particle_split_idx),
+                                                boost::numeric_cast<int>(nparts()), out, theta2, G, eps2);
+                });
+
+                // Run the cpu implementation.
+                cpu_run(0, boost::numeric_cast<c_size_type>(cn_it - m_crit_nodes.begin()));
+
+                // Re-throw any exception that might be generated by the ROCm implementation.
+                roc_fut.get();
             } else {
                 cpu_run(0, m_crit_nodes.size());
             }
         } else {
+            if (split.size() == 2u) {
+                throw std::invalid_argument(
+                    "Cannot compute accelerations/potentials on non-cpu devices: the floating-point and/or integral "
+                    "types involved in the computation are supported only on the cpu");
+            }
             cpu_run(0, m_crit_nodes.size());
         }
 #else
+        if (split.size() > 1u) {
+            throw std::invalid_argument("Cannot compute accelerations/potentials on non-cpu devices: rakau was not "
+                                        "configured with support for multi-device computing");
+        }
         cpu_run(0, m_crit_nodes.size());
 #endif
     }
@@ -2523,7 +2611,8 @@ private:
     // out is the array of output iterators, theta the opening angle, G the grav const, eps the softening length.
     // Q indicates which quantities will be computed (accs, potentials, or both).
     template <bool Ordered, unsigned Q, typename It>
-    void acc_pot_dispatch(const std::array<It, nvecs_res<Q>> &out, F theta, F G, F eps) const
+    void acc_pot_dispatch(const std::array<It, nvecs_res<Q>> &out, F theta, F G, F eps,
+                          const std::vector<double> &split) const
     {
         simple_timer st("vector accs/pots computation");
         const auto theta2 = theta * theta, eps2 = eps * eps;
@@ -2554,31 +2643,32 @@ private:
             }
             // NOTE: we are checking in the acc_pot_impl() function that we can index into
             // the permuted iterators without overflows (see the use of boost::numeric_cast()).
-            acc_pot_impl<Q>(out_pits, theta2, G, eps2);
+            acc_pot_impl<Q>(out_pits, theta2, G, eps2, split);
         } else {
-            acc_pot_impl<Q>(out, theta2, G, eps2);
+            acc_pot_impl<Q>(out, theta2, G, eps2, split);
         }
     }
     // Helper overload for an array of vectors. It will prepare the vectors and then
     // call the other overload.
     template <bool Ordered, unsigned Q, typename Allocator>
-    void acc_pot_dispatch(std::array<std::vector<F, Allocator>, nvecs_res<Q>> &out, F theta, F G, F eps) const
+    void acc_pot_dispatch(std::array<std::vector<F, Allocator>, nvecs_res<Q>> &out, F theta, F G, F eps,
+                          const std::vector<double> &split) const
     {
         std::array<F *, nvecs_res<Q>> out_ptrs;
         for (std::size_t j = 0; j < nvecs_res<Q>; ++j) {
             out[j].resize(boost::numeric_cast<decltype(out[j].size())>(m_parts[0].size()));
             out_ptrs[j] = out[j].data();
         }
-        acc_pot_dispatch<Ordered, Q>(out_ptrs, theta, G, eps);
+        acc_pot_dispatch<Ordered, Q>(out_ptrs, theta, G, eps, split);
     }
     // Helper overload for a single vector. It will prepare the vector and then
     // call the other overload. This is used for the potential-only computations.
     template <bool Ordered, unsigned Q, typename Allocator>
-    void acc_pot_dispatch(std::vector<F, Allocator> &out, F theta, F G, F eps) const
+    void acc_pot_dispatch(std::vector<F, Allocator> &out, F theta, F G, F eps, const std::vector<double> &split) const
     {
         static_assert(Q == 1u);
         out.resize(boost::numeric_cast<decltype(out.size())>(m_parts[0].size()));
-        acc_pot_dispatch<Ordered, Q>(std::array{out.data()}, theta, G, eps);
+        acc_pot_dispatch<Ordered, Q>(std::array{out.data()}, theta, G, eps, split);
     }
     // Small helper to turn an init list into an array, in the functions for the computation
     // of the accelerations/potentials. Q indicates which quantities will be computed (accs,
@@ -2611,21 +2701,26 @@ private:
             eps = boost::numeric_cast<F>(p(kwargs::eps));
         }
 
-        return std::make_tuple(G, eps);
+        std::vector<double> split;
+        if constexpr (p.has(kwargs::split)) {
+            split = std::forward<decltype(p(kwargs::split))>(p(kwargs::split));
+        }
+
+        return std::make_tuple(G, eps, std::move(split));
     }
 
 public:
     template <typename Allocator, typename... KwArgs>
     void accs_u(std::array<std::vector<F, Allocator>, NDim> &out, F theta, KwArgs &&... args) const
     {
-        const auto [G, eps] = parse_accpot_kwargs(std::forward<KwArgs>(args)...);
-        acc_pot_dispatch<false, 0>(out, theta, G, eps);
+        const auto [G, eps, split] = parse_accpot_kwargs(std::forward<KwArgs>(args)...);
+        acc_pot_dispatch<false, 0>(out, theta, G, eps, split);
     }
     template <typename It, typename... KwArgs>
     void accs_u(const std::array<It, NDim> &out, F theta, KwArgs &&... args) const
     {
-        const auto [G, eps] = parse_accpot_kwargs(std::forward<KwArgs>(args)...);
-        acc_pot_dispatch<false, 0>(out, theta, G, eps);
+        const auto [G, eps, split] = parse_accpot_kwargs(std::forward<KwArgs>(args)...);
+        acc_pot_dispatch<false, 0>(out, theta, G, eps, split);
     }
     template <typename It, typename... KwArgs>
     void accs_u(std::initializer_list<It> out, F theta, KwArgs &&... args) const
@@ -2635,26 +2730,26 @@ public:
     template <typename Allocator, typename... KwArgs>
     void pots_u(std::vector<F, Allocator> &out, F theta, KwArgs &&... args) const
     {
-        const auto [G, eps] = parse_accpot_kwargs(std::forward<KwArgs>(args)...);
-        acc_pot_dispatch<false, 1>(out, theta, G, eps);
+        const auto [G, eps, split] = parse_accpot_kwargs(std::forward<KwArgs>(args)...);
+        acc_pot_dispatch<false, 1>(out, theta, G, eps, split);
     }
     template <typename It, typename... KwArgs>
     void pots_u(It out, F theta, KwArgs &&... args) const
     {
-        const auto [G, eps] = parse_accpot_kwargs(std::forward<KwArgs>(args)...);
-        acc_pot_dispatch<false, 1>(std::array{out}, theta, G, eps);
+        const auto [G, eps, split] = parse_accpot_kwargs(std::forward<KwArgs>(args)...);
+        acc_pot_dispatch<false, 1>(std::array{out}, theta, G, eps, split);
     }
     template <typename Allocator, typename... KwArgs>
     void accs_pots_u(std::array<std::vector<F, Allocator>, NDim + 1u> &out, F theta, KwArgs &&... args) const
     {
-        const auto [G, eps] = parse_accpot_kwargs(std::forward<KwArgs>(args)...);
-        acc_pot_dispatch<false, 2>(out, theta, G, eps);
+        const auto [G, eps, split] = parse_accpot_kwargs(std::forward<KwArgs>(args)...);
+        acc_pot_dispatch<false, 2>(out, theta, G, eps, split);
     }
     template <typename It, typename... KwArgs>
     void accs_pots_u(const std::array<It, NDim + 1u> &out, F theta, KwArgs &&... args) const
     {
-        const auto [G, eps] = parse_accpot_kwargs(std::forward<KwArgs>(args)...);
-        acc_pot_dispatch<false, 2>(out, theta, G, eps);
+        const auto [G, eps, split] = parse_accpot_kwargs(std::forward<KwArgs>(args)...);
+        acc_pot_dispatch<false, 2>(out, theta, G, eps, split);
     }
     template <typename It, typename... KwArgs>
     void accs_pots_u(std::initializer_list<It> out, F theta, KwArgs &&... args) const
@@ -2664,14 +2759,14 @@ public:
     template <typename Allocator, typename... KwArgs>
     void accs_o(std::array<std::vector<F, Allocator>, NDim> &out, F theta, KwArgs &&... args) const
     {
-        const auto [G, eps] = parse_accpot_kwargs(std::forward<KwArgs>(args)...);
-        acc_pot_dispatch<true, 0>(out, theta, G, eps);
+        const auto [G, eps, split] = parse_accpot_kwargs(std::forward<KwArgs>(args)...);
+        acc_pot_dispatch<true, 0>(out, theta, G, eps, split);
     }
     template <typename It, typename... KwArgs>
     void accs_o(const std::array<It, NDim> &out, F theta, KwArgs &&... args) const
     {
-        const auto [G, eps] = parse_accpot_kwargs(std::forward<KwArgs>(args)...);
-        acc_pot_dispatch<true, 0>(out, theta, G, eps);
+        const auto [G, eps, split] = parse_accpot_kwargs(std::forward<KwArgs>(args)...);
+        acc_pot_dispatch<true, 0>(out, theta, G, eps, split);
     }
     template <typename It, typename... KwArgs>
     void accs_o(std::initializer_list<It> out, F theta, KwArgs &&... args) const
@@ -2681,26 +2776,26 @@ public:
     template <typename Allocator, typename... KwArgs>
     void pots_o(std::vector<F, Allocator> &out, F theta, KwArgs &&... args) const
     {
-        const auto [G, eps] = parse_accpot_kwargs(std::forward<KwArgs>(args)...);
-        acc_pot_dispatch<true, 1>(out, theta, G, eps);
+        const auto [G, eps, split] = parse_accpot_kwargs(std::forward<KwArgs>(args)...);
+        acc_pot_dispatch<true, 1>(out, theta, G, eps, split);
     }
     template <typename It, typename... KwArgs>
     void pots_o(It out, F theta, KwArgs &&... args) const
     {
-        const auto [G, eps] = parse_accpot_kwargs(std::forward<KwArgs>(args)...);
-        acc_pot_dispatch<true, 1>(std::array{out}, theta, G, eps);
+        const auto [G, eps, split] = parse_accpot_kwargs(std::forward<KwArgs>(args)...);
+        acc_pot_dispatch<true, 1>(std::array{out}, theta, G, eps, split);
     }
     template <typename Allocator, typename... KwArgs>
     void accs_pots_o(std::array<std::vector<F, Allocator>, NDim + 1u> &out, F theta, KwArgs &&... args) const
     {
-        const auto [G, eps] = parse_accpot_kwargs(std::forward<KwArgs>(args)...);
-        acc_pot_dispatch<true, 2>(out, theta, G, eps);
+        const auto [G, eps, split] = parse_accpot_kwargs(std::forward<KwArgs>(args)...);
+        acc_pot_dispatch<true, 2>(out, theta, G, eps, split);
     }
     template <typename It, typename... KwArgs>
     void accs_pots_o(const std::array<It, NDim + 1u> &out, F theta, KwArgs &&... args) const
     {
-        const auto [G, eps] = parse_accpot_kwargs(std::forward<KwArgs>(args)...);
-        acc_pot_dispatch<true, 2>(out, theta, G, eps);
+        const auto [G, eps, split] = parse_accpot_kwargs(std::forward<KwArgs>(args)...);
+        acc_pot_dispatch<true, 2>(out, theta, G, eps, split);
     }
     template <typename It, typename... KwArgs>
     void accs_pots_o(std::initializer_list<It> out, F theta, KwArgs &&... args) const
@@ -2754,37 +2849,37 @@ public:
     template <typename... KwArgs>
     std::array<F, NDim> exact_acc_u(size_type idx, KwArgs &&... args) const
     {
-        const auto [G, eps] = parse_accpot_kwargs(std::forward<KwArgs>(args)...);
+        const auto [G, eps, _] = parse_accpot_kwargs(std::forward<KwArgs>(args)...);
         return exact_acc_pot_impl<false, 0>(idx, G, eps);
     }
     template <typename... KwArgs>
     F exact_pot_u(size_type idx, KwArgs &&... args) const
     {
-        const auto [G, eps] = parse_accpot_kwargs(std::forward<KwArgs>(args)...);
+        const auto [G, eps, _] = parse_accpot_kwargs(std::forward<KwArgs>(args)...);
         return exact_acc_pot_impl<false, 1>(idx, G, eps)[0];
     }
     template <typename... KwArgs>
     std::array<F, NDim + 1u> exact_acc_pot_u(size_type idx, KwArgs &&... args) const
     {
-        const auto [G, eps] = parse_accpot_kwargs(std::forward<KwArgs>(args)...);
+        const auto [G, eps, _] = parse_accpot_kwargs(std::forward<KwArgs>(args)...);
         return exact_acc_pot_impl<false, 2>(idx, G, eps);
     }
     template <typename... KwArgs>
     std::array<F, NDim> exact_acc_o(size_type idx, KwArgs &&... args) const
     {
-        const auto [G, eps] = parse_accpot_kwargs(std::forward<KwArgs>(args)...);
+        const auto [G, eps, _] = parse_accpot_kwargs(std::forward<KwArgs>(args)...);
         return exact_acc_pot_impl<true, 0>(idx, G, eps);
     }
     template <typename... KwArgs>
     F exact_pot_o(size_type idx, KwArgs &&... args) const
     {
-        const auto [G, eps] = parse_accpot_kwargs(std::forward<KwArgs>(args)...);
+        const auto [G, eps, _] = parse_accpot_kwargs(std::forward<KwArgs>(args)...);
         return exact_acc_pot_impl<true, 1>(idx, G, eps)[0];
     }
     template <typename... KwArgs>
     std::array<F, NDim + 1u> exact_acc_pot_o(size_type idx, KwArgs &&... args) const
     {
-        const auto [G, eps] = parse_accpot_kwargs(std::forward<KwArgs>(args)...);
+        const auto [G, eps, _] = parse_accpot_kwargs(std::forward<KwArgs>(args)...);
         return exact_acc_pot_impl<true, 2>(idx, G, eps);
     }
 

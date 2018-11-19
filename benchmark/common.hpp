@@ -148,6 +148,7 @@ inline auto parse_benchmark_options(int argc, char **argv)
     unsigned max_leaf_n, ncrit, nthreads;
     F bsize, a, theta;
     bool parinit = false;
+    std::vector<double> split;
 
     po::options_description desc("Allowed options");
     desc.add_options()("help", "produce help message")(
@@ -162,7 +163,8 @@ inline auto parse_benchmark_options(int argc, char **argv)
         "nthreads", po::value<unsigned>(&nthreads)->default_value(0u),
         "number of threads to use (0 for auto-detection)")("theta", po::value<F>(&theta)->default_value(F(0.75)),
                                                            "theta parameter")(
-        "parinit", "parallel nondeterministic initialisation of the particle distribution");
+        "parinit", "parallel nondeterministic initialisation of the particle distribution")(
+        "split", po::value<std::vector<double>>()->multitoken(), "split vector for multi-device computations");
 
     po::variables_map vm;
     po::store(po::parse_command_line(argc, argv, desc), vm);
@@ -187,7 +189,11 @@ inline auto parse_benchmark_options(int argc, char **argv)
         parinit = true;
     }
 
-    return std::make_tuple(nparts, idx, max_leaf_n, ncrit, nthreads, bsize, a, theta, parinit);
+    if (vm.count("split")) {
+        split = vm["split"].as<std::vector<double>>();
+    }
+
+    return std::make_tuple(nparts, idx, max_leaf_n, ncrit, nthreads, bsize, a, theta, parinit, std::move(split));
 }
 
 } // namespace rakau_benchmark

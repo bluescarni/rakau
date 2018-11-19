@@ -24,7 +24,7 @@ int main(int argc, char **argv)
 {
     std::cout.precision(20);
 
-    const auto [nparts, idx, max_leaf_n, ncrit, nthreads, bsize, a, theta, parinit]
+    const auto [nparts, idx, max_leaf_n, ncrit, nthreads, bsize, a, theta, parinit, split]
         = parse_benchmark_options<float>(argc, argv);
 
     std::optional<tbb::task_scheduler_init> t_init;
@@ -38,7 +38,7 @@ int main(int argc, char **argv)
                      nparts, kwargs::max_leaf_n = max_leaf_n, kwargs::ncrit = ncrit);
     std::cout << t << '\n';
     std::array<std::vector<float>, 3> accs;
-    t.accs_u(accs, theta);
+    t.accs_u(accs, theta, kwargs::split = split);
     std::cout << accs[0][t.inv_perm()[idx]] << ", " << accs[1][t.inv_perm()[idx]] << ", " << accs[2][t.inv_perm()[idx]]
               << '\n';
     auto eacc = t.exact_acc_u(t.inv_perm()[idx]);
