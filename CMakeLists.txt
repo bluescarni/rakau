@@ -29,7 +29,7 @@ include(CheckCXXCompilerFlag)
 
 if(RAKAU_WITH_ROCM)
   if(NOT YACMA_COMPILER_IS_HCC)
-    message(FATAL_ERROR "ROCm support requires hcc compiler.")
+    message(FATAL_ERROR "ROCm support requires the hcc compiler.")
   endif()
   set(RAKAU_ENABLE_ROCM "#define RAKAU_WITH_ROCM")
 endif()
