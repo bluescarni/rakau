@@ -110,6 +110,8 @@ if(RAKAU_WITH_ROCM)
   string(REPLACE " " ";" RAKAU_ROCM_DEVICE_FLAGS_ "${RAKAU_ROCM_DEVICE_FLAGS}")
   add_library(rakau_rocm SHARED "${CMAKE_CURRENT_SOURCE_DIR}/src/rakau_rocm.cpp")
   set_target_properties(rakau_rocm PROPERTIES LINK_FLAGS "-hc ${RAKAU_ROCM_DEVICE_FLAGS}")
+  set_target_properties(rakau_rocm PROPERTIES CXX_VISIBILITY_PRESET hidden)
+  set_target_properties(rakau_rocm PROPERTIES VISIBILITY_INLINES_HIDDEN TRUE)
   target_compile_options(rakau_rocm PRIVATE "$<$<CONFIG:DEBUG>:${RAKAU_CXX_FLAGS_DEBUG}>" "$<$<CONFIG:RELEASE>:${RAKAU_CXX_FLAGS_RELEASE}>"
     "-hc" "-Wno-unused-command-line-argument" "${RAKAU_ROCM_DEVICE_FLAGS_}")
   unset(RAKAU_ROCM_DEVICE_FLAGS_)
