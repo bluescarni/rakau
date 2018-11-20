@@ -119,6 +119,9 @@ if(RAKAU_WITH_ROCM)
   set_property(TARGET rakau_rocm PROPERTY CXX_STANDARD_REQUIRED YES)
   set_property(TARGET rakau_rocm PROPERTY CXX_EXTENSIONS NO)
 
+  # There's a circular dependency here, let's hope this does not cause issues.
+  # I'd really prefer to have the C++ and ROCm part fully separated, but the ROCm
+  # bits do need to access (some of) the headers from rakau.
   target_link_libraries(rakau INTERFACE rakau_rocm)
   target_link_libraries(rakau_rocm PRIVATE rakau)
 endif()
