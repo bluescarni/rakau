@@ -342,14 +342,14 @@ namespace kwargs
 {
 
 // kwargs for tree construction.
-IGOR_MAKE_NAMED_ARG(box_size);
-IGOR_MAKE_NAMED_ARG(max_leaf_n);
-IGOR_MAKE_NAMED_ARG(ncrit);
+IGOR_MAKE_NAMED_ARGUMENT(box_size);
+IGOR_MAKE_NAMED_ARGUMENT(max_leaf_n);
+IGOR_MAKE_NAMED_ARGUMENT(ncrit);
 
 // kwargs for acc/pot computation.
-IGOR_MAKE_NAMED_ARG(G);
-IGOR_MAKE_NAMED_ARG(eps);
-IGOR_MAKE_NAMED_ARG(split);
+IGOR_MAKE_NAMED_ARGUMENT(G);
+IGOR_MAKE_NAMED_ARGUMENT(eps);
+IGOR_MAKE_NAMED_ARGUMENT(split);
 
 } // namespace kwargs
 
