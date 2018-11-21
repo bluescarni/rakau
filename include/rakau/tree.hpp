@@ -21,6 +21,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
+#include <functional>
 #include <future>
 #include <initializer_list>
 #include <iostream>
@@ -2511,22 +2512,13 @@ private:
                              std::is_same<It, F *>,
                              std::disjunction<std::is_same<UInt, std::uint64_t>, std::is_same<UInt, std::uint32_t>>,
                              std::disjunction<std::is_same<F, float>, std::is_same<F, double>>>) {
-            if (m_rocm && (split.empty() || split.size() == 2u)) {
-                // Actually run the ROCm implementation only if:
-                // - we have an accelerator,
-                // - split is empty (default config) or it contains 2 entries.
+            if (m_rocm && split.size() == 2u) {
+                // Actually run the ROCm implementation only if we have an accelerator and split contains 2 entries.
 
                 // Determine the particle index at which we will split the computation
-                // between the 2 devices.
-                size_type particle_split_idx;
-                if (split.empty()) {
-                    // No split specified, divide 50/50.
-                    particle_split_idx = nparts() / 2u;
-                } else {
-                    // Split was specified: normalise the 1st component wrt the
-                    // accumulation, then project onto nparts.
-                    particle_split_idx = boost::numeric_cast<size_type>((split[0] / (split[0] + split[1])) * nparts());
-                }
+                // between the 2 devices: normalise the 1st component wrt the
+                // accumulation, then project onto nparts.
+                auto particle_split_idx = boost::numeric_cast<size_type>((split[0] / (split[0] + split[1])) * nparts());
 
                 // Now we need to adjust particle_split_idx so that it sits at a
                 // critical node boundary. We locate the first node that
@@ -2543,17 +2535,18 @@ private:
                     // and use that as a splitting index.
                     particle_split_idx = get<1>(*cn_it);
                 }
-                // Make sure we can compute the iterator difference below.
-                using cn_it_diff_t = typename std::iterator_traits<decltype(m_crit_nodes.begin())>::difference_type;
-                using cn_it_udiff_t = std::make_unsigned_t<cn_it_diff_t>;
-                if (m_crit_nodes.size() > static_cast<cn_it_udiff_t>(std::numeric_limits<cn_it_diff_t>::max())) {
-                    throw std::overflow_error("The size of the critical nodes list ("
-                                              + std::to_string(m_crit_nodes.size())
-                                              + ") is too large, and it results in an overflow condition");
-                }
 
                 if (nparts() - particle_split_idx >= rocm_min_size()) {
                     // The final check is that we have enough particles for the ROCm implementation.
+
+                    // Make sure we can compute the iterator difference below.
+                    using cn_it_diff_t = typename std::iterator_traits<decltype(m_crit_nodes.begin())>::difference_type;
+                    using cn_it_udiff_t = std::make_unsigned_t<cn_it_diff_t>;
+                    if (m_crit_nodes.size() > static_cast<cn_it_udiff_t>(std::numeric_limits<cn_it_diff_t>::max())) {
+                        throw std::overflow_error("The size of the critical nodes list ("
+                                                  + std::to_string(m_crit_nodes.size())
+                                                  + ") is too large, and it results in an overflow condition");
+                    }
 
                     // Run the ROCm computation in async mode.
                     // NOTE: futures returned by async() will block on destruction. Thus, even if
@@ -2574,20 +2567,24 @@ private:
                     cpu_run(0, m_crit_nodes.size());
                 }
             } else {
+                // Either we have no accelerator or split's size is either 0 (default value, run fully on cpu)
+                // or 1 (the user told us to use the cpu only).
                 cpu_run(0, m_crit_nodes.size());
             }
         } else {
             if (split.size() == 2u) {
                 throw std::invalid_argument(
-                    "Cannot compute accelerations/potentials on non-cpu devices: the floating-point and/or integral "
-                    "types involved in the computation are supported only on the cpu");
+                    "Cannot compute accelerations/potentials on an accelerator: either the "
+                    "floating-point and/or integral types involved in the computation are supported only on the cpu, "
+                    "or the output iterators are not pointers (this is the case when using the ordered "
+                    "acceleration/potential computation functions)");
             }
             cpu_run(0, m_crit_nodes.size());
         }
 #else
         if (split.size() > 1u) {
-            throw std::invalid_argument("Cannot compute accelerations/potentials on non-cpu devices: rakau was not "
-                                        "configured with support for multi-device computing");
+            throw std::invalid_argument("Cannot compute accelerations/potentials on an accelerator: rakau was not "
+                                        "configured with support for heterogeneous computing");
         }
         cpu_run(0, m_crit_nodes.size());
 #endif
@@ -2707,12 +2704,11 @@ private:
             eps = boost::numeric_cast<F>(p(kwargs::eps));
         }
 
-        std::vector<double> split;
         if constexpr (p.has(kwargs::split)) {
-            split = std::forward<decltype(p(kwargs::split))>(p(kwargs::split));
+            return std::tuple{G, eps, std::cref(p(kwargs::split))};
+        } else {
+            return std::tuple{G, eps, std::vector<double>{}};
         }
-
-        return std::make_tuple(G, eps, std::move(split));
     }
 
 public:

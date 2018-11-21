@@ -24,6 +24,8 @@
 #include <tuple>
 #include <vector>
 
+#include <rakau/config.hpp>
+
 #include "test_utils.hpp"
 
 using namespace rakau;
@@ -32,6 +34,14 @@ using namespace rakau_test;
 using fp_types = std::tuple<float, double>;
 
 static std::mt19937 rng(2);
+
+static const std::vector<double> split =
+#if defined(RAKAU_WITH_ROCM)
+    {0.5, 0.5}
+#else
+    {}
+#endif
+;
 
 TEST_CASE("potential accuracy ordered")
 {
@@ -98,7 +108,7 @@ TEST_CASE("potential accuracy unordered")
                     octree<fp_type> t(
                         {parts.begin() + s, parts.begin() + 2u * s, parts.begin() + 3u * s, parts.begin()}, s,
                         kwargs::box_size = bsize, kwargs::max_leaf_n = max_leaf_n, kwargs::ncrit = ncrit);
-                    t.pots_u(pots, theta);
+                    t.pots_u(pots, theta, kwargs::split = split);
                     // Check that all potentials are finite.
                     REQUIRE(std::all_of(pots.begin(), pots.end(), [](auto c) { return std::isfinite(c); }));
                     for (auto i = 0u; i < s; ++i) {

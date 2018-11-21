@@ -20,6 +20,8 @@
 #include <boost/iterator/zip_iterator.hpp>
 #include <boost/tuple/tuple.hpp>
 
+#include <rakau/config.hpp>
+
 #include "test_utils.hpp"
 
 using namespace rakau;
@@ -29,6 +31,14 @@ using namespace rakau_test;
 using fp_types = std::tuple<float, double>;
 
 static std::mt19937 rng(0);
+
+static const std::vector<double> sp =
+#if defined(RAKAU_WITH_ROCM)
+    {0.5, 0.5}
+#else
+    {}
+#endif
+;
 
 TEST_CASE("g constant accelerations/potentials")
 {
@@ -41,16 +51,16 @@ TEST_CASE("g constant accelerations/potentials")
         octree<fp_type> t({parts.begin() + s, parts.begin() + 2u * s, parts.begin() + 3u * s, parts.begin()}, s,
                           box_size = bsize);
         std::array<std::vector<fp_type>, 4> accpots;
-        t.accs_pots_u(accpots, theta);
+        t.accs_pots_u(accpots, theta, kwargs::split = sp);
         auto accs_pots_u_orig(accpots);
         t.accs_pots_o(accpots, theta);
         auto accs_pots_o_orig(accpots);
-        t.accs_pots_u(accpots, theta, kwargs::G = fp_type(0));
+        t.accs_pots_u(accpots, theta, kwargs::G = fp_type(0), kwargs::split = sp);
         REQUIRE(std::all_of(accpots[0].begin(), accpots[0].end(), [](fp_type x) { return x == fp_type(0); }));
         REQUIRE(std::all_of(accpots[1].begin(), accpots[1].end(), [](fp_type x) { return x == fp_type(0); }));
         REQUIRE(std::all_of(accpots[2].begin(), accpots[2].end(), [](fp_type x) { return x == fp_type(0); }));
         REQUIRE(std::all_of(accpots[3].begin(), accpots[3].end(), [](fp_type x) { return x == fp_type(0); }));
-        t.accs_pots_u(accpots, theta, kwargs::G = fp_type(2));
+        t.accs_pots_u(accpots, theta, kwargs::G = fp_type(2), kwargs::split = sp);
         REQUIRE(
             std::all_of(boost::make_zip_iterator(boost::make_tuple(accpots[0].begin(), accs_pots_u_orig[0].begin())),
                         boost::make_zip_iterator(boost::make_tuple(accpots[0].end(), accs_pots_u_orig[0].end())),

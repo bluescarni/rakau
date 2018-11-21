@@ -19,6 +19,8 @@
 #include <tuple>
 #include <vector>
 
+#include <rakau/config.hpp>
+
 #include "test_utils.hpp"
 
 using namespace rakau;
@@ -27,6 +29,14 @@ using namespace rakau_test;
 using fp_types = std::tuple<float, double>;
 
 static std::mt19937 rng(1);
+
+static const std::vector<double> sp =
+#if defined(RAKAU_WITH_ROCM)
+    {0.5, 0.5}
+#else
+    {}
+#endif
+;
 
 TEST_CASE("acceleration accuracy unordered")
 {
@@ -42,7 +52,7 @@ TEST_CASE("acceleration accuracy unordered")
         octree<fp_type> t(
             {parts.begin() + nparts, parts.begin() + 2u * nparts, parts.begin() + 3u * nparts, parts.begin()}, nparts);
         for (auto theta : thetas) {
-            t.accs_u(accs, theta);
+            t.accs_u(accs, theta, kwargs::split = sp);
             for (auto i = 0ul; i < nparts; ++i) {
                 const auto eacc = t.exact_acc_u(i);
                 const auto eacc_abs = std::sqrt(eacc[0] * eacc[0] + eacc[1] * eacc[1] + eacc[2] * eacc[2]);
