@@ -1,0 +1,5 @@
+if(NOT TARGET Threads::Threads)
+  set(THREADS_PREFER_PTHREAD_FLAG TRUE)
+  find_package(Threads REQUIRED)
+  unset(THREADS_PREFER_PTHREAD_FLAG)
+endif()

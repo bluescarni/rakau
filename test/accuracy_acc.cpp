@@ -25,6 +25,8 @@
 #include <tuple>
 #include <vector>
 
+#include <rakau/config.hpp>
+
 #include "test_utils.hpp"
 
 using namespace rakau;
@@ -33,6 +35,14 @@ using namespace rakau_test;
 using fp_types = std::tuple<float, double>;
 
 static std::mt19937 rng(1);
+
+static const std::vector<double> split =
+#if defined(RAKAU_WITH_ROCM)
+    {0.5, 0.5}
+#else
+    {}
+#endif
+;
 
 TEST_CASE("acceleration accuracy ordered")
 {
@@ -119,7 +129,7 @@ TEST_CASE("acceleration accuracy unordered")
                     octree<fp_type> t(
                         {parts.begin() + s, parts.begin() + 2u * s, parts.begin() + 3u * s, parts.begin()}, s,
                         kwargs::box_size = bsize, kwargs::max_leaf_n = max_leaf_n, kwargs::ncrit = ncrit);
-                    t.accs_u(accs, theta);
+                    t.accs_u(accs, theta, kwargs::split = split);
                     // Check that all accelerations are finite.
                     REQUIRE(std::all_of(accs[0].begin(), accs[0].end(), [](auto c) { return std::isfinite(c); }));
                     REQUIRE(std::all_of(accs[1].begin(), accs[1].end(), [](auto c) { return std::isfinite(c); }));

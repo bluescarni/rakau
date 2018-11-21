@@ -21,11 +21,14 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
+#include <functional>
+#include <future>
 #include <initializer_list>
 #include <iostream>
 #include <iterator>
 #include <limits>
 #include <numeric>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <tuple>
@@ -47,6 +50,15 @@
 
 #include <xsimd/xsimd.hpp>
 
+#include <rakau/config.hpp>
+#include <rakau/detail/di_aligned_allocator.hpp>
+#if defined(RAKAU_WITH_ROCM)
+#include <rakau/detail/rocm_fwd.hpp>
+#endif
+#include <rakau/detail/igor.hpp>
+#include <rakau/detail/simd.hpp>
+#include <rakau/detail/tree_fwd.hpp>
+
 // Let's disable a few compiler warnings emitted by the libmorton code.
 #if defined(__clang__) || defined(__GNUC__)
 
@@ -62,7 +74,6 @@
 
 #endif
 
-#include <rakau/config.hpp>
 #include <rakau/detail/libmorton/morton.h>
 
 #if defined(__clang__) || defined(__GNUC__)
@@ -70,11 +81,6 @@
 #pragma GCC diagnostic pop
 
 #endif
-
-#include <rakau/detail/di_aligned_allocator.hpp>
-#include <rakau/detail/igor.hpp>
-#include <rakau/detail/simd.hpp>
-#include <rakau/detail/tree_fwd.hpp>
 
 // likely/unlikely macros, for those compilers known to support them.
 #if defined(__clang__) || defined(__GNUC__) || defined(__INTEL_COMPILER)
@@ -337,13 +343,14 @@ namespace kwargs
 {
 
 // kwargs for tree construction.
-IGOR_MAKE_NAMED_ARG(box_size);
-IGOR_MAKE_NAMED_ARG(max_leaf_n);
-IGOR_MAKE_NAMED_ARG(ncrit);
+IGOR_MAKE_NAMED_ARGUMENT(box_size);
+IGOR_MAKE_NAMED_ARGUMENT(max_leaf_n);
+IGOR_MAKE_NAMED_ARGUMENT(ncrit);
 
 // kwargs for acc/pot computation.
-IGOR_MAKE_NAMED_ARG(G);
-IGOR_MAKE_NAMED_ARG(eps);
+IGOR_MAKE_NAMED_ARGUMENT(G);
+IGOR_MAKE_NAMED_ARGUMENT(eps);
+IGOR_MAKE_NAMED_ARGUMENT(split);
 
 } // namespace kwargs
 
@@ -699,7 +706,7 @@ private:
 
         // Compute the root node's properties. Do it concurrently with other computations.
         tbb::task_group tg;
-        tg.run([&]() { compute_node_properties(m_tree.back()); });
+        tg.run([this]() { compute_node_properties(m_tree.back()); });
 
         // Check if the root node is a critical node. It is a critical node if the number of particles is leq m_ncrit
         // (the definition of critical node) or m_max_leaf_n (in which case it will have no children).
@@ -717,7 +724,7 @@ private:
         tg.wait();
 
         // NOTE: the merge of the subtrees and of the critical nodes lists can be done independently.
-        tg.run([&]() {
+        tg.run([&trees, this]() {
             // NOTE: this sorting and the computation of the cumulative sizes can be done also in parallel,
             // but it's probably not worth it since the size of trees should be rather small.
             //
@@ -744,7 +751,7 @@ private:
                 [this, &cum_sizes, &trees](const auto &out_range) {
                     for (auto i = out_range.begin(); i != out_range.end(); ++i) {
                         tbb::parallel_for(tbb::blocked_range<decltype(trees[i].size())>(0, trees[i].size()),
-                                          [&](const auto &in_range) {
+                                          [&trees, this, &cum_sizes, i](const auto &in_range) {
                                               std::copy(trees[i].data() + in_range.begin(),
                                                         trees[i].data() + in_range.end(),
                                                         m_tree.data() + cum_sizes[i] + in_range.begin());
@@ -753,7 +760,7 @@ private:
                 });
         });
 
-        tg.run([&]() {
+        tg.run([&crit_nodes, this]() {
             // NOTE: as above, we could do some of these things in parallel but it does not seem worth it at this time.
             // Sort the critical nodes lists according to the starting points of the ranges.
             std::sort(crit_nodes.begin(), crit_nodes.end(), [](const auto &v1, const auto &v2) {
@@ -785,7 +792,7 @@ private:
                 [this, &cum_sizes, &crit_nodes](const auto &out_range) {
                     for (auto i = out_range.begin(); i != out_range.end(); ++i) {
                         tbb::parallel_for(tbb::blocked_range<decltype(crit_nodes[i].size())>(0, crit_nodes[i].size()),
-                                          [&](const auto &in_range) {
+                                          [&crit_nodes, this, &cum_sizes, i](const auto &in_range) {
                                               std::copy(crit_nodes[i].data() + in_range.begin(),
                                                         crit_nodes[i].data() + in_range.end(),
                                                         m_crit_nodes.data() + cum_sizes[i] + in_range.begin());
@@ -1116,10 +1123,49 @@ private:
         // NOTE: this function works ok if N == 0.
         build_tree();
     }
+    // ROCm init/reset functions. If ROCm is not enabled, they will be empty.
+    // These are marked as noexcept because otherwise it becomes difficult
+    // to reason about exception safety. I *think* the only possible exceptions
+    // are memory allocation failures, but let's keep an eye on this.
+    //
+    // The init state function is called whenever we have finished setting up the internal
+    // data of the tree, and we need to create views to it.
+    void rocm_init_state() noexcept
+    {
+#if defined(RAKAU_WITH_ROCM)
+        // Not supposed to be called if m_rocm stores already something
+        // (m_rocm must either be def-cted, or rocm_reset_state() must
+        // have been called prior to calling this function).
+        assert(!m_rocm);
+        // If no accelerator is available, don't bother and leave m_rocm empty.
+        if (rocm_has_accelerator()) {
+            std::array<const F *, NDim + 1u> parts_ptrs;
+            for (std::size_t j = 0; j < NDim + 1u; ++j) {
+                parts_ptrs[j] = m_parts[j].data();
+            }
+            m_rocm.emplace(parts_ptrs, m_codes.data(), boost::numeric_cast<int>(nparts()), m_tree.data(),
+                           boost::numeric_cast<int>(m_tree.size()));
+        }
+#endif
+    }
+    // The reset state function. We need to call this before destroying the internal tree data,
+    // as we don't want to have active views to non-existing data.
+    void rocm_reset_state() noexcept
+    {
+#if defined(RAKAU_WITH_ROCM)
+        // NOTE: don't assert(m_rocm), as in some cases we may end up
+        // calling this function twice in a row (e.g., during exception handling
+        // in the copy assignment operator or in the particles update functions).
+        m_rocm.reset();
+#endif
+    }
 
 public:
     // Default constructor.
-    tree() : m_box_size(0), m_box_size_deduced(false), m_max_leaf_n(default_max_leaf_n), m_ncrit(default_ncrit) {}
+    tree() : m_box_size(0), m_box_size_deduced(false), m_max_leaf_n(default_max_leaf_n), m_ncrit(default_ncrit)
+    {
+        rocm_init_state();
+    }
     // Constructor from array of iterators.
     template <typename It, typename... KwArgs>
     explicit tree(const std::array<It, NDim + 1u> &cm_it, const size_type &N, KwArgs &&... args)
@@ -1146,6 +1192,9 @@ public:
 
         // Do the actual construction.
         construct_impl(box_size, box_size_deduced, cm_it, N, max_leaf_n, ncrit);
+
+        // NOTE: perhaps we can fold this into construct_impl() eventually.
+        rocm_init_state();
     }
 
 private:
@@ -1202,7 +1251,15 @@ public:
                std::forward<KwArgs>(args)...)
     {
     }
-    tree(const tree &) = default;
+    tree(const tree &other)
+        : m_box_size(other.m_box_size), m_box_size_deduced(other.m_box_size_deduced), m_max_leaf_n(other.m_max_leaf_n),
+          m_ncrit(other.m_ncrit), m_parts(other.m_parts), m_codes(other.m_codes), m_perm(other.m_perm),
+          m_last_perm(other.m_last_perm), m_inv_perm(other.m_inv_perm), m_tree(other.m_tree),
+          m_crit_nodes(other.m_crit_nodes)
+    {
+        // We made deep copies from other, setup the views.
+        rocm_init_state();
+    }
     tree(tree &&other) noexcept
         : m_box_size(other.m_box_size), m_box_size_deduced(other.m_box_size_deduced), m_max_leaf_n(other.m_max_leaf_n),
           m_ncrit(other.m_ncrit), m_parts(std::move(other.m_parts)), m_codes(std::move(other.m_codes)),
@@ -1219,11 +1276,19 @@ public:
         // to confirm this independently. So for now let's keep custom
         // implementations of move semantics until this is clarified.
         other.clear();
+
+        // Setup the ROCm views.
+        // NOTE: with other.clear() above we ensured the ROCm state of other
+        // is reset to a def-cted state.
+        rocm_init_state();
     }
     tree &operator=(const tree &other)
     {
         try {
             if (this != &other) {
+                // Destroy the current views before doing anything.
+                rocm_reset_state();
+
                 m_box_size = other.m_box_size;
                 m_box_size_deduced = other.m_box_size_deduced;
                 m_max_leaf_n = other.m_max_leaf_n;
@@ -1235,12 +1300,18 @@ public:
                 m_inv_perm = other.m_inv_perm;
                 m_tree = other.m_tree;
                 m_crit_nodes = other.m_crit_nodes;
+
+                // Re-init the views.
+                rocm_init_state();
             }
             return *this;
         } catch (...) {
             // NOTE: if we triggered an exception, this might now be
             // in an inconsistent state. Call clear()
             // to reset to a consistent state before re-throwing.
+            // NOTE: we will end up calling rocm_reset_state()
+            // twice, once above and once now in the clear() method.
+            // This is ok.
             clear();
             throw;
         }
@@ -1248,6 +1319,9 @@ public:
     tree &operator=(tree &&other) noexcept
     {
         if (this != &other) {
+            // Destroy the current views before doing anything.
+            rocm_reset_state();
+
             m_box_size = other.m_box_size;
             m_box_size_deduced = other.m_box_size_deduced;
             m_max_leaf_n = other.m_max_leaf_n;
@@ -1263,11 +1337,20 @@ public:
             // have in principle assertion failures in the destructor of other
             // in debug mode.
             other.clear();
+
+            // Re-init the views.
+            rocm_init_state();
         }
         return *this;
     }
     ~tree()
     {
+        // NOTE: regarding the ROCm views: the C++ standard guarantees
+        // that the members of a structure are destroyed in inverse
+        // order wrt the order of declaration, so, as long as m_rocm
+        // is the last member, it will be destroyed before any other member.
+        // We just need to be careful that in the debug checks we don't end
+        // up pre-destroying data to which we have an active view.
 #if !defined(NDEBUG)
         // Run various debug checks.
         for (std::size_t j = 0; j < NDim; ++j) {
@@ -1315,6 +1398,9 @@ public:
     // Reset the state of the tree to a known one, i.e., a def-cted tree.
     void clear() noexcept
     {
+        // First destroy the views.
+        rocm_reset_state();
+
         m_box_size = F(0);
         m_box_size_deduced = false;
         m_max_leaf_n = default_max_leaf_n;
@@ -1328,6 +1414,9 @@ public:
         m_inv_perm.clear();
         m_tree.clear();
         m_crit_nodes.clear();
+
+        // Re-init the views with the new (empty) data.
+        rocm_init_state();
     }
     // Tree pretty printing. Will print up to max_nodes, or all the nodes if max_nodes is zero.
     std::ostream &pprint(std::ostream &os, size_type max_nodes = 0) const
@@ -2178,7 +2267,7 @@ private:
         }
         if (bh_flag) {
             // The source node satisfies the BH criterion for all the particles of the target node. Add the
-            // acceleration due to the com of the source node.
+            // interaction due to the com of the source node.
             tree_acc_pot_bh_com<Q>(src_idx, tgt_size, p_ptrs, tmp_ptrs, res_ptrs);
             // We can now skip all the children of the source node.
             return static_cast<size_type>(src_idx + n_children_src + 1u);
@@ -2252,41 +2341,58 @@ private:
     // theta2 the square of the opening angle, G the grav constant, eps2 the square of the softening length. Q indicates
     // which quantities will be computed (accs, potentials, or both).
     template <unsigned Q, typename It>
-    void acc_pot_impl(const std::array<It, nvecs_res<Q>> &out, F theta2, F G, F eps2) const
+    void acc_pot_impl(const std::array<It, nvecs_res<Q>> &out, F theta2, F G, F eps2,
+                      const std::vector<double> &split) const
     {
-        // NOTE: we will be adding padding to the target node data when SIMD is active,
-        // in order to be able to use SIMD instructions on all the particles of the node.
-        // The padding data must be crafted so that it does not interfere with the useful
-        // calculations. This means that:
-        // - we will set the masses to zero so that, when computing the self interactions
-        //   in a target node, the extra accelerations/potentials due to the padding data will be zero,
-        // - for the positions, we must ensure 2 things:
-        //   - they must not overlap with any other real particle, in order to avoid singularities
-        //     when computing self-interactions in the target node, hence they must be outside the box,
-        //   - the distance of the padding particles from any point of the box must be large enough so
-        //     that they never fail the BH criterion check, which fails when node_dim >= theta * dist.
-        //     The maximum node_dim is the box size b_size, and thus we must ensure that
-        //     dist > b_size / theta for the padding particles.
-        //
-        // The strategy is that we put the padding particles at coordinates (M, M, ...), with M to
-        // be determined. The upper right corner of the box, with coordinates (b_size/2, b_size/2, ...)
-        // will be the closest point of the box to the padding particles, and the corner-particles distance
-        // will be sqrt(NDim * (M - b_size/2)**2), which simplifies to sqrt(NDim) / 2 * (2*M - b_size).
-        // Now we require this distance to be large enough to always satisfy the BH criterion (as written
-        // above), that is, sqrt(NDim) / 2 * (2*M - b_size) > b_size / theta, which yields the requirement
-        // M > b_size / (theta * sqrt(NDim)) + b_size / 2.
-        const auto M = m_box_size / (std::sqrt(theta2) * std::sqrt(F(NDim))) + m_box_size / F(2);
-        // NOTE: M is mathematically always >= m_box_size / F(2), which puts it on the top right
-        // corner of the box for theta2 == inf. To make it completely safe with respect to the requirement
-        // of avoiding singularities in the self interaction routine, we double it.
-        const auto pad_coord = M * F(2);
-        if (!std::isfinite(pad_coord)) {
-            throw std::invalid_argument("The calculation of the SIMD padding coordinate produced the non-finite value "
-                                        + std::to_string(pad_coord));
+        // Validation of split, common to all codepaths.
+        if (std::any_of(split.begin(), split.end(), [](const double &x) { return !std::isfinite(x); })) {
+            throw std::invalid_argument("The 'split' parameter cannot contain non-finite values");
         }
-        tbb::parallel_for(
-            tbb::blocked_range<decltype(m_crit_nodes.size())>(0u, m_crit_nodes.size()),
-            [this, theta2, G, eps2, pad_coord, &out](const auto &range) {
+        if (std::any_of(split.begin(), split.end(), [](const double &x) { return x < 0.; })) {
+            throw std::invalid_argument("The 'split' parameter must contain only non-negative values");
+        }
+        if (!split.empty() && std::all_of(split.begin(), split.end(), [](const double &x) { return x == 0.; })) {
+            throw std::invalid_argument("The values in the 'split' parameter cannot all be zero");
+        }
+
+        using c_size_type = decltype(m_crit_nodes.size());
+        auto cpu_run = [this, &out, theta2, G, eps2](c_size_type c_begin, c_size_type c_end) {
+            assert(c_begin <= c_end);
+            assert(c_end <= m_crit_nodes.size());
+
+            // NOTE: we will be adding padding to the target node data when SIMD is active,
+            // in order to be able to use SIMD instructions on all the particles of the node.
+            // The padding data must be crafted so that it does not interfere with the useful
+            // calculations. This means that:
+            // - we will set the masses to zero so that, when computing the self interactions
+            //   in a target node, the extra accelerations/potentials due to the padding data will be zero,
+            // - for the positions, we must ensure 2 things:
+            //   - they must not overlap with any other real particle, in order to avoid singularities
+            //     when computing self-interactions in the target node, hence they must be outside the box,
+            //   - the distance of the padding particles from any point of the box must be large enough so
+            //     that they never fail the BH criterion check, which fails when node_dim >= theta * dist.
+            //     The maximum node_dim is the box size b_size, and thus we must ensure that
+            //     dist > b_size / theta for the padding particles.
+            //
+            // The strategy is that we put the padding particles at coordinates (M, M, ...), with M to
+            // be determined. The upper right corner of the box, with coordinates (b_size/2, b_size/2, ...)
+            // will be the closest point of the box to the padding particles, and the corner-particles distance
+            // will be sqrt(NDim * (M - b_size/2)**2), which simplifies to sqrt(NDim) / 2 * (2*M - b_size).
+            // Now we require this distance to be large enough to always satisfy the BH criterion (as written
+            // above), that is, sqrt(NDim) / 2 * (2*M - b_size) > b_size / theta, which yields the requirement
+            // M > b_size / (theta * sqrt(NDim)) + b_size / 2.
+            const auto M = m_box_size / (std::sqrt(theta2) * std::sqrt(F(NDim))) + m_box_size / F(2);
+            // NOTE: M is mathematically always >= m_box_size / F(2), which puts it on the top right
+            // corner of the box for theta2 == inf. To make it completely safe with respect to the requirement
+            // of avoiding singularities in the self interaction routine, we double it.
+            const auto pad_coord = M * F(2);
+            if (!std::isfinite(pad_coord)) {
+                throw std::invalid_argument(
+                    "The calculation of the SIMD padding coordinate produced the non-finite value "
+                    + std::to_string(pad_coord));
+            }
+            tbb::parallel_for(tbb::blocked_range(c_begin, c_end), [this, theta2, G, eps2, pad_coord,
+                                                                   &out](const auto &range) {
                 // Get references to the local temporary data.
                 auto &tmp_res = acc_pot_tmp_res<Q>();
                 auto &tmp_tgt = tgt_tmp_data();
@@ -2386,6 +2492,102 @@ private:
                 simd_rsqrt_counter_tl = 0;
 #endif
             });
+        };
+#if defined(RAKAU_WITH_ROCM)
+        // Validation of split specific to ROCm.
+        //
+        // Only CPU + 1 accelerator is supported at this time.
+        if (split.size() > 2u) {
+            throw std::invalid_argument(
+                "Cannot split the computation of accelerations/potentials between more than 2 devices");
+        }
+        // Cannot offload to the accelerator if none is available.
+        if (!m_rocm && split.size() == 2u) {
+            throw std::invalid_argument(
+                "Cannot split the computation of accelerations/potentials: no accelerator has been detected");
+        }
+
+        if constexpr (NDim == 3u
+                      && std::conjunction_v<
+                             std::is_same<It, F *>,
+                             std::disjunction<std::is_same<UInt, std::uint64_t>, std::is_same<UInt, std::uint32_t>>,
+                             std::disjunction<std::is_same<F, float>, std::is_same<F, double>>>) {
+            if (m_rocm && split.size() == 2u) {
+                // Actually run the ROCm implementation only if we have an accelerator and split contains 2 entries.
+
+                // Determine the particle index at which we will split the computation
+                // between the 2 devices: normalise the 1st component wrt the
+                // accumulation, then project onto nparts.
+                auto particle_split_idx = boost::numeric_cast<size_type>((split[0] / (split[0] + split[1])) * nparts());
+
+                // Now we need to adjust particle_split_idx so that it sits at a
+                // critical node boundary. We locate the first node that
+                // starts with an index >= particle_split_idx (note that this could yield
+                // an end() iterator).
+                const auto cn_it = std::lower_bound(m_crit_nodes.begin(), m_crit_nodes.end(), particle_split_idx,
+                                                    [](const auto &cn, size_type value) { return get<1>(cn) < value; });
+                if (cn_it == m_crit_nodes.end()) {
+                    // We found the end() iterator. This means that all computations
+                    // will go on the cpu, i.e., we will be splitting at nparts.
+                    particle_split_idx = nparts();
+                } else {
+                    // We found a non-end() iterator. Fetch its starting index
+                    // and use that as a splitting index.
+                    particle_split_idx = get<1>(*cn_it);
+                }
+
+                if (nparts() - particle_split_idx >= rocm_min_size()) {
+                    // The final check is that we have enough particles for the ROCm implementation.
+
+                    // Make sure we can compute the iterator difference below.
+                    using cn_it_diff_t = typename std::iterator_traits<decltype(m_crit_nodes.begin())>::difference_type;
+                    using cn_it_udiff_t = std::make_unsigned_t<cn_it_diff_t>;
+                    if (m_crit_nodes.size() > static_cast<cn_it_udiff_t>(std::numeric_limits<cn_it_diff_t>::max())) {
+                        throw std::overflow_error("The size of the critical nodes list ("
+                                                  + std::to_string(m_crit_nodes.size())
+                                                  + ") is too large, and it results in an overflow condition");
+                    }
+
+                    // Run the ROCm computation in async mode.
+                    // NOTE: futures returned by async() will block on destruction. Thus, even if
+                    // cpu_run() throws, we will be sure that this thread will end before the exception
+                    // is handled.
+                    auto roc_fut = std::async(std::launch::async, [this, particle_split_idx, &out, theta2, G, eps2]() {
+                        m_rocm->template acc_pot<Q>(boost::numeric_cast<int>(particle_split_idx),
+                                                    boost::numeric_cast<int>(nparts()), out, theta2, G, eps2);
+                    });
+
+                    // Run the cpu implementation.
+                    cpu_run(0, boost::numeric_cast<c_size_type>(cn_it - m_crit_nodes.begin()));
+
+                    // Re-throw any exception that might be generated by the ROCm implementation.
+                    roc_fut.get();
+                } else {
+                    // Not enough particles, run on the cpu.
+                    cpu_run(0, m_crit_nodes.size());
+                }
+            } else {
+                // Either we have no accelerator or split's size is either 0 (default value, run fully on cpu)
+                // or 1 (the user told us to use the cpu only).
+                cpu_run(0, m_crit_nodes.size());
+            }
+        } else {
+            if (split.size() == 2u) {
+                throw std::invalid_argument(
+                    "Cannot compute accelerations/potentials on an accelerator: either the "
+                    "floating-point and/or integral types involved in the computation are supported only on the cpu, "
+                    "or the output iterators are not pointers (this is the case when using the ordered "
+                    "acceleration/potential computation functions)");
+            }
+            cpu_run(0, m_crit_nodes.size());
+        }
+#else
+        if (split.size() > 1u) {
+            throw std::invalid_argument("Cannot compute accelerations/potentials on an accelerator: rakau was not "
+                                        "configured with support for heterogeneous computing");
+        }
+        cpu_run(0, m_crit_nodes.size());
+#endif
     }
     // Small helper to check the value of the softening length and its square.
     // Used more than once, hence factored out.
@@ -2412,7 +2614,8 @@ private:
     // out is the array of output iterators, theta the opening angle, G the grav const, eps the softening length.
     // Q indicates which quantities will be computed (accs, potentials, or both).
     template <bool Ordered, unsigned Q, typename It>
-    void acc_pot_dispatch(const std::array<It, nvecs_res<Q>> &out, F theta, F G, F eps) const
+    void acc_pot_dispatch(const std::array<It, nvecs_res<Q>> &out, F theta, F G, F eps,
+                          const std::vector<double> &split) const
     {
         simple_timer st("vector accs/pots computation");
         const auto theta2 = theta * theta, eps2 = eps * eps;
@@ -2443,31 +2646,32 @@ private:
             }
             // NOTE: we are checking in the acc_pot_impl() function that we can index into
             // the permuted iterators without overflows (see the use of boost::numeric_cast()).
-            acc_pot_impl<Q>(out_pits, theta2, G, eps2);
+            acc_pot_impl<Q>(out_pits, theta2, G, eps2, split);
         } else {
-            acc_pot_impl<Q>(out, theta2, G, eps2);
+            acc_pot_impl<Q>(out, theta2, G, eps2, split);
         }
     }
     // Helper overload for an array of vectors. It will prepare the vectors and then
     // call the other overload.
     template <bool Ordered, unsigned Q, typename Allocator>
-    void acc_pot_dispatch(std::array<std::vector<F, Allocator>, nvecs_res<Q>> &out, F theta, F G, F eps) const
+    void acc_pot_dispatch(std::array<std::vector<F, Allocator>, nvecs_res<Q>> &out, F theta, F G, F eps,
+                          const std::vector<double> &split) const
     {
         std::array<F *, nvecs_res<Q>> out_ptrs;
         for (std::size_t j = 0; j < nvecs_res<Q>; ++j) {
             out[j].resize(boost::numeric_cast<decltype(out[j].size())>(m_parts[0].size()));
             out_ptrs[j] = out[j].data();
         }
-        acc_pot_dispatch<Ordered, Q>(out_ptrs, theta, G, eps);
+        acc_pot_dispatch<Ordered, Q>(out_ptrs, theta, G, eps, split);
     }
     // Helper overload for a single vector. It will prepare the vector and then
     // call the other overload. This is used for the potential-only computations.
     template <bool Ordered, unsigned Q, typename Allocator>
-    void acc_pot_dispatch(std::vector<F, Allocator> &out, F theta, F G, F eps) const
+    void acc_pot_dispatch(std::vector<F, Allocator> &out, F theta, F G, F eps, const std::vector<double> &split) const
     {
         static_assert(Q == 1u);
         out.resize(boost::numeric_cast<decltype(out.size())>(m_parts[0].size()));
-        acc_pot_dispatch<Ordered, Q>(std::array{out.data()}, theta, G, eps);
+        acc_pot_dispatch<Ordered, Q>(std::array{out.data()}, theta, G, eps, split);
     }
     // Small helper to turn an init list into an array, in the functions for the computation
     // of the accelerations/potentials. Q indicates which quantities will be computed (accs,
@@ -2500,21 +2704,25 @@ private:
             eps = boost::numeric_cast<F>(p(kwargs::eps));
         }
 
-        return std::make_tuple(G, eps);
+        if constexpr (p.has(kwargs::split)) {
+            return std::tuple{G, eps, std::cref(p(kwargs::split))};
+        } else {
+            return std::tuple{G, eps, std::vector<double>{}};
+        }
     }
 
 public:
     template <typename Allocator, typename... KwArgs>
     void accs_u(std::array<std::vector<F, Allocator>, NDim> &out, F theta, KwArgs &&... args) const
     {
-        const auto [G, eps] = parse_accpot_kwargs(std::forward<KwArgs>(args)...);
-        acc_pot_dispatch<false, 0>(out, theta, G, eps);
+        const auto [G, eps, split] = parse_accpot_kwargs(std::forward<KwArgs>(args)...);
+        acc_pot_dispatch<false, 0>(out, theta, G, eps, split);
     }
     template <typename It, typename... KwArgs>
     void accs_u(const std::array<It, NDim> &out, F theta, KwArgs &&... args) const
     {
-        const auto [G, eps] = parse_accpot_kwargs(std::forward<KwArgs>(args)...);
-        acc_pot_dispatch<false, 0>(out, theta, G, eps);
+        const auto [G, eps, split] = parse_accpot_kwargs(std::forward<KwArgs>(args)...);
+        acc_pot_dispatch<false, 0>(out, theta, G, eps, split);
     }
     template <typename It, typename... KwArgs>
     void accs_u(std::initializer_list<It> out, F theta, KwArgs &&... args) const
@@ -2524,26 +2732,26 @@ public:
     template <typename Allocator, typename... KwArgs>
     void pots_u(std::vector<F, Allocator> &out, F theta, KwArgs &&... args) const
     {
-        const auto [G, eps] = parse_accpot_kwargs(std::forward<KwArgs>(args)...);
-        acc_pot_dispatch<false, 1>(out, theta, G, eps);
+        const auto [G, eps, split] = parse_accpot_kwargs(std::forward<KwArgs>(args)...);
+        acc_pot_dispatch<false, 1>(out, theta, G, eps, split);
     }
     template <typename It, typename... KwArgs>
     void pots_u(It out, F theta, KwArgs &&... args) const
     {
-        const auto [G, eps] = parse_accpot_kwargs(std::forward<KwArgs>(args)...);
-        acc_pot_dispatch<false, 1>(std::array{out}, theta, G, eps);
+        const auto [G, eps, split] = parse_accpot_kwargs(std::forward<KwArgs>(args)...);
+        acc_pot_dispatch<false, 1>(std::array{out}, theta, G, eps, split);
     }
     template <typename Allocator, typename... KwArgs>
     void accs_pots_u(std::array<std::vector<F, Allocator>, NDim + 1u> &out, F theta, KwArgs &&... args) const
     {
-        const auto [G, eps] = parse_accpot_kwargs(std::forward<KwArgs>(args)...);
-        acc_pot_dispatch<false, 2>(out, theta, G, eps);
+        const auto [G, eps, split] = parse_accpot_kwargs(std::forward<KwArgs>(args)...);
+        acc_pot_dispatch<false, 2>(out, theta, G, eps, split);
     }
     template <typename It, typename... KwArgs>
     void accs_pots_u(const std::array<It, NDim + 1u> &out, F theta, KwArgs &&... args) const
     {
-        const auto [G, eps] = parse_accpot_kwargs(std::forward<KwArgs>(args)...);
-        acc_pot_dispatch<false, 2>(out, theta, G, eps);
+        const auto [G, eps, split] = parse_accpot_kwargs(std::forward<KwArgs>(args)...);
+        acc_pot_dispatch<false, 2>(out, theta, G, eps, split);
     }
     template <typename It, typename... KwArgs>
     void accs_pots_u(std::initializer_list<It> out, F theta, KwArgs &&... args) const
@@ -2553,14 +2761,14 @@ public:
     template <typename Allocator, typename... KwArgs>
     void accs_o(std::array<std::vector<F, Allocator>, NDim> &out, F theta, KwArgs &&... args) const
     {
-        const auto [G, eps] = parse_accpot_kwargs(std::forward<KwArgs>(args)...);
-        acc_pot_dispatch<true, 0>(out, theta, G, eps);
+        const auto [G, eps, split] = parse_accpot_kwargs(std::forward<KwArgs>(args)...);
+        acc_pot_dispatch<true, 0>(out, theta, G, eps, split);
     }
     template <typename It, typename... KwArgs>
     void accs_o(const std::array<It, NDim> &out, F theta, KwArgs &&... args) const
     {
-        const auto [G, eps] = parse_accpot_kwargs(std::forward<KwArgs>(args)...);
-        acc_pot_dispatch<true, 0>(out, theta, G, eps);
+        const auto [G, eps, split] = parse_accpot_kwargs(std::forward<KwArgs>(args)...);
+        acc_pot_dispatch<true, 0>(out, theta, G, eps, split);
     }
     template <typename It, typename... KwArgs>
     void accs_o(std::initializer_list<It> out, F theta, KwArgs &&... args) const
@@ -2570,26 +2778,26 @@ public:
     template <typename Allocator, typename... KwArgs>
     void pots_o(std::vector<F, Allocator> &out, F theta, KwArgs &&... args) const
     {
-        const auto [G, eps] = parse_accpot_kwargs(std::forward<KwArgs>(args)...);
-        acc_pot_dispatch<true, 1>(out, theta, G, eps);
+        const auto [G, eps, split] = parse_accpot_kwargs(std::forward<KwArgs>(args)...);
+        acc_pot_dispatch<true, 1>(out, theta, G, eps, split);
     }
     template <typename It, typename... KwArgs>
     void pots_o(It out, F theta, KwArgs &&... args) const
     {
-        const auto [G, eps] = parse_accpot_kwargs(std::forward<KwArgs>(args)...);
-        acc_pot_dispatch<true, 1>(std::array{out}, theta, G, eps);
+        const auto [G, eps, split] = parse_accpot_kwargs(std::forward<KwArgs>(args)...);
+        acc_pot_dispatch<true, 1>(std::array{out}, theta, G, eps, split);
     }
     template <typename Allocator, typename... KwArgs>
     void accs_pots_o(std::array<std::vector<F, Allocator>, NDim + 1u> &out, F theta, KwArgs &&... args) const
     {
-        const auto [G, eps] = parse_accpot_kwargs(std::forward<KwArgs>(args)...);
-        acc_pot_dispatch<true, 2>(out, theta, G, eps);
+        const auto [G, eps, split] = parse_accpot_kwargs(std::forward<KwArgs>(args)...);
+        acc_pot_dispatch<true, 2>(out, theta, G, eps, split);
     }
     template <typename It, typename... KwArgs>
     void accs_pots_o(const std::array<It, NDim + 1u> &out, F theta, KwArgs &&... args) const
     {
-        const auto [G, eps] = parse_accpot_kwargs(std::forward<KwArgs>(args)...);
-        acc_pot_dispatch<true, 2>(out, theta, G, eps);
+        const auto [G, eps, split] = parse_accpot_kwargs(std::forward<KwArgs>(args)...);
+        acc_pot_dispatch<true, 2>(out, theta, G, eps, split);
     }
     template <typename It, typename... KwArgs>
     void accs_pots_o(std::initializer_list<It> out, F theta, KwArgs &&... args) const
@@ -2643,37 +2851,40 @@ public:
     template <typename... KwArgs>
     std::array<F, NDim> exact_acc_u(size_type idx, KwArgs &&... args) const
     {
-        const auto [G, eps] = parse_accpot_kwargs(std::forward<KwArgs>(args)...);
+        // NOTE: we are also parsing the split kwarg here, which is not used. I don't
+        // think it has any performance implications, and perhaps in the future
+        // we will use it.
+        const auto [G, eps, _] = parse_accpot_kwargs(std::forward<KwArgs>(args)...);
         return exact_acc_pot_impl<false, 0>(idx, G, eps);
     }
     template <typename... KwArgs>
     F exact_pot_u(size_type idx, KwArgs &&... args) const
     {
-        const auto [G, eps] = parse_accpot_kwargs(std::forward<KwArgs>(args)...);
+        const auto [G, eps, _] = parse_accpot_kwargs(std::forward<KwArgs>(args)...);
         return exact_acc_pot_impl<false, 1>(idx, G, eps)[0];
     }
     template <typename... KwArgs>
     std::array<F, NDim + 1u> exact_acc_pot_u(size_type idx, KwArgs &&... args) const
     {
-        const auto [G, eps] = parse_accpot_kwargs(std::forward<KwArgs>(args)...);
+        const auto [G, eps, _] = parse_accpot_kwargs(std::forward<KwArgs>(args)...);
         return exact_acc_pot_impl<false, 2>(idx, G, eps);
     }
     template <typename... KwArgs>
     std::array<F, NDim> exact_acc_o(size_type idx, KwArgs &&... args) const
     {
-        const auto [G, eps] = parse_accpot_kwargs(std::forward<KwArgs>(args)...);
+        const auto [G, eps, _] = parse_accpot_kwargs(std::forward<KwArgs>(args)...);
         return exact_acc_pot_impl<true, 0>(idx, G, eps);
     }
     template <typename... KwArgs>
     F exact_pot_o(size_type idx, KwArgs &&... args) const
     {
-        const auto [G, eps] = parse_accpot_kwargs(std::forward<KwArgs>(args)...);
+        const auto [G, eps, _] = parse_accpot_kwargs(std::forward<KwArgs>(args)...);
         return exact_acc_pot_impl<true, 1>(idx, G, eps)[0];
     }
     template <typename... KwArgs>
     std::array<F, NDim + 1u> exact_acc_pot_o(size_type idx, KwArgs &&... args) const
     {
-        const auto [G, eps] = parse_accpot_kwargs(std::forward<KwArgs>(args)...);
+        const auto [G, eps, _] = parse_accpot_kwargs(std::forward<KwArgs>(args)...);
         return exact_acc_pot_impl<true, 2>(idx, G, eps);
     }
 
@@ -2736,6 +2947,9 @@ private:
     // to reconstruct the other data members according to the new positions.
     void sync()
     {
+        // Before destroying the internal state, make sure we delete the views.
+        rocm_reset_state();
+
         // Get the number of particles.
         const auto nparts = m_parts[0].size();
         // Re-deduce the box size, if needed.
@@ -2790,6 +3004,9 @@ private:
         m_tree.clear();
         m_crit_nodes.clear();
         build_tree();
+
+        // Re-init the views.
+        rocm_init_state();
     }
     // Invoke the particle update function with an
     // exception safe wrapper.
@@ -2889,6 +3106,9 @@ private:
     tree_type m_tree;
     // The list of critical nodes.
     cnode_list_type m_crit_nodes;
+#if defined(RAKAU_WITH_ROCM)
+    std::optional<rocm_state<NDim, F, UInt>> m_rocm;
+#endif
 };
 
 template <typename F>

@@ -19,6 +19,8 @@
 #include <boost/iterator/zip_iterator.hpp>
 #include <boost/tuple/tuple.hpp>
 
+#include <rakau/config.hpp>
+
 #include "test_utils.hpp"
 
 using namespace rakau;
@@ -28,6 +30,14 @@ using namespace rakau_test;
 using fp_types = std::tuple<float, double>;
 
 static std::mt19937 rng(2);
+
+static const std::vector<double> sp =
+#if defined(RAKAU_WITH_ROCM)
+    {0.5, 0.5}
+#else
+    {}
+#endif
+;
 
 TEST_CASE("g constant accelerations")
 {
@@ -40,13 +50,13 @@ TEST_CASE("g constant accelerations")
         octree<fp_type> t({parts.begin() + s, parts.begin() + 2u * s, parts.begin() + 3u * s, parts.begin()}, s,
                           box_size = bsize);
         std::vector<fp_type> pots;
-        t.pots_u(pots, theta);
+        t.pots_u(pots, theta, kwargs::split = sp);
         auto pots_u_orig(pots);
         t.pots_o(pots, theta);
         auto pots_o_orig(pots);
-        t.pots_u(pots, theta, kwargs::G = fp_type(0));
+        t.pots_u(pots, theta, kwargs::G = fp_type(0), kwargs::split = sp);
         REQUIRE(std::all_of(pots.begin(), pots.end(), [](fp_type x) { return x == fp_type(0); }));
-        t.pots_u(pots, theta, kwargs::G = fp_type(2));
+        t.pots_u(pots, theta, kwargs::G = fp_type(2), kwargs::split = sp);
         REQUIRE(std::all_of(boost::make_zip_iterator(boost::make_tuple(pots.begin(), pots_u_orig.begin())),
                             boost::make_zip_iterator(boost::make_tuple(pots.end(), pots_u_orig.end())),
                             [](auto t) { return boost::get<0>(t) == fp_type(2) * boost::get<1>(t); }));

@@ -5,6 +5,7 @@ get_filename_component(_RAKAU_CONFIG_SELF_DIR "${CMAKE_CURRENT_LIST_FILE}" PATH)
 set(_RAKAU_CONFIG_OLD_MODULE_PATH "${CMAKE_MODULE_PATH}")
 list(APPEND CMAKE_MODULE_PATH "${_RAKAU_CONFIG_SELF_DIR}")
 include(RakauFindBoost)
+include(RakauFindThreads)
 find_package(xsimd REQUIRED)
 find_package(TBB REQUIRED)
 # Restore the original module path.

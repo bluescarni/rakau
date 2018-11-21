@@ -20,6 +20,8 @@
 #include <boost/iterator/zip_iterator.hpp>
 #include <boost/tuple/tuple.hpp>
 
+#include <rakau/config.hpp>
+
 #include "test_utils.hpp"
 
 using namespace rakau;
@@ -29,6 +31,14 @@ using namespace rakau_test;
 using fp_types = std::tuple<float, double>;
 
 static std::mt19937 rng(1);
+
+static const std::vector<double> sp =
+#if defined(RAKAU_WITH_ROCM)
+    {0.5, 0.5}
+#else
+    {}
+#endif
+;
 
 TEST_CASE("g constant accelerations")
 {
@@ -41,15 +51,15 @@ TEST_CASE("g constant accelerations")
         octree<fp_type> t({parts.begin() + s, parts.begin() + 2u * s, parts.begin() + 3u * s, parts.begin()}, s,
                           box_size = bsize);
         std::array<std::vector<fp_type>, 3> accs;
-        t.accs_u(accs, theta);
+        t.accs_u(accs, theta, kwargs::split = sp);
         auto accs_u_orig(accs);
         t.accs_o(accs, theta);
         auto accs_o_orig(accs);
-        t.accs_u(accs, theta, kwargs::G = fp_type(0));
+        t.accs_u(accs, theta, kwargs::G = fp_type(0), kwargs::split = sp);
         REQUIRE(std::all_of(accs[0].begin(), accs[0].end(), [](fp_type x) { return x == fp_type(0); }));
         REQUIRE(std::all_of(accs[1].begin(), accs[1].end(), [](fp_type x) { return x == fp_type(0); }));
         REQUIRE(std::all_of(accs[2].begin(), accs[2].end(), [](fp_type x) { return x == fp_type(0); }));
-        t.accs_u(accs, theta, kwargs::G = fp_type(2));
+        t.accs_u(accs, theta, kwargs::G = fp_type(2), kwargs::split = sp);
         REQUIRE(std::all_of(boost::make_zip_iterator(boost::make_tuple(accs[0].begin(), accs_u_orig[0].begin())),
                             boost::make_zip_iterator(boost::make_tuple(accs[0].end(), accs_u_orig[0].end())),
                             [](auto t) { return boost::get<0>(t) == fp_type(2) * boost::get<1>(t); }));
