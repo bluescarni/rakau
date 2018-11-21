@@ -139,16 +139,16 @@ inline std::vector<F> get_uniform_particles(std::size_t n, F size)
     return retval;
 }
 
-template <typename F>
-inline auto parse_benchmark_options(int argc, char **argv)
+inline auto parse_accpot_benchmark_options(int argc, char **argv)
 {
     namespace po = boost::program_options;
 
     unsigned long nparts, idx;
     unsigned max_leaf_n, ncrit, nthreads;
-    F bsize, a, theta;
+    double bsize, a, theta;
     bool parinit = false;
     std::vector<double> split;
+    std::string fp_type;
 
     po::options_description desc("Allowed options");
     desc.add_options()("help", "produce help message")(
@@ -158,13 +158,16 @@ inline auto parse_benchmark_options(int argc, char **argv)
         "max number of particles in a leaf node")("ncrit",
                                                   po::value<unsigned>(&ncrit)->default_value(rakau::default_ncrit),
                                                   "maximum number of particles in a critical node")(
-        "a", po::value<F>(&a)->default_value(F(1)), "Plummer core radius")(
-        "bsize", po::value<F>(&bsize)->default_value(F(0)), "size of the domain (if 0, it is automatically deduced)")(
-        "nthreads", po::value<unsigned>(&nthreads)->default_value(0u),
-        "number of threads to use (0 for auto-detection)")("theta", po::value<F>(&theta)->default_value(F(0.75)),
-                                                           "theta parameter")(
-        "parinit", "parallel nondeterministic initialisation of the particle distribution")(
-        "split", po::value<std::vector<double>>()->multitoken(), "split vector for multi-device computations");
+        "a", po::value<double>(&a)->default_value(1.), "Plummer core radius")(
+        "bsize", po::value<double>(&bsize)->default_value(0.),
+        "size of the domain (if 0, it is automatically deduced)")("nthreads",
+                                                                  po::value<unsigned>(&nthreads)->default_value(0u),
+                                                                  "number of threads to use (0 for auto-detection)")(
+        "theta", po::value<double>(&theta)->default_value(0.75),
+        "theta parameter")("parinit", "parallel nondeterministic initialisation of the particle distribution")(
+        "split", po::value<std::vector<double>>()->multitoken(), "split vector for heterogeneous computations")(
+        "fp_type", po::value<std::string>(&fp_type)->default_value("float"),
+        "floating-point type to use in the computations");
 
     po::variables_map vm;
     po::store(po::parse_command_line(argc, argv, desc), vm);
@@ -193,7 +196,13 @@ inline auto parse_benchmark_options(int argc, char **argv)
         split = vm["split"].as<std::vector<double>>();
     }
 
-    return std::make_tuple(nparts, idx, max_leaf_n, ncrit, nthreads, bsize, a, theta, parinit, std::move(split));
+    if (fp_type != "float" && fp_type != "double") {
+        throw std::invalid_argument("Only the 'float' and 'double' floating-point types are supported, but the type'"
+                                    + fp_type + "' was specified instead");
+    }
+
+    return std::tuple{
+        nparts, idx, max_leaf_n, ncrit, nthreads, bsize, a, theta, parinit, std::move(split), std::move(fp_type)};
 }
 
 } // namespace rakau_benchmark

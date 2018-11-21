@@ -10,6 +10,8 @@
 #include <initializer_list>
 #include <iostream>
 #include <optional>
+#include <tuple>
+#include <vector>
 
 #include <tbb/task_scheduler_init.h>
 
@@ -24,23 +26,34 @@ int main(int argc, char **argv)
 {
     std::cout.precision(20);
 
-    const auto [nparts, idx, max_leaf_n, ncrit, nthreads, bsize, a, theta, parinit, split]
-        = parse_benchmark_options<float>(argc, argv);
+    const auto popts = parse_accpot_benchmark_options(argc, argv);
 
     std::optional<tbb::task_scheduler_init> t_init;
-    if (nthreads) {
-        t_init.emplace(nthreads);
+    if (std::get<4>(popts)) {
+        t_init.emplace(std::get<4>(popts));
     }
 
-    auto parts = get_plummer_sphere(nparts, a, bsize, parinit);
+    auto runner = [&popts](auto x) {
+        using fp_type = decltype(x);
 
-    tree<3, float> t({parts.data() + nparts, parts.data() + 2 * nparts, parts.data() + 3 * nparts, parts.data()},
-                     nparts, kwargs::max_leaf_n = max_leaf_n, kwargs::ncrit = ncrit);
-    std::cout << t << '\n';
-    std::array<std::vector<float>, 3> accs;
-    t.accs_u(accs, theta, kwargs::split = split);
-    std::cout << accs[0][t.inv_perm()[idx]] << ", " << accs[1][t.inv_perm()[idx]] << ", " << accs[2][t.inv_perm()[idx]]
-              << '\n';
-    auto eacc = t.exact_acc_u(t.inv_perm()[idx]);
-    std::cout << eacc[0] << ", " << eacc[1] << ", " << eacc[2] << '\n';
+        const auto [nparts, idx, max_leaf_n, ncrit, _1, bsize, a, theta, parinit, split, _2] = popts;
+
+        auto parts = get_plummer_sphere(nparts, static_cast<fp_type>(a), static_cast<fp_type>(bsize), parinit);
+
+        tree<3, fp_type> t({parts.data() + nparts, parts.data() + 2 * nparts, parts.data() + 3 * nparts, parts.data()},
+                           nparts, kwargs::max_leaf_n = max_leaf_n, kwargs::ncrit = ncrit);
+        std::cout << t << '\n';
+        std::array<std::vector<fp_type>, 3> accs;
+        t.accs_u(accs, theta, kwargs::split = split);
+        std::cout << accs[0][t.inv_perm()[idx]] << ", " << accs[1][t.inv_perm()[idx]] << ", "
+                  << accs[2][t.inv_perm()[idx]] << '\n';
+        auto eacc = t.exact_acc_u(t.inv_perm()[idx]);
+        std::cout << eacc[0] << ", " << eacc[1] << ", " << eacc[2] << '\n';
+    };
+
+    if (std::get<10>(popts) == "float") {
+        runner(0.f);
+    } else {
+        runner(0.);
+    }
 }
