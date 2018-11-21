@@ -366,7 +366,7 @@ void rocm_state<NDim, F, UInt>::acc_pot(int p_begin, int p_end, const std::array
 #define RAKAU_ROCM_INST_Q_SEQUENCE (0)(1)(2)
 
 // Macro for the instantiation of the member function. NDim, F, UInt and Q will be passed in
-// as a sequence named Args.
+// as a sequence named Args (in that order).
 #define RAKAU_ROCM_EXPLICIT_INST_MEMFUN(r, Args)                                                                       \
     template void rocm_state<BOOST_PP_SEQ_ELEM(0, Args), BOOST_PP_SEQ_ELEM(1, Args), BOOST_PP_SEQ_ELEM(2, Args)>::     \
         acc_pot<BOOST_PP_SEQ_ELEM(3, Args)>(                                                                           \

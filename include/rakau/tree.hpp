@@ -2851,6 +2851,9 @@ public:
     template <typename... KwArgs>
     std::array<F, NDim> exact_acc_u(size_type idx, KwArgs &&... args) const
     {
+        // NOTE: we are also parsing the split kwarg here, which is not used. I don't
+        // think it has any performance implications, and perhaps in the future
+        // we will use it.
         const auto [G, eps, _] = parse_accpot_kwargs(std::forward<KwArgs>(args)...);
         return exact_acc_pot_impl<false, 0>(idx, G, eps);
     }
