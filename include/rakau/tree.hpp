@@ -51,6 +51,9 @@
 #include <xsimd/xsimd.hpp>
 
 #include <rakau/config.hpp>
+#if defined(RAKAU_WITH_CUDA)
+#include <rakau/detail/cuda_fwd.hpp>
+#endif
 #include <rakau/detail/di_aligned_allocator.hpp>
 #if defined(RAKAU_WITH_ROCM)
 #include <rakau/detail/rocm_fwd.hpp>
@@ -78,7 +81,7 @@
 
 #if defined(__clang__) || defined(__GNUC__)
 
-#include <rakau/detail/cuda_fwd.hpp>
+#pragma GCC diagnostic pop
 
 #endif
 

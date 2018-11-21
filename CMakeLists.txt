@@ -40,6 +40,10 @@ if(RAKAU_WITH_ROCM)
   set(RAKAU_ENABLE_ROCM "#define RAKAU_WITH_ROCM")
 endif()
 
+if(RAKAU_WITH_CUDA AND RAKAU_WITH_ROCM)
+  message(FATAL_ERROR "ROCm and CUDA support cannot be activated together.")
+endif()
+
 # Assemble the flags.
 set(RAKAU_CXX_FLAGS_DEBUG ${YACMA_CXX_FLAGS} ${YACMA_CXX_FLAGS_DEBUG})
 set(RAKAU_CXX_FLAGS_RELEASE ${YACMA_CXX_FLAGS})
@@ -134,7 +138,12 @@ endif()
 
 if(RAKAU_WITH_CUDA)
   add_library(rakau_cuda SHARED "${CMAKE_CURRENT_SOURCE_DIR}/src/rakau_cuda.cu")
+  set_target_properties(rakau_cuda PROPERTIES CXX_VISIBILITY_PRESET hidden)
+  set_target_properties(rakau_cude PROPERTIES VISIBILITY_INLINES_HIDDEN TRUE)
   target_compile_features(rakau_cuda PRIVATE cxx_std_14)
+  target_link_libraries(rakau_cuda PRIVATE rakau)
+
+  target_link_libraries(rakau INTERFACE rakau_cuda)
   target_link_libraries(rakau_cuda PRIVATE rakau)
 endif()
 
