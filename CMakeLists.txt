@@ -18,6 +18,7 @@ endif()
 option(RAKAU_BUILD_TESTS "Build unit tests." OFF)
 option(RAKAU_BUILD_BENCHMARKS "Build benchmarks." OFF)
 option(RAKAU_ENABLE_RSQRT "Enable the use of rsqrt intrinsics." ON)
+option(RAKAU_WITH_ROCM "Enable support for ROCm." OFF)
 option(RAKAU_WITH_CUDA "Enable support for CUDA." OFF)
 
 if(NOT RAKAU_ENABLE_RSQRT)
@@ -31,6 +32,13 @@ endif()
 
 include(YACMACompilerLinkerSettings)
 include(CheckCXXCompilerFlag)
+
+if(RAKAU_WITH_ROCM)
+  if(NOT YACMA_COMPILER_IS_HCC)
+    message(FATAL_ERROR "ROCm support requires the hcc compiler.")
+  endif()
+  set(RAKAU_ENABLE_ROCM "#define RAKAU_WITH_ROCM")
+endif()
 
 # Assemble the flags.
 set(RAKAU_CXX_FLAGS_DEBUG ${YACMA_CXX_FLAGS} ${YACMA_CXX_FLAGS_DEBUG})
@@ -90,8 +98,11 @@ find_package(xsimd REQUIRED)
 # Find TBB.
 find_package(TBB REQUIRED)
 
+# Find the threading library.
+include(RakauFindThreads)
+
 # Link the deps.
-target_link_libraries(rakau INTERFACE Boost::boost xsimd TBB::tbb)
+target_link_libraries(rakau INTERFACE Boost::boost xsimd TBB::tbb Threads::Threads)
 
 # Finish setting up the rakau interface target.
 target_include_directories(rakau INTERFACE
@@ -99,19 +110,26 @@ target_include_directories(rakau INTERFACE
     $<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}/include>
     $<INSTALL_INTERFACE:include>)
 
-if(YACMA_COMPILER_IS_HCC)
-  set(RAKAU_HC_DEVICE_FLAGS "" CACHE STRING "Flags for device code compilation.")
-  mark_as_advanced(RAKAU_HC_DEVICE_FLAGS)
-  string(REPLACE " " ";" RAKAU_HC_DEVICE_FLAGS_ "${RAKAU_HC_DEVICE_FLAGS}")
-  add_library(rakau_hc SHARED "${CMAKE_CURRENT_SOURCE_DIR}/src/rakau_hc.cpp")
-  set_target_properties(rakau_hc PROPERTIES LINK_FLAGS "-hc ${RAKAU_HC_DEVICE_FLAGS}")
-  target_compile_options(rakau_hc PRIVATE "$<$<CONFIG:DEBUG>:${RAKAU_CXX_FLAGS_DEBUG}>" "$<$<CONFIG:RELEASE>:${RAKAU_CXX_FLAGS_RELEASE}>"
-    "-hc" "-Wno-unused-command-line-argument" "${RAKAU_HC_DEVICE_FLAGS_}")
-  unset(RAKAU_HC_DEVICE_FLAGS_)
-  target_link_libraries(rakau_hc PRIVATE rakau)
-  set_property(TARGET rakau_hc PROPERTY CXX_STANDARD 17)
-  set_property(TARGET rakau_hc PROPERTY CXX_STANDARD_REQUIRED YES)
-  set_property(TARGET rakau_hc PROPERTY CXX_EXTENSIONS NO)
+if(RAKAU_WITH_ROCM)
+  set(RAKAU_ROCM_DEVICE_FLAGS "" CACHE STRING "Flags for ROCm device code compilation.")
+  mark_as_advanced(RAKAU_ROCM_DEVICE_FLAGS)
+  string(REPLACE " " ";" RAKAU_ROCM_DEVICE_FLAGS_ "${RAKAU_ROCM_DEVICE_FLAGS}")
+  add_library(rakau_rocm SHARED "${CMAKE_CURRENT_SOURCE_DIR}/src/rakau_rocm.cpp")
+  set_target_properties(rakau_rocm PROPERTIES LINK_FLAGS "-hc ${RAKAU_ROCM_DEVICE_FLAGS}")
+  set_target_properties(rakau_rocm PROPERTIES CXX_VISIBILITY_PRESET hidden)
+  set_target_properties(rakau_rocm PROPERTIES VISIBILITY_INLINES_HIDDEN TRUE)
+  target_compile_options(rakau_rocm PRIVATE "$<$<CONFIG:DEBUG>:${RAKAU_CXX_FLAGS_DEBUG}>" "$<$<CONFIG:RELEASE>:${RAKAU_CXX_FLAGS_RELEASE}>"
+    "-hc" "-Wno-unused-command-line-argument" "${RAKAU_ROCM_DEVICE_FLAGS_}")
+  unset(RAKAU_ROCM_DEVICE_FLAGS_)
+  set_property(TARGET rakau_rocm PROPERTY CXX_STANDARD 17)
+  set_property(TARGET rakau_rocm PROPERTY CXX_STANDARD_REQUIRED YES)
+  set_property(TARGET rakau_rocm PROPERTY CXX_EXTENSIONS NO)
+
+  # There's a circular dependency here, let's hope this does not cause issues.
+  # I would really prefer to have the C++ and ROCm part fully separated, but the ROCm
+  # bits need to access (some of) rakau's headers.
+  target_link_libraries(rakau INTERFACE rakau_rocm)
+  target_link_libraries(rakau_rocm PRIVATE rakau)
 endif()
 
 if(RAKAU_WITH_CUDA)
@@ -126,9 +144,13 @@ configure_file("${CMAKE_CURRENT_SOURCE_DIR}/config.hpp.in" "${CMAKE_CURRENT_BINA
 # Installation.
 # Setup of the export.
 install(TARGETS rakau EXPORT rakau_export)
+if(RAKAU_WITH_ROCM)
+  install(TARGETS rakau_rocm EXPORT rakau_export LIBRARY DESTINATION "lib")
+endif()
 install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/rakau-config.cmake" DESTINATION "lib/cmake/rakau")
 install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RakauFindBoost.cmake" DESTINATION "lib/cmake/rakau")
 install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/cmake/FindTBB.cmake" DESTINATION "lib/cmake/rakau")
+install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RakauFindThreads.cmake" DESTINATION "lib/cmake/rakau")
 install(EXPORT rakau_export NAMESPACE rakau:: DESTINATION lib/cmake/rakau)
 # Take care of versioning.
 include(CMakePackageConfigHelpers)

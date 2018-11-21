@@ -24,6 +24,8 @@
 #include <tuple>
 #include <vector>
 
+#include <rakau/config.hpp>
+
 #include "test_utils.hpp"
 
 using namespace rakau;
@@ -32,6 +34,14 @@ using namespace rakau_test;
 using fp_types = std::tuple<float, double>;
 
 static std::mt19937 rng(2);
+
+static const std::vector<double> sp =
+#if defined(RAKAU_WITH_ROCM)
+    {0.5, 0.5}
+#else
+    {}
+#endif
+;
 
 // NOTE: this is very similar to the accuracy test, just with various epsilons tested as well.
 TEST_CASE("potentials softening ordered")
@@ -87,7 +97,7 @@ TEST_CASE("potentials softening ordered")
                                                 kwargs::ncrit = ncrit);
                             // Compute the potentials.
                             // Try with the other overload as well.
-                            t.pots_u(pots.data(), theta, kwargs::eps = eps);
+                            t.pots_u(pots.data(), theta, kwargs::eps = eps, kwargs::split = sp);
                             // Verify all values are finite.
                             REQUIRE(std::all_of(pots.begin(), pots.end(), [](auto c) { return std::isfinite(c); }));
                         }
@@ -125,7 +135,7 @@ TEST_CASE("potentials softening unordered")
                         octree<fp_type> t(
                             {parts.begin() + s, parts.begin() + 2u * s, parts.begin() + 3u * s, parts.begin()}, s,
                             kwargs::box_size = bsize, kwargs::max_leaf_n = max_leaf_n, kwargs::ncrit = ncrit);
-                        t.pots_u(pots, theta, kwargs::eps = eps);
+                        t.pots_u(pots, theta, kwargs::eps = eps, kwargs::split = sp);
                         // Check that all potentials are finite.
                         REQUIRE(std::all_of(pots.begin(), pots.end(), [](auto c) { return std::isfinite(c); }));
                         for (auto i = 0u; i < s; ++i) {
@@ -158,7 +168,7 @@ TEST_CASE("potentials softening unordered")
                                                 kwargs::ncrit = ncrit);
                             // Compute the potentials.
                             // Try with the other overload as well.
-                            t.pots_u(pots.data(), theta, kwargs::eps = eps);
+                            t.pots_u(pots.data(), theta, kwargs::eps = eps, kwargs::split = sp);
                             // Verify all values are finite.
                             REQUIRE(std::all_of(pots.begin(), pots.end(), [](auto c) { return std::isfinite(c); }));
                         }

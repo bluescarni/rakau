@@ -1,4 +1,5 @@
 #include <array>
+#include <cassert>
 #include <cstddef>
 #include <cstdint>
 #include <tuple>
@@ -18,9 +19,10 @@
 
 #pragma GCC diagnostic pop
 
-#include <boost/numeric/conversion/cast.hpp>
+#include <boost/preprocessor/seq/elem.hpp>
+#include <boost/preprocessor/seq/for_each_product.hpp>
 
-#include <rakau/detail/hc_fwd.hpp>
+#include <rakau/detail/rocm_fwd.hpp>
 #include <rakau/detail/tree_fwd.hpp>
 
 namespace rakau
@@ -29,13 +31,27 @@ namespace rakau
 inline namespace detail
 {
 
-// Minimum number of particles needed for running the hcc implementation.
-unsigned hcc_min_size()
+// Minimum number of particles needed for running on the accelerator.
+unsigned rocm_min_size()
 {
     return static_cast<unsigned>(__HSA_WAVEFRONT_SIZE__);
 }
 
+// Check if a ROCm accelerator is available.
+bool rocm_has_accelerator()
+{
+    // NOTE: it seems like at the moment the CPU is also seen as
+    // an accelerator, so we always have at least 1 device.
+    // We are interested in using ROCm only in presence
+    // of actual GPU accelerators, so we check if there are at
+    // least 2 accelerators on the system.
+    return hc::accelerator::get_all().size() > 1u;
+}
+
 // Machinery to transform an array of pointers into a tuple of array views.
+// NOTE: these tuple <-> array conversions are temporarily needed as hcc
+// does not seem to support capturing arrays of views in a parallel_for(), but
+// tuples are apparently ok.
 template <typename T, std::size_t N, std::size_t... I>
 inline auto ap2tv_impl(const std::array<T *, N> &a, int size, std::index_sequence<I...>)
 {
@@ -67,28 +83,87 @@ inline auto t2a(const Tuple &tup)
     return t2a_impl(tup, std::make_index_sequence<std::tuple_size_v<Tuple>>{});
 }
 
-template <unsigned Q, std::size_t NDim, typename F, typename UInt>
-void hcc_acc_pot_impl(const std::array<F *, tree_nvecs_res<Q, NDim>> &out, const tree_node_t<NDim, F, UInt> *tree,
-                      tree_size_t<F> tree_size, const std::array<const F *, NDim + 1u> &p_parts, const UInt *codes,
-                      tree_size_t<F> nparts, F theta2, F G, F eps2,
-                      // NOTE: ncrit is currently unused.
-                      tree_size_t<F>)
+// Implementation of the rocm_state machinery. We will store in here views to
+// the internal vectors of a tree.
+template <std::size_t NDim, typename F, typename UInt>
+struct rocm_state_impl {
+    using pav_t = decltype(ap2tv(std::declval<const std::array<const F *, NDim + 1u> &>(), 0));
+    explicit rocm_state_impl(const std::array<const F *, NDim + 1u> &parts, const UInt *codes, int nparts,
+                             const tree_node_t<NDim, F, UInt> *tree, int tree_size)
+        : m_pav(ap2tv(parts, nparts)), m_codes_view(nparts, codes), m_nparts(nparts), m_tree_view(tree_size, tree),
+          m_tree_size(tree_size)
+    {
+    }
+
+    // NOTE: make sure we don't end up accidentally copying/moving
+    // objects of this class.
+    rocm_state_impl(const rocm_state_impl &) = delete;
+    rocm_state_impl(rocm_state_impl &&) = delete;
+    rocm_state_impl &operator=(const rocm_state_impl &) = delete;
+    rocm_state_impl &operator=(rocm_state_impl &&) = delete;
+
+    // Views to the particle data.
+    pav_t m_pav;
+    // View to the codes.
+    hc::array_view<const UInt, 1> m_codes_view;
+    // Number of particles/codes.
+    int m_nparts;
+    // View into the tree structure.
+    hc::array_view<const tree_node_t<NDim, F, UInt>, 1> m_tree_view;
+    // Number of nodes in the tree.
+    int m_tree_size;
+};
+
+// Constructor: forward all the arguments to the constructor of the internal structure (stored as a raw pointer).
+template <std::size_t NDim, typename F, typename UInt>
+rocm_state<NDim, F, UInt>::rocm_state(const std::array<const F *, NDim + 1u> &parts, const UInt *codes, int nparts,
+                                      const tree_node_t<NDim, F, UInt> *tree, int tree_size)
+    : m_state(::new rocm_state_impl(parts, codes, nparts, tree, tree_size))
 {
-    hc::array_view<const tree_node_t<NDim, F, UInt>, 1> tree_view(boost::numeric_cast<int>(tree_size), tree);
-    hc::array_view<const UInt, 1> codes_view(boost::numeric_cast<int>(nparts), codes);
-    // Turn the input particles data and the result buffers into tuples of views, for use
-    // in the parallel_for_each().
-    auto pt = ap2tv(p_parts, boost::numeric_cast<int>(nparts));
-    auto rt = ap2tv(out, boost::numeric_cast<int>(nparts));
+}
+
+// Destructor: delete the internal structure.
+template <std::size_t NDim, typename F, typename UInt>
+rocm_state<NDim, F, UInt>::~rocm_state()
+{
+    ::delete static_cast<rocm_state_impl<NDim, F, UInt> *>(m_state);
+}
+
+// Main function for the computation of the accelerations/potentials. It will fetch
+// the views to the tree from the state structure, create views into the output data
+// and then traverse the tree computing the acceleration for each particle.
+template <std::size_t NDim, typename F, typename UInt>
+template <unsigned Q>
+void rocm_state<NDim, F, UInt>::acc_pot(int p_begin, int p_end, const std::array<F *, tree_nvecs_res<Q, NDim>> &out,
+                                        F theta2, F G, F eps2) const
+{
+    assert(p_begin <= p_end);
+
+    // Fetch the state structure.
+    auto &state = *static_cast<const rocm_state_impl<NDim, F, UInt> *>(m_state);
+
+    const auto nparts = state.m_nparts;
+    assert(p_end <= nparts);
+
+    // Offset the original output pointers: we want to create
+    // a view only to the memory area into which we will actually
+    // be writing.
+    std::array<F *, tree_nvecs_res<Q, NDim>> out_offset;
+    for (std::size_t j = 0; j < tree_nvecs_res<Q, NDim>; ++j) {
+        out_offset[j] = out[j] + p_begin;
+    }
+    // Create the output views.
+    auto rt = ap2tv(out_offset, p_end - p_begin);
+
     hc::parallel_for_each(
-        hc::extent<1>(boost::numeric_cast<int>(nparts)).tile(__HSA_WAVEFRONT_SIZE__),
+        hc::extent<1>(p_end - p_begin).tile(__HSA_WAVEFRONT_SIZE__),
         [
-            tree_view, tree_size = static_cast<int>(tree_size), nparts = static_cast<int>(nparts), pt, codes_view, rt,
-            theta2, G,
+            p_begin, pt = state.m_pav, codes_view = state.m_codes_view, nparts, tree_view = state.m_tree_view,
+            tree_size = state.m_tree_size, rt, theta2, G,
             eps2
         ](hc::tiled_index<1> thread_id) [[hc]] {
-            // Get the global particle index.
-            const auto pidx = thread_id.global[0];
+            // Get the global particle index into the tree data.
+            const auto pidx = thread_id.global[0] + p_begin;
             if (pidx >= nparts) {
                 // Don't do anything if we are in the remainder
                 // of the last tile.
@@ -262,7 +337,9 @@ void hcc_acc_pot_impl(const std::array<F *, tree_nvecs_res<Q, NDim>> &out, const
 
             // Handle the G constant and write out the result.
             for (std::size_t j = 0; j < tree_nvecs_res<Q, NDim>; ++j) {
-                res_view[j][pidx] = G * res_array[j];
+                // NOTE: for writing the results, we use the loop index
+                // without offset.
+                res_view[j][thread_id.global[0]] = G * res_array[j];
             }
         })
         .get();
@@ -271,29 +348,46 @@ void hcc_acc_pot_impl(const std::array<F *, tree_nvecs_res<Q, NDim>> &out, const
     }
 }
 
-// Explicit instantiations.
-#define RAKAU_HC_EXPLICIT_INST(Q, NDim, F, UInt)                                                                       \
-    template void hcc_acc_pot_impl<Q, NDim, F, UInt>(                                                                  \
-        const std::array<F *, tree_nvecs_res<Q, NDim>> &, const tree_node_t<NDim, F, UInt> *, tree_size_t<F>,          \
-        const std::array<const F *, NDim + 1u> &, const UInt *, tree_size_t<F>, F, F, F, tree_size_t<F>)
+// Explicit instantiations of the templates implemented above. We are going to use Boost.Preprocessor.
+// It's gonna look ugly, but it will allow us to avoid a lot of typing.
 
-RAKAU_HC_EXPLICIT_INST(0, 3, float, std::uint64_t);
-RAKAU_HC_EXPLICIT_INST(1, 3, float, std::uint64_t);
-RAKAU_HC_EXPLICIT_INST(2, 3, float, std::uint64_t);
+// Define the values/types that we will use for the concrete instantiations.
 
-RAKAU_HC_EXPLICIT_INST(0, 3, double, std::uint64_t);
-RAKAU_HC_EXPLICIT_INST(1, 3, double, std::uint64_t);
-RAKAU_HC_EXPLICIT_INST(2, 3, double, std::uint64_t);
+// Only octrees for the moment.
+#define RAKAU_ROCM_INST_DIM_SEQUENCE (3)
 
-RAKAU_HC_EXPLICIT_INST(0, 3, float, std::uint32_t);
-RAKAU_HC_EXPLICIT_INST(1, 3, float, std::uint32_t);
-RAKAU_HC_EXPLICIT_INST(2, 3, float, std::uint32_t);
+// float and double only on the gpu.
+#define RAKAU_ROCM_INST_FP_SEQUENCE (float)(double)
 
-RAKAU_HC_EXPLICIT_INST(0, 3, double, std::uint32_t);
-RAKAU_HC_EXPLICIT_INST(1, 3, double, std::uint32_t);
-RAKAU_HC_EXPLICIT_INST(2, 3, double, std::uint32_t);
+// 32/64bit types for the particle codes.
+#define RAKAU_ROCM_INST_UINT_SEQUENCE (std::uint32_t)(std::uint64_t)
 
-#undef RAKAU_HC_EXPLICIT_INST
+// Computation of accelerations, potentials or both.
+#define RAKAU_ROCM_INST_Q_SEQUENCE (0)(1)(2)
+
+// Macro for the instantiation of the member function. NDim, F, UInt and Q will be passed in
+// as a sequence named Args (in that order).
+#define RAKAU_ROCM_EXPLICIT_INST_MEMFUN(r, Args)                                                                       \
+    template void rocm_state<BOOST_PP_SEQ_ELEM(0, Args), BOOST_PP_SEQ_ELEM(1, Args), BOOST_PP_SEQ_ELEM(2, Args)>::     \
+        acc_pot<BOOST_PP_SEQ_ELEM(3, Args)>(                                                                           \
+            int, int,                                                                                                  \
+            const std::array<BOOST_PP_SEQ_ELEM(1, Args) *,                                                             \
+                             tree_nvecs_res<BOOST_PP_SEQ_ELEM(3, Args), BOOST_PP_SEQ_ELEM(0, Args)>> &out,             \
+            BOOST_PP_SEQ_ELEM(1, Args) theta2, BOOST_PP_SEQ_ELEM(1, Args) G, BOOST_PP_SEQ_ELEM(1, Args) eps2) const;
+
+// Do the actual instantiation via a cartesian product over the sequences.
+// clang-format off
+BOOST_PP_SEQ_FOR_EACH_PRODUCT(RAKAU_ROCM_EXPLICIT_INST_MEMFUN, (RAKAU_ROCM_INST_DIM_SEQUENCE)(RAKAU_ROCM_INST_FP_SEQUENCE)(RAKAU_ROCM_INST_UINT_SEQUENCE)(RAKAU_ROCM_INST_Q_SEQUENCE));
+// clang-format on
+
+// Macro for the instantiation of the state class. Same idea as above.
+#define RAKAU_ROCM_EXPLICIT_INST_STATE(r, Args)                                                                        \
+    template class rocm_state<BOOST_PP_SEQ_ELEM(0, Args), BOOST_PP_SEQ_ELEM(1, Args), BOOST_PP_SEQ_ELEM(2, Args)>;
+
+// Instantiation.
+// clang-format off
+BOOST_PP_SEQ_FOR_EACH_PRODUCT(RAKAU_ROCM_EXPLICIT_INST_STATE, (RAKAU_ROCM_INST_DIM_SEQUENCE)(RAKAU_ROCM_INST_FP_SEQUENCE)(RAKAU_ROCM_INST_UINT_SEQUENCE));
+// clang-format on
 
 } // namespace detail
 } // namespace rakau

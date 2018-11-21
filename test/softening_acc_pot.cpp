@@ -25,6 +25,8 @@
 #include <tuple>
 #include <vector>
 
+#include <rakau/config.hpp>
+
 #include "test_utils.hpp"
 
 using namespace rakau;
@@ -33,6 +35,14 @@ using namespace rakau_test;
 using fp_types = std::tuple<float, double>;
 
 static std::mt19937 rng(0);
+
+static const std::vector<double> sp =
+#if defined(RAKAU_WITH_ROCM)
+    {0.5, 0.5}
+#else
+    {}
+#endif
+;
 
 // NOTE: this is very similar to the accuracy test, just with various epsilons tested as well.
 TEST_CASE("accelerations/potentials softening ordered")
@@ -119,7 +129,7 @@ TEST_CASE("accelerations/potentials softening ordered")
                             // Compute the accelerations/potentials.
                             // Try with the init list overload as well.
                             t.accs_pots_u({accpots[0].data(), accpots[1].data(), accpots[2].data(), accpots[3].data()},
-                                          theta, kwargs::eps = eps);
+                                          theta, kwargs::eps = eps, kwargs::split = sp);
                             // Verify all values are finite.
                             REQUIRE(std::all_of(accpots[0].begin(), accpots[0].end(),
                                                 [](auto c) { return std::isfinite(c); }));
@@ -170,7 +180,7 @@ TEST_CASE("accelerations/potentials softening unordered")
                         octree<fp_type> t(
                             {parts.begin() + s, parts.begin() + 2u * s, parts.begin() + 3u * s, parts.begin()}, s,
                             kwargs::box_size = bsize, kwargs::max_leaf_n = max_leaf_n, kwargs::ncrit = ncrit);
-                        t.accs_pots_u(accpots, theta, kwargs::eps = eps);
+                        t.accs_pots_u(accpots, theta, kwargs::eps = eps, kwargs::split = sp);
                         // Check that all accelerations/potentials are finite.
                         REQUIRE(
                             std::all_of(accpots[0].begin(), accpots[0].end(), [](auto c) { return std::isfinite(c); }));
@@ -234,7 +244,7 @@ TEST_CASE("accelerations/potentials softening unordered")
                             // Compute the accelerations/potentials.
                             // Try with the init list overload as well.
                             t.accs_pots_u({accpots[0].data(), accpots[1].data(), accpots[2].data(), accpots[3].data()},
-                                          theta, kwargs::eps = eps);
+                                          theta, kwargs::eps = eps, kwargs::split = sp);
                             // Verify all values are finite.
                             REQUIRE(std::all_of(accpots[0].begin(), accpots[0].end(),
                                                 [](auto c) { return std::isfinite(c); }));
