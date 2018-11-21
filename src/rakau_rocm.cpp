@@ -19,6 +19,9 @@
 
 #pragma GCC diagnostic pop
 
+#include <boost/preprocessor/seq/elem.hpp>
+#include <boost/preprocessor/seq/for_each_product.hpp>
+
 #include <rakau/detail/rocm_fwd.hpp>
 #include <rakau/detail/tree_fwd.hpp>
 
@@ -345,35 +348,46 @@ void rocm_state<NDim, F, UInt>::acc_pot(int p_begin, int p_end, const std::array
     }
 }
 
-// Explicit instantiations. We need two separate macros, as the state class does not depend on Q.
-#define RAKAU_ROCM_EXPLICIT_INST(Q, NDim, F, UInt)                                                                     \
-    template void rocm_state<NDim, F, UInt>::acc_pot<Q>(int, int, const std::array<F *, tree_nvecs_res<Q, NDim>> &out, \
-                                                        F theta2, F G, F eps2) const
+// Explicit instantiations of the templates implemented above. We are going to use Boost.Preprocessor.
+// It's gonna look ugly, but it will allow us to avoid a lot of typing.
 
-#define RAKAU_ROCM_EXPLICIT_STATE_INST(NDim, F, UInt) template class rocm_state<NDim, F, UInt>
+// Define the values/types that we will use for the concrete instantiations.
 
-RAKAU_ROCM_EXPLICIT_INST(0, 3, float, std::uint64_t);
-RAKAU_ROCM_EXPLICIT_INST(1, 3, float, std::uint64_t);
-RAKAU_ROCM_EXPLICIT_INST(2, 3, float, std::uint64_t);
-RAKAU_ROCM_EXPLICIT_STATE_INST(3, float, std::uint64_t);
+// Only octrees for the moment.
+#define RAKAU_ROCM_INST_DIM_SEQUENCE (3)
 
-RAKAU_ROCM_EXPLICIT_INST(0, 3, double, std::uint64_t);
-RAKAU_ROCM_EXPLICIT_INST(1, 3, double, std::uint64_t);
-RAKAU_ROCM_EXPLICIT_INST(2, 3, double, std::uint64_t);
-RAKAU_ROCM_EXPLICIT_STATE_INST(3, double, std::uint64_t);
+// float and double only on the gpu.
+#define RAKAU_ROCM_INST_FP_SEQUENCE (float)(double)
 
-RAKAU_ROCM_EXPLICIT_INST(0, 3, float, std::uint32_t);
-RAKAU_ROCM_EXPLICIT_INST(1, 3, float, std::uint32_t);
-RAKAU_ROCM_EXPLICIT_INST(2, 3, float, std::uint32_t);
-RAKAU_ROCM_EXPLICIT_STATE_INST(3, float, std::uint32_t);
+// 32/64bit types for the particle codes.
+#define RAKAU_ROCM_INST_UINT_SEQUENCE (std::uint32_t)(std::uint64_t)
 
-RAKAU_ROCM_EXPLICIT_INST(0, 3, double, std::uint32_t);
-RAKAU_ROCM_EXPLICIT_INST(1, 3, double, std::uint32_t);
-RAKAU_ROCM_EXPLICIT_INST(2, 3, double, std::uint32_t);
-RAKAU_ROCM_EXPLICIT_STATE_INST(3, double, std::uint32_t);
+// Computation of accelerations, potentials or both.
+#define RAKAU_ROCM_INST_Q_SEQUENCE (0)(1)(2)
 
-#undef RAKAU_ROCM_EXPLICIT_INST
-#undef RAKAU_ROCM_EXPLICIT_STATE_INST
+// Macro for the instantiation of the member function. NDim, F, UInt and Q will be passed in
+// as a sequence named Args.
+#define RAKAU_ROCM_EXPLICIT_INST_MEMFUN(r, Args)                                                                       \
+    template void rocm_state<BOOST_PP_SEQ_ELEM(0, Args), BOOST_PP_SEQ_ELEM(1, Args), BOOST_PP_SEQ_ELEM(2, Args)>::     \
+        acc_pot<BOOST_PP_SEQ_ELEM(3, Args)>(                                                                           \
+            int, int,                                                                                                  \
+            const std::array<BOOST_PP_SEQ_ELEM(1, Args) *,                                                             \
+                             tree_nvecs_res<BOOST_PP_SEQ_ELEM(3, Args), BOOST_PP_SEQ_ELEM(0, Args)>> &out,             \
+            BOOST_PP_SEQ_ELEM(1, Args) theta2, BOOST_PP_SEQ_ELEM(1, Args) G, BOOST_PP_SEQ_ELEM(1, Args) eps2) const;
+
+// Do the actual instantiation via a cartesian product over the sequences.
+// clang-format off
+BOOST_PP_SEQ_FOR_EACH_PRODUCT(RAKAU_ROCM_EXPLICIT_INST_MEMFUN, (RAKAU_ROCM_INST_DIM_SEQUENCE)(RAKAU_ROCM_INST_FP_SEQUENCE)(RAKAU_ROCM_INST_UINT_SEQUENCE)(RAKAU_ROCM_INST_Q_SEQUENCE));
+// clang-format on
+
+// Macro for the instantiation of the state class. Same idea as above.
+#define RAKAU_ROCM_EXPLICIT_INST_STATE(r, Args)                                                                        \
+    template class rocm_state<BOOST_PP_SEQ_ELEM(0, Args), BOOST_PP_SEQ_ELEM(1, Args), BOOST_PP_SEQ_ELEM(2, Args)>;
+
+// Instantiation.
+// clang-format off
+BOOST_PP_SEQ_FOR_EACH_PRODUCT(RAKAU_ROCM_EXPLICIT_INST_STATE, (RAKAU_ROCM_INST_DIM_SEQUENCE)(RAKAU_ROCM_INST_FP_SEQUENCE)(RAKAU_ROCM_INST_UINT_SEQUENCE));
+// clang-format on
 
 } // namespace detail
 } // namespace rakau
