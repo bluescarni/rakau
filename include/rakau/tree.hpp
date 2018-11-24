@@ -57,6 +57,7 @@
 #endif
 #include <rakau/detail/igor.hpp>
 #include <rakau/detail/simd.hpp>
+#include <rakau/detail/simple_timer.hpp>
 #include <rakau/detail/tree_fwd.hpp>
 
 // Let's disable a few compiler warnings emitted by the libmorton code.
@@ -100,34 +101,6 @@ namespace rakau
 
 inline namespace detail
 {
-
-class simple_timer
-{
-public:
-#if defined(RAKAU_WITH_TIMER)
-    simple_timer(const char *desc) : m_desc(desc), m_start(std::chrono::high_resolution_clock::now()) {}
-    double elapsed() const
-    {
-        return static_cast<double>(
-            std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::high_resolution_clock::now() - m_start)
-                .count());
-    }
-    ~simple_timer()
-    {
-        std::cout << "Elapsed time for '" + m_desc + "': "
-                  << std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::high_resolution_clock::now()
-                                                                           - m_start)
-                         .count()
-                  << u8"μs\n";
-    }
-
-private:
-    const std::string m_desc;
-    const std::chrono::high_resolution_clock::time_point m_start;
-#else
-    simple_timer(const char *) {}
-#endif
-};
 
 template <std::size_t NDim, typename Out>
 struct morton_encoder {

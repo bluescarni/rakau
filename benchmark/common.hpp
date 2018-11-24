@@ -27,6 +27,7 @@
 #include <tbb/blocked_range.h>
 #include <tbb/parallel_for.h>
 
+#include <rakau/detail/simple_timer.hpp>
 #include <rakau/tree.hpp>
 
 namespace rakau_benchmark
