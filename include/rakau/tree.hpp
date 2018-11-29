@@ -1146,6 +1146,9 @@ public:
         // Parse the kwargs.
         ::igor::parser p{args...};
 
+        // Make sure we have only named arguments in args.
+        static_assert(!p.has_unnamed_arguments(), "Only named arguments can be passed in the parameter pack.");
+
         // Handle the box size.
         F box_size(0);
         bool box_size_deduced = true;
@@ -2668,6 +2671,9 @@ private:
     static auto parse_accpot_kwargs(Args &&... args)
     {
         ::igor::parser p{args...};
+
+        // Make sure we have only named arguments in args.
+        static_assert(!p.has_unnamed_arguments(), "Only named arguments can be passed in the parameter pack.");
 
         F G(1), eps(0);
         if constexpr (p.has(kwargs::G)) {
