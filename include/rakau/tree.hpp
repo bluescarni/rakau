@@ -293,7 +293,7 @@ inline F get_node_dim(UInt node_level, F box_size)
 // Determine the geometrical centre of a node, given its code
 // and the box size.
 template <typename F, std::size_t NDim, typename UInt>
-inline void node_center(F (&out)[NDim], UInt node_code, F box_size)
+inline void node_centre(F (&out)[NDim], UInt node_code, F box_size)
 {
     // Compute the level of the node.
     const auto node_level = tree_level<NDim>(node_code);
@@ -313,7 +313,7 @@ inline void node_center(F (&out)[NDim], UInt node_code, F box_size)
     UInt d_code[NDim];
     d(&d_code[0], c_code);
 
-    // Compute the center of the node:
+    // Compute the centre of the node:
     // - take the discretised coordinate of the first cell of the node,
     // - multiply by the cell size to get the real coordinate of the first
     //   corner of the cell,
@@ -932,7 +932,7 @@ private:
         // Compute the total mass.
         const auto tot_mass = std::accumulate(m_parts[NDim].data() + begin, m_parts[NDim].data() + end, F(0));
         // Compute the centre.
-        node_center(node.centre, node.code, m_box_size);
+        node_centre(node.centre, node.code, m_box_size);
         if (tot_mass == F(0)) {
             // If the total mass of the node is zero, it does not have a COM.
             // Use the geometrical centre in its stead.
