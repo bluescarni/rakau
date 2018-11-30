@@ -67,11 +67,12 @@ struct tree_node_t {
     // NOTE: these will be 32/64bit uints in most cases. Because there's 2 of these,
     // they will typically not result in padding.
     UInt code, level;
-    // Node properties (COM coordinates + mass) and square of the node dimension.
+    // Node properties (COM coordinates + mass), geometric centre, and square of
+    // the node dimension.
     // NOTE: these will be single/double precision ieee FPs in most cases. Assuming
     // we have no padding at this point, any extra padding necessary can be placed
     // here.
-    F props[NDim + 1u], dim2;
+    F props[NDim + 1u], centre[NDim], dim2;
 };
 
 // Critical node.
