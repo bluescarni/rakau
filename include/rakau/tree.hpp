@@ -1256,7 +1256,7 @@ public:
     explicit tree(const std::array<It, NDim + 1u> &cm_it, const size_type &N, KwArgs &&... args)
     {
         // Parse the kwargs.
-        ::igor::parser p{args...};
+        igor::parser p{args...};
 
         // Make sure we have only named arguments in args.
         static_assert(!p.has_unnamed_arguments(), "Only named arguments can be passed in the parameter pack.");
@@ -2789,7 +2789,7 @@ private:
     template <typename... Args>
     static auto parse_accpot_kwargs(Args &&... args)
     {
-        ::igor::parser p{args...};
+        igor::parser p{args...};
 
         // Make sure we have only named arguments in args.
         static_assert(!p.has_unnamed_arguments(), "Only named arguments can be passed in the parameter pack.");
