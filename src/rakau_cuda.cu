@@ -7,7 +7,6 @@
 
 #include <boost/numeric/conversion/cast.hpp>
 
-#include <rakau/detail/hc_fwd.hpp>
 #include <rakau/detail/tree_fwd.hpp>
 
 namespace rakau

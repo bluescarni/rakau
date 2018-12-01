@@ -84,8 +84,19 @@ if(MINGW)
   list(APPEND RAKAU_CXX_FLAGS_RELEASE "-Wa,-mbig-obj")
 endif()
 
-# Setup of the rakau interface library.
-add_library(rakau INTERFACE)
+# Initial setup of the rakau library.
+if(RAKAU_WITH_ROCM)
+elseif(RAKAU_WITH_CUDA)
+  add_library(rakau SHARED "${CMAKE_CURRENT_SOURCE_DIR}/src/rakau_cuda.cu")
+else()
+  add_library(rakau INTERFACE)
+endif()
+
+# Add the rakau include dirs.
+target_include_directories(rakau INTERFACE
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}/include>
+    $<INSTALL_INTERFACE:include>)
 
 # Find Boost.
 if (RAKAU_BUILD_BENCHMARKS)
@@ -107,12 +118,6 @@ include(RakauFindThreads)
 
 # Link the deps.
 target_link_libraries(rakau INTERFACE Boost::boost xsimd TBB::tbb Threads::Threads)
-
-# Finish setting up the rakau interface target.
-target_include_directories(rakau INTERFACE
-    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
-    $<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}/include>
-    $<INSTALL_INTERFACE:include>)
 
 if(RAKAU_WITH_ROCM)
   set(RAKAU_ROCM_DEVICE_FLAGS "" CACHE STRING "Flags for ROCm device code compilation.")
@@ -137,24 +142,26 @@ if(RAKAU_WITH_ROCM)
 endif()
 
 if(RAKAU_WITH_CUDA)
-  add_library(rakau_cuda SHARED "${CMAKE_CURRENT_SOURCE_DIR}/src/rakau_cuda.cu")
-  set_target_properties(rakau_cuda PROPERTIES CXX_VISIBILITY_PRESET hidden)
-  set_target_properties(rakau_cude PROPERTIES VISIBILITY_INLINES_HIDDEN TRUE)
-  target_compile_features(rakau_cuda PRIVATE cxx_std_14)
-  target_link_libraries(rakau_cuda PRIVATE rakau)
+  set_target_properties(rakau PROPERTIES CXX_VISIBILITY_PRESET hidden)
+  set_target_properties(rakau PROPERTIES VISIBILITY_INLINES_HIDDEN TRUE)
+  target_compile_features(rakau PRIVATE cxx_std_14)
 
-  target_link_libraries(rakau INTERFACE rakau_cuda)
-  target_link_libraries(rakau_cuda PRIVATE rakau)
+  target_include_directories(rakau PRIVATE
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}/include>
+    $<INSTALL_INTERFACE:include>)
 endif()
 
 # Configure config.hpp.
 configure_file("${CMAKE_CURRENT_SOURCE_DIR}/config.hpp.in" "${CMAKE_CURRENT_BINARY_DIR}/include/rakau/config.hpp" @ONLY)
 
 # Installation.
-# Setup of the export.
-install(TARGETS rakau EXPORT rakau_export)
 if(RAKAU_WITH_ROCM)
   install(TARGETS rakau_rocm EXPORT rakau_export LIBRARY DESTINATION "lib")
+elseif(RAKAU_WITH_CUDA)
+  install(TARGETS rakau EXPORT rakau_export LIBRARY DESTINATION "lib")
+else()
+  install(TARGETS rakau EXPORT rakau_export)
 endif()
 install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/rakau-config.cmake" DESTINATION "lib/cmake/rakau")
 install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RakauFindBoost.cmake" DESTINATION "lib/cmake/rakau")
