@@ -578,8 +578,7 @@ private:
                                        0,
                                        cur_code,
                                        ParentLevel + 1u,
-                                       // NOTE: make sure the node props/centre are initialised to zero.
-                                       {},
+                                       // NOTE: make sure the node props are initialised to zero.
                                        {},
                                        get_sqr_node_dim(ParentLevel + 1u)};
                     // Compute its properties.
@@ -673,7 +672,6 @@ private:
                                            0,
                                            cur_code,
                                            ParentLevel + 1u,
-                                           {},
                                            {},
                                            get_sqr_node_dim(ParentLevel + 1u)};
                         compute_node_properties(new_node);
@@ -777,7 +775,6 @@ private:
                                    0,
                                    // NOTE: make sure mass and COM coords are initialised in a known state (i.e.,
                                    // zero for C++ floating-point).
-                                   {},
                                    {},
                                    root_sqr_node_dim});
 
@@ -931,12 +928,14 @@ private:
         const auto size = end - begin;
         // Compute the total mass.
         const auto tot_mass = std::accumulate(m_parts[NDim].data() + begin, m_parts[NDim].data() + end, F(0));
-        // Compute the centre.
-        node_centre(node.centre, node.code, m_box_size);
         if (tot_mass == F(0)) {
             // If the total mass of the node is zero, it does not have a COM.
             // Use the geometrical centre in its stead.
-            std::copy(node.centre, node.centre + NDim, node.props);
+            F centre[NDim];
+            // Compute the centre.
+            node_centre(centre, node.code, m_box_size);
+            // Copy over.
+            std::copy(centre, centre + NDim, node.props);
         } else {
             // Compute the COM for the coordinates.
             const auto m_ptr = m_parts[NDim].data() + begin;
