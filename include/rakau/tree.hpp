@@ -3209,6 +3209,9 @@ private:
 };
 
 template <typename F>
+using quadtree = tree<2, F>;
+
+template <typename F>
 using octree = tree<3, F>;
 
 } // namespace rakau
