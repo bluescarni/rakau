@@ -956,6 +956,7 @@ private:
             std::copy(centre, centre + NDim, node.props);
         } else {
             // Compute the COM for the coordinates.
+            const auto inv_tot_mass = F(1) / tot_mass;
             const auto m_ptr = m_parts[NDim].data() + begin;
             for (std::size_t j = 0; j < NDim; ++j) {
                 F acc(0);
@@ -963,7 +964,7 @@ private:
                 for (std::remove_const_t<decltype(size)> k = 0; k < size; ++k) {
                     acc = fma_wrap(m_ptr[k], c_ptr[k], acc);
                 }
-                node.props[j] = acc / tot_mass;
+                node.props[j] = acc * inv_tot_mass;
             }
         }
         // Store the total mass.
