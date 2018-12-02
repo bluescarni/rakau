@@ -74,10 +74,9 @@ if(MINGW)
   list(APPEND RAKAU_CXX_FLAGS_RELEASE "-Wa,-mbig-obj")
 endif()
 
-# Setup of the rakau interface library.
-add_library(rakau INTERFACE)
+# Find the dependencies.
 
-# Find Boost.
+# Boost.
 if (RAKAU_BUILD_BENCHMARKS)
   set(_RAKAU_BOOST_COMPONENTS program_options)
 else()
@@ -86,44 +85,66 @@ endif()
 include(RakauFindBoost)
 unset(_RAKAU_BOOST_COMPONENTS)
 
-# Find xsimd.
+# xsimd.
 find_package(xsimd REQUIRED)
 
-# Find TBB.
+# tbb.
 find_package(TBB REQUIRED)
 
-# Find the threading library.
+# Threading setup.
 include(RakauFindThreads)
 
-# Link the deps.
-target_link_libraries(rakau INTERFACE Boost::boost xsimd TBB::tbb Threads::Threads)
+# Initial setup of the rakau library.
+if(RAKAU_WITH_ROCM)
+  add_library(rakau SHARED "${CMAKE_CURRENT_SOURCE_DIR}/src/rakau_rocm.cpp")
+else()
+  add_library(rakau INTERFACE)
+endif()
 
-# Finish setting up the rakau interface target.
+# Add the include dirs to the rakau target's interface.
 target_include_directories(rakau INTERFACE
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
     $<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}/include>
     $<INSTALL_INTERFACE:include>)
 
-if(RAKAU_WITH_ROCM)
-  set(RAKAU_ROCM_DEVICE_FLAGS "" CACHE STRING "Flags for ROCm device code compilation.")
-  mark_as_advanced(RAKAU_ROCM_DEVICE_FLAGS)
-  string(REPLACE " " ";" RAKAU_ROCM_DEVICE_FLAGS_ "${RAKAU_ROCM_DEVICE_FLAGS}")
-  add_library(rakau_rocm SHARED "${CMAKE_CURRENT_SOURCE_DIR}/src/rakau_rocm.cpp")
-  set_target_properties(rakau_rocm PROPERTIES LINK_FLAGS "-hc ${RAKAU_ROCM_DEVICE_FLAGS}")
-  set_target_properties(rakau_rocm PROPERTIES CXX_VISIBILITY_PRESET hidden)
-  set_target_properties(rakau_rocm PROPERTIES VISIBILITY_INLINES_HIDDEN TRUE)
-  target_compile_options(rakau_rocm PRIVATE "$<$<CONFIG:DEBUG>:${RAKAU_CXX_FLAGS_DEBUG}>" "$<$<CONFIG:RELEASE>:${RAKAU_CXX_FLAGS_RELEASE}>"
-    "-hc" "-Wno-unused-command-line-argument" "${RAKAU_ROCM_DEVICE_FLAGS_}")
-  unset(RAKAU_ROCM_DEVICE_FLAGS_)
-  set_property(TARGET rakau_rocm PROPERTY CXX_STANDARD 17)
-  set_property(TARGET rakau_rocm PROPERTY CXX_STANDARD_REQUIRED YES)
-  set_property(TARGET rakau_rocm PROPERTY CXX_EXTENSIONS NO)
+# Link the deps.
+target_link_libraries(rakau INTERFACE Boost::boost xsimd TBB::tbb Threads::Threads)
 
-  # There's a circular dependency here, let's hope this does not cause issues.
-  # I would really prefer to have the C++ and ROCm part fully separated, but the ROCm
-  # bits need to access (some of) rakau's headers.
-  target_link_libraries(rakau INTERFACE rakau_rocm)
-  target_link_libraries(rakau_rocm PRIVATE rakau)
+# Additional ROCm-specific setup.
+if(RAKAU_WITH_ROCM)
+  # Introduce a separate variable containing extra compiler flags
+  # to be used *exclusively* when building ROCm device code (and not,
+  # e.g., when building the tests or the benchmarks). We can use this
+  # variable for setting, e.g., -ffast-math only for device code, or
+  # for emitting device code only for a specific gfx arch, etc.
+  set(RAKAU_ROCM_EXTRA_FLAGS "" CACHE STRING "Extra flags for ROCm device code.")
+  mark_as_advanced(RAKAU_ROCM_EXTRA_FLAGS)
+  string(REPLACE " " ";" RAKAU_ROCM_EXTRA_FLAGS_ "${RAKAU_ROCM_EXTRA_FLAGS}")
+
+  # NOTE: we need to manually add -hc and the extra flags to the link flags as well.
+  # NOTE: very recent CMake versions have new target properties for the link flags,
+  # let's keep it in mind.
+  set_target_properties(rakau PROPERTIES LINK_FLAGS "-hc ${RAKAU_ROCM_EXTRA_FLAGS}")
+
+  # Visibility settings.
+  set_target_properties(rakau PROPERTIES CXX_VISIBILITY_PRESET hidden)
+  set_target_properties(rakau PROPERTIES VISIBILITY_INLINES_HIDDEN TRUE)
+
+  # Assemble the flags.
+  target_compile_options(rakau PRIVATE "$<$<CONFIG:DEBUG>:${RAKAU_CXX_FLAGS_DEBUG}>" "$<$<CONFIG:RELEASE>:${RAKAU_CXX_FLAGS_RELEASE}>"
+    "-hc" "-Wno-unused-command-line-argument" "${RAKAU_ROCM_EXTRA_FLAGS_}")
+  unset(RAKAU_ROCM_EXTRA_FLAGS_)
+
+  # Set the C++17 requirement.
+  set_property(TARGET rakau PROPERTY CXX_STANDARD 17)
+  set_property(TARGET rakau PROPERTY CXX_STANDARD_REQUIRED YES)
+  set_property(TARGET rakau PROPERTY CXX_EXTENSIONS NO)
+
+  # Add the rakau includes to the private include dirs of the library.
+  target_include_directories(rakau PRIVATE
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}/include>
+    $<INSTALL_INTERFACE:include>)
 endif()
 
 # Configure config.hpp.
@@ -131,9 +152,10 @@ configure_file("${CMAKE_CURRENT_SOURCE_DIR}/config.hpp.in" "${CMAKE_CURRENT_BINA
 
 # Installation.
 # Setup of the export.
-install(TARGETS rakau EXPORT rakau_export)
 if(RAKAU_WITH_ROCM)
-  install(TARGETS rakau_rocm EXPORT rakau_export LIBRARY DESTINATION "lib")
+  install(TARGETS rakau EXPORT rakau_export LIBRARY DESTINATION "lib")
+else()
+  install(TARGETS rakau EXPORT rakau_export)
 endif()
 install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/rakau-config.cmake" DESTINATION "lib/cmake/rakau")
 install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RakauFindBoost.cmake" DESTINATION "lib/cmake/rakau")
