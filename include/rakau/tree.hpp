@@ -65,6 +65,7 @@
 
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wold-style-cast"
+#pragma GCC diagnostic ignored "-Wconversion"
 
 #if defined(__clang__)
 
@@ -140,6 +141,7 @@ struct morton_encoder<3, std::uint64_t> {
     template <typename It>
     std::uint64_t operator()(It it) const
     {
+        static_assert(std::is_same_v<std::uint64_t, typename std::iterator_traits<It>::value_type>);
         const auto x = *it;
         const auto y = *(it + 1);
         const auto z = *(it + 2);
@@ -162,6 +164,7 @@ struct morton_encoder<3, std::uint32_t> {
     template <typename It>
     std::uint32_t operator()(It it) const
     {
+        static_assert(std::is_same_v<std::uint32_t, typename std::iterator_traits<It>::value_type>);
         const auto x = *it;
         const auto y = *(it + 1);
         const auto z = *(it + 2);
@@ -179,12 +182,12 @@ struct morton_encoder<3, std::uint32_t> {
     }
 };
 
-// NOTE: the 2D versions still need to be tested.
 template <>
 struct morton_encoder<2, std::uint64_t> {
     template <typename It>
     std::uint64_t operator()(It it) const
     {
+        static_assert(std::is_same_v<std::uint64_t, typename std::iterator_traits<It>::value_type>);
         const auto x = *it;
         const auto y = *(it + 1);
         assert(x < (1ul << 31));
@@ -201,6 +204,7 @@ struct morton_encoder<2, std::uint32_t> {
     template <typename It>
     std::uint32_t operator()(It it) const
     {
+        static_assert(std::is_same_v<std::uint32_t, typename std::iterator_traits<It>::value_type>);
         const auto x = *it;
         const auto y = *(it + 1);
         assert(x < (1ul << 15));
@@ -222,9 +226,13 @@ struct morton_decoder<3, std::uint64_t> {
     template <typename It>
     void operator()(It it, std::uint64_t code) const
     {
-        assert(code < (std::uint64_t(1) << cbits_v<std::uint64_t, 3>));
+        static_assert(std::is_same_v<std::uint64_t, typename std::iterator_traits<It>::value_type>);
+        assert(code < (std::uint64_t(1) << (cbits_v<std::uint64_t, 3> * 3u)));
         std::uint32_t x, y, z;
         libmorton::m3D_d_sLUT<std::uint64_t, std::uint32_t>(code, x, y, z);
+        assert(x < (1ul << 21));
+        assert(y < (1ul << 21));
+        assert(z < (1ul << 21));
         *it = x;
         *(it + 1) = y;
         *(it + 2) = z;
@@ -236,9 +244,13 @@ struct morton_decoder<3, std::uint32_t> {
     template <typename It>
     void operator()(It it, std::uint32_t code) const
     {
-        assert(code < (std::uint32_t(1) << cbits_v<std::uint32_t, 3>));
+        static_assert(std::is_same_v<std::uint32_t, typename std::iterator_traits<It>::value_type>);
+        assert(code < (std::uint32_t(1) << (cbits_v<std::uint32_t, 3> * 3u)));
         std::uint16_t x, y, z;
         libmorton::m3D_d_sLUT<std::uint32_t, std::uint16_t>(code, x, y, z);
+        assert(x < (1ul << 10));
+        assert(y < (1ul << 10));
+        assert(z < (1ul << 10));
         *it = x;
         *(it + 1) = y;
         *(it + 2) = z;
@@ -250,9 +262,12 @@ struct morton_decoder<2, std::uint64_t> {
     template <typename It>
     void operator()(It it, std::uint64_t code) const
     {
-        assert(code < (std::uint64_t(1) << cbits_v<std::uint64_t, 2>));
+        static_assert(std::is_same_v<std::uint64_t, typename std::iterator_traits<It>::value_type>);
+        assert(code < (std::uint64_t(1) << (cbits_v<std::uint64_t, 2> * 2u)));
         std::uint32_t x, y;
         libmorton::m2D_d_sLUT<std::uint64_t, std::uint32_t>(code, x, y);
+        assert(x < (1ul << 31));
+        assert(y < (1ul << 31));
         *it = x;
         *(it + 1) = y;
     }
@@ -263,9 +278,12 @@ struct morton_decoder<2, std::uint32_t> {
     template <typename It>
     void operator()(It it, std::uint32_t code) const
     {
-        assert(code < (std::uint32_t(1) << cbits_v<std::uint32_t, 2>));
+        static_assert(std::is_same_v<std::uint32_t, typename std::iterator_traits<It>::value_type>);
+        assert(code < (std::uint32_t(1) << (cbits_v<std::uint32_t, 2> * 2u)));
         std::uint16_t x, y;
         libmorton::m2D_d_sLUT<std::uint32_t, std::uint16_t>(code, x, y);
+        assert(x < (1ul << 15));
+        assert(y < (1ul << 15));
         *it = x;
         *(it + 1) = y;
     }
@@ -1535,13 +1553,6 @@ public:
                << ',' << node.n_children << "|" << node.props[NDim] << "|[";
             for (std::size_t j = 0; j < NDim; ++j) {
                 os << node.props[j];
-                if (j < NDim - 1u) {
-                    os << ", ";
-                }
-            }
-            os << "]|[";
-            for (std::size_t j = 0; j < NDim; ++j) {
-                os << node.centre[j];
                 if (j < NDim - 1u) {
                     os << ", ";
                 }
@@ -3037,6 +3048,10 @@ public:
     const auto &inv_perm() const
     {
         return m_inv_perm;
+    }
+    const auto &nodes() const
+    {
+        return m_tree;
     }
 
 private:
