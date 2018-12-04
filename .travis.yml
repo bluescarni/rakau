@@ -11,27 +11,9 @@ branches:
 matrix:
   include:
     - env: RAKAU_BUILD="clang7_debug" SPLIT_TEST_NUM="0" TEST_NSPLIT="2"
-      compiler: gcc
       os: linux
-      addons:
-        apt:
-          sources:
-          - ubuntu-toolchain-r-test
-          - llvm-toolchain-trusty-7
-          packages:
-          - clang-7
-          - g++-7
     - env: RAKAU_BUILD="clang7_debug" SPLIT_TEST_NUM="1" TEST_NSPLIT="2"
-      compiler: gcc
       os: linux
-      addons:
-        apt:
-          sources:
-          - ubuntu-toolchain-r-test
-          - llvm-toolchain-trusty-7
-          packages:
-          - clang-7
-          - g++-7
     - env: RAKAU_BUILD="gcc7_debug" SPLIT_TEST_NUM="0" TEST_NSPLIT="2"
       compiler: gcc
       os: linux
