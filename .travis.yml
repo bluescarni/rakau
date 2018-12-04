@@ -18,7 +18,7 @@ matrix:
           sources:
           - llvm-toolchain-trusty-7
           packages:
-          - clang-7.0
+          - clang-7
           - g++-7
     - env: RAKAU_BUILD="clang7_debug" SPLIT_TEST_NUM="1" TEST_NSPLIT="2"
       compiler: gcc
@@ -28,7 +28,7 @@ matrix:
           sources:
           - llvm-toolchain-trusty-7
           packages:
-          - clang-7.0
+          - clang-7
           - g++-7
     - env: RAKAU_BUILD="gcc7_debug" SPLIT_TEST_NUM="0" TEST_NSPLIT="2"
       compiler: gcc
