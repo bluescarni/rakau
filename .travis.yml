@@ -70,6 +70,26 @@ matrix:
           packages:
           - gcc-7
           - g++-7
+    - env: RAKAU_BUILD="gcc7_debug_native_norsqrt" SPLIT_TEST_NUM="0" TEST_NSPLIT="2"
+      compiler: gcc
+      os: linux
+      addons:
+        apt:
+          sources:
+          - ubuntu-toolchain-r-test
+          packages:
+          - gcc-7
+          - g++-7
+    - env: RAKAU_BUILD="gcc7_debug_native_norsqrt" SPLIT_TEST_NUM="1" TEST_NSPLIT="2"
+      compiler: gcc
+      os: linux
+      addons:
+        apt:
+          sources:
+          - ubuntu-toolchain-r-test
+          packages:
+          - gcc-7
+          - g++-7
 script:
     - mkdir build
     - cd build
