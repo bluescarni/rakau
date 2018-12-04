@@ -10,7 +10,7 @@ branches:
 
 matrix:
   include:
-    - env: RAKAU_BUILD="gcc7_debug"
+    - env: RAKAU_BUILD="gcc7_debug" SPLIT_TEST_NUM="0" TEST_NSPLIT="2"
       compiler: gcc
       os: linux
       addons:
@@ -20,7 +20,7 @@ matrix:
           packages:
           - gcc-7
           - g++-7
-    - env: RAKAU_BUILD="gcc7_debug_nosimd"
+    - env: RAKAU_BUILD="gcc7_debug" SPLIT_TEST_NUM="1" TEST_NSPLIT="2"
       compiler: gcc
       os: linux
       addons:
@@ -30,7 +30,37 @@ matrix:
           packages:
           - gcc-7
           - g++-7
-    - env: RAKAU_BUILD="gcc7_debug_native"
+    - env: RAKAU_BUILD="gcc7_debug_nosimd" SPLIT_TEST_NUM="0" TEST_NSPLIT="2"
+      compiler: gcc
+      os: linux
+      addons:
+        apt:
+          sources:
+          - ubuntu-toolchain-r-test
+          packages:
+          - gcc-7
+          - g++-7
+    - env: RAKAU_BUILD="gcc7_debug_nosimd" SPLIT_TEST_NUM="1" TEST_NSPLIT="2"
+      compiler: gcc
+      os: linux
+      addons:
+        apt:
+          sources:
+          - ubuntu-toolchain-r-test
+          packages:
+          - gcc-7
+          - g++-7
+    - env: RAKAU_BUILD="gcc7_debug_native" SPLIT_TEST_NUM="0" TEST_NSPLIT="2"
+      compiler: gcc
+      os: linux
+      addons:
+        apt:
+          sources:
+          - ubuntu-toolchain-r-test
+          packages:
+          - gcc-7
+          - g++-7
+    - env: RAKAU_BUILD="gcc7_debug_native" SPLIT_TEST_NUM="1" TEST_NSPLIT="2"
       compiler: gcc
       os: linux
       addons:
