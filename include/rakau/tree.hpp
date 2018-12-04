@@ -103,6 +103,12 @@ namespace rakau
 inline namespace detail
 {
 
+// Small helper to ignore unused variables.
+template <typename... Args>
+inline void ignore(const Args &...)
+{
+}
+
 // Scalar FMA wrappers.
 inline float fma_wrap(float x, float y, float z)
 {
@@ -2964,36 +2970,42 @@ public:
         // think it has any performance implications, and perhaps in the future
         // we will use it.
         const auto [G, eps, _] = parse_accpot_kwargs(std::forward<KwArgs>(args)...);
+        ignore(_);
         return exact_acc_pot_impl<false, 0>(idx, G, eps);
     }
     template <typename... KwArgs>
     F exact_pot_u(size_type idx, KwArgs &&... args) const
     {
         const auto [G, eps, _] = parse_accpot_kwargs(std::forward<KwArgs>(args)...);
+        ignore(_);
         return exact_acc_pot_impl<false, 1>(idx, G, eps)[0];
     }
     template <typename... KwArgs>
     std::array<F, NDim + 1u> exact_acc_pot_u(size_type idx, KwArgs &&... args) const
     {
         const auto [G, eps, _] = parse_accpot_kwargs(std::forward<KwArgs>(args)...);
+        ignore(_);
         return exact_acc_pot_impl<false, 2>(idx, G, eps);
     }
     template <typename... KwArgs>
     std::array<F, NDim> exact_acc_o(size_type idx, KwArgs &&... args) const
     {
         const auto [G, eps, _] = parse_accpot_kwargs(std::forward<KwArgs>(args)...);
+        ignore(_);
         return exact_acc_pot_impl<true, 0>(idx, G, eps);
     }
     template <typename... KwArgs>
     F exact_pot_o(size_type idx, KwArgs &&... args) const
     {
         const auto [G, eps, _] = parse_accpot_kwargs(std::forward<KwArgs>(args)...);
+        ignore(_);
         return exact_acc_pot_impl<true, 1>(idx, G, eps)[0];
     }
     template <typename... KwArgs>
     std::array<F, NDim + 1u> exact_acc_pot_o(size_type idx, KwArgs &&... args) const
     {
         const auto [G, eps, _] = parse_accpot_kwargs(std::forward<KwArgs>(args)...);
+        ignore(_);
         return exact_acc_pot_impl<true, 2>(idx, G, eps);
     }
 
