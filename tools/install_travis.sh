@@ -19,7 +19,7 @@ if [[ "${RAKAU_BUILD}" == "gcc7_debug" ]]; then
     make -j2 VERBOSE=1;
     ctest -V;
 elif [[ "${RAKAU_BUILD}" == "gcc7_debug_asan" ]]; then
-    CXX=g++-7 CC=gcc-7 cmake -DCMAKE_INSTALL_PREFIX=$deps_dir -DCMAKE_PREFIX_PATH=$deps_dir -DCMAKE_BUILD_TYPE=Debug -DRAKAU_BUILD_TESTS=yes -DCMAKE_CXX_FLAGS="-D_GLIBCXX_DEBUG -D_GLIBCXX_DEBUG_PEDANTIC -fsanitize=address" -DRAKAU_TEST_NSPLIT=${TEST_NSPLIT} -DRAKAU_TEST_SPLIT_NUM=${SPLIT_TEST_NUM} ../;
+    CXX=g++-7 CC=gcc-7 cmake -DCMAKE_INSTALL_PREFIX=$deps_dir -DCMAKE_PREFIX_PATH=$deps_dir -DCMAKE_BUILD_TYPE=Debug -DRAKAU_BUILD_TESTS=yes -DCMAKE_CXX_FLAGS="-D_GLIBCXX_DEBUG -D_GLIBCXX_DEBUG_PEDANTIC -fuse-ld=gold -fsanitize=address" -DRAKAU_TEST_NSPLIT=${TEST_NSPLIT} -DRAKAU_TEST_SPLIT_NUM=${SPLIT_TEST_NUM} ../;
     make -j2 VERBOSE=1;
     ctest -V;
 elif [[ "${RAKAU_BUILD}" == "gcc7_debug_nosimd" ]]; then
