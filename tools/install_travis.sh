@@ -15,8 +15,8 @@ if [[ "${TRAVIS_OS_NAME}" != "osx" ]]; then
 fi
 
 if [[ "${RAKAU_BUILD}" == "clang7_debug" ]]; then
-    conda install -y clangdev libcxx
-    CXX=clang-7 cmake -DCMAKE_INSTALL_PREFIX=$deps_dir -DCMAKE_PREFIX_PATH=$deps_dir -DCMAKE_BUILD_TYPE=Debug -DRAKAU_BUILD_TESTS=yes -DCMAKE_CXX_FLAGS="-stdlib=libc++" -DRAKAU_TEST_NSPLIT=${TEST_NSPLIT} -DRAKAU_TEST_SPLIT_NUM=${SPLIT_TEST_NUM} ../;
+    conda install -y clangdev
+    CXX=clang-7 cmake -DCMAKE_INSTALL_PREFIX=$deps_dir -DCMAKE_PREFIX_PATH=$deps_dir -DCMAKE_BUILD_TYPE=Debug -DRAKAU_BUILD_TESTS=yes -DRAKAU_TEST_NSPLIT=${TEST_NSPLIT} -DRAKAU_TEST_SPLIT_NUM=${SPLIT_TEST_NUM} ../;
     make -j2 VERBOSE=1;
     ctest -V;
 elif [[ "${RAKAU_BUILD}" == "gcc7_debug" ]]; then
