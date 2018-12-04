@@ -172,6 +172,20 @@ install(FILES "${CMAKE_CURRENT_BINARY_DIR}/rakau-config-version.cmake" DESTINATI
 install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/include/rakau" DESTINATION include)
 install(FILES "${CMAKE_CURRENT_BINARY_DIR}/include/rakau/config.hpp" DESTINATION include/rakau)
 
+# This is just a simple counter variable, internal use only.
+set(_RAKAU_TEST_NUM "0")
+# Check splitting options. These need to be set from the command line.
+# - RAKAU_TEST_NSPLIT: number of chunks into which the unit tests will be divided (must be > 1).
+# - RAKAU_TEST_SPLIT_NUM: 0-based index of the chunk to run.
+if(RAKAU_TEST_NSPLIT AND "${RAKAU_TEST_SPLIT_NUM}" STREQUAL "")
+	message(FATAL_ERROR "Test splitting was requested, but the RAKAU_TEST_SPLIT_NUM variable was not set.")
+elseif(NOT RAKAU_TEST_NSPLIT AND NOT "${RAKAU_TEST_SPLIT_NUM}" STREQUAL "")
+	message(FATAL_ERROR "The RAKAU_TEST_SPLIT_NUM variable was set, but test splitting was not requested.")
+endif()
+if(RAKAU_TEST_NSPLIT)
+	message(STATUS "Tests will be split into ${RAKAU_TEST_NSPLIT} chunks. The chunk with index ${RAKAU_TEST_SPLIT_NUM} will be processed.")
+endif()
+
 if(RAKAU_BUILD_TESTS)
     enable_testing()
     add_subdirectory(test)
