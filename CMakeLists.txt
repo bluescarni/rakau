@@ -104,11 +104,19 @@ find_package(TBB REQUIRED)
 # Threading setup.
 include(RakauFindThreads)
 
+if(RAKAU_WITH_CUDA)
+  # NOTE: in addition to enabling the CUDA language, call also find_package().
+  # This is needed in order to fetch the include dirs/libraries for the
+  # CUDA runtime, which we need when using the CUDA API in non-cu files.
+  include(RakauFindCUDA)
+endif()
+
 # Initial setup of the rakau library.
 if(RAKAU_WITH_ROCM)
   add_library(rakau SHARED "${CMAKE_CURRENT_SOURCE_DIR}/src/rakau_rocm.cpp")
 elseif(RAKAU_WITH_CUDA)
   add_library(rakau SHARED "${CMAKE_CURRENT_SOURCE_DIR}/src/rakau_cuda.cu")
+  target_link_libraries(rakau INTERFACE rakau_cuda)
 else()
   add_library(rakau INTERFACE)
 endif()
@@ -180,13 +188,21 @@ configure_file("${CMAKE_CURRENT_SOURCE_DIR}/config.hpp.in" "${CMAKE_CURRENT_BINA
 
 # Installation.
 # Setup of the export.
+set(_RAKAU_CONFIG_OPTIONAL_DEPS)
+if(RAKAU_WITH_CUDA)
+  set(_RAKAU_CONFIG_OPTIONAL_DEPS "include(RakauFindCUDA)\n")
+endif()
+configure_file("${CMAKE_CURRENT_SOURCE_DIR}/rakau-config.cmake.in" "${CMAKE_CURRENT_BINARY_DIR}/rakau-config.cmake" @ONLY)
 if(RAKAU_WITH_ROCM OR RAKAU_WITH_CUDA)
   install(TARGETS rakau EXPORT rakau_export LIBRARY DESTINATION "lib")
 else()
   install(TARGETS rakau EXPORT rakau_export)
 endif()
-install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/rakau-config.cmake" DESTINATION "lib/cmake/rakau")
+install(FILES "${CMAKE_CURRENT_BINARY_DIR}/rakau-config.cmake" DESTINATION "lib/cmake/rakau")
 install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RakauFindBoost.cmake" DESTINATION "lib/cmake/rakau")
+if(RAKAU_WITH_CUDA)
+  install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RakauFindCUDA.cmake" DESTINATION "lib/cmake/rakau")
+endif()
 install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/cmake/FindTBB.cmake" DESTINATION "lib/cmake/rakau")
 install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RakauFindThreads.cmake" DESTINATION "lib/cmake/rakau")
 install(EXPORT rakau_export NAMESPACE rakau:: DESTINATION lib/cmake/rakau)
@@ -195,6 +211,7 @@ include(CMakePackageConfigHelpers)
 write_basic_package_version_file("${CMAKE_CURRENT_BINARY_DIR}/rakau-config-version.cmake" VERSION ${rakau_VERSION}
 	COMPATIBILITY SameMajorVersion)
 install(FILES "${CMAKE_CURRENT_BINARY_DIR}/rakau-config-version.cmake" DESTINATION "lib/cmake/rakau")
+unset(_RAKAU_CONFIG_OPTIONAL_DEPS)
 
 # Installation of the header files.
 install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/include/rakau" DESTINATION include)
