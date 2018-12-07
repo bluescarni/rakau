@@ -84,23 +84,7 @@ if(MINGW)
   list(APPEND RAKAU_CXX_FLAGS_RELEASE "-Wa,-mbig-obj")
 endif()
 
-<<<<<<< HEAD
-# Initial setup of the rakau library.
-if(RAKAU_WITH_ROCM)
-elseif(RAKAU_WITH_CUDA)
-  add_library(rakau SHARED "${CMAKE_CURRENT_SOURCE_DIR}/src/rakau_cuda.cu")
-else()
-  add_library(rakau INTERFACE)
-endif()
-
-# Add the rakau include dirs.
-target_include_directories(rakau INTERFACE
-    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
-    $<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}/include>
-    $<INSTALL_INTERFACE:include>)
-=======
 # Find the dependencies.
->>>>>>> master
 
 # Boost.
 if (RAKAU_BUILD_BENCHMARKS)
@@ -127,8 +111,6 @@ else()
   add_library(rakau INTERFACE)
 endif()
 
-<<<<<<< HEAD
-=======
 # Add the include dirs to the rakau target's interface.
 target_include_directories(rakau INTERFACE
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
@@ -139,7 +121,6 @@ target_include_directories(rakau INTERFACE
 target_link_libraries(rakau INTERFACE Boost::boost xsimd TBB::tbb Threads::Threads)
 
 # Additional ROCm-specific setup.
->>>>>>> master
 if(RAKAU_WITH_ROCM)
   # Introduce a separate variable containing extra compiler flags
   # to be used *exclusively* when building ROCm device code (and not,
@@ -191,14 +172,8 @@ endif()
 configure_file("${CMAKE_CURRENT_SOURCE_DIR}/config.hpp.in" "${CMAKE_CURRENT_BINARY_DIR}/include/rakau/config.hpp" @ONLY)
 
 # Installation.
-<<<<<<< HEAD
-if(RAKAU_WITH_ROCM)
-  install(TARGETS rakau_rocm EXPORT rakau_export LIBRARY DESTINATION "lib")
-elseif(RAKAU_WITH_CUDA)
-=======
 # Setup of the export.
 if(RAKAU_WITH_ROCM)
->>>>>>> master
   install(TARGETS rakau EXPORT rakau_export LIBRARY DESTINATION "lib")
 else()
   install(TARGETS rakau EXPORT rakau_export)
