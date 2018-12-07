@@ -68,6 +68,7 @@
 
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wold-style-cast"
+#pragma GCC diagnostic ignored "-Wconversion"
 
 #if defined(__clang__)
 
@@ -105,7 +106,42 @@ namespace rakau
 inline namespace detail
 {
 
-template <std::size_t NDim, typename Out>
+// Small helper to ignore unused variables.
+template <typename... Args>
+inline void ignore(const Args &...)
+{
+}
+
+// Scalar FMA wrappers.
+inline float fma_wrap(float x, float y, float z)
+{
+#if defined(FP_FAST_FMAF)
+    return std::fma(x, y, z);
+#else
+    return x * y + z;
+#endif
+}
+
+inline double fma_wrap(double x, double y, double z)
+{
+#if defined(FP_FAST_FMA)
+    return std::fma(x, y, z);
+#else
+    return x * y + z;
+#endif
+}
+
+inline long double fma_wrap(long double x, long double y, long double z)
+{
+#if defined(FP_FAST_FMAL)
+    return std::fma(x, y, z);
+#else
+    return x * y + z;
+#endif
+}
+
+// Morton encoding machinery.
+template <std::size_t NDim, typename UInt>
 struct morton_encoder {
 };
 
@@ -114,6 +150,7 @@ struct morton_encoder<3, std::uint64_t> {
     template <typename It>
     std::uint64_t operator()(It it) const
     {
+        static_assert(std::is_same_v<std::uint64_t, typename std::iterator_traits<It>::value_type>);
         const auto x = *it;
         const auto y = *(it + 1);
         const auto z = *(it + 2);
@@ -136,6 +173,7 @@ struct morton_encoder<3, std::uint32_t> {
     template <typename It>
     std::uint32_t operator()(It it) const
     {
+        static_assert(std::is_same_v<std::uint32_t, typename std::iterator_traits<It>::value_type>);
         const auto x = *it;
         const auto y = *(it + 1);
         const auto z = *(it + 2);
@@ -153,12 +191,12 @@ struct morton_encoder<3, std::uint32_t> {
     }
 };
 
-// NOTE: the 2D versions still need to be tested.
 template <>
 struct morton_encoder<2, std::uint64_t> {
     template <typename It>
     std::uint64_t operator()(It it) const
     {
+        static_assert(std::is_same_v<std::uint64_t, typename std::iterator_traits<It>::value_type>);
         const auto x = *it;
         const auto y = *(it + 1);
         assert(x < (1ul << 31));
@@ -175,6 +213,7 @@ struct morton_encoder<2, std::uint32_t> {
     template <typename It>
     std::uint32_t operator()(It it) const
     {
+        static_assert(std::is_same_v<std::uint32_t, typename std::iterator_traits<It>::value_type>);
         const auto x = *it;
         const auto y = *(it + 1);
         assert(x < (1ul << 15));
@@ -183,6 +222,79 @@ struct morton_encoder<2, std::uint32_t> {
         assert((libmorton::morton2D_32_encode(x, y)
                 == libmorton::m2D_e_sLUT<std::uint32_t, std::uint32_t>(std::uint32_t(x), std::uint32_t(y))));
         return libmorton::m2D_e_sLUT<std::uint32_t, std::uint32_t>(std::uint32_t(x), std::uint32_t(y));
+    }
+};
+
+// Morton decoding machinery.
+template <std::size_t NDim, typename UInt>
+struct morton_decoder {
+};
+
+template <>
+struct morton_decoder<3, std::uint64_t> {
+    template <typename It>
+    void operator()(It it, std::uint64_t code) const
+    {
+        static_assert(std::is_same_v<std::uint64_t, typename std::iterator_traits<It>::value_type>);
+        assert(code < (std::uint64_t(1) << (cbits_v<std::uint64_t, 3> * 3u)));
+        std::uint32_t x, y, z;
+        libmorton::m3D_d_sLUT<std::uint64_t, std::uint32_t>(code, x, y, z);
+        assert(x < (1ul << 21));
+        assert(y < (1ul << 21));
+        assert(z < (1ul << 21));
+        *it = x;
+        *(it + 1) = y;
+        *(it + 2) = z;
+    }
+};
+
+template <>
+struct morton_decoder<3, std::uint32_t> {
+    template <typename It>
+    void operator()(It it, std::uint32_t code) const
+    {
+        static_assert(std::is_same_v<std::uint32_t, typename std::iterator_traits<It>::value_type>);
+        assert(code < (std::uint32_t(1) << (cbits_v<std::uint32_t, 3> * 3u)));
+        std::uint16_t x, y, z;
+        libmorton::m3D_d_sLUT<std::uint32_t, std::uint16_t>(code, x, y, z);
+        assert(x < (1ul << 10));
+        assert(y < (1ul << 10));
+        assert(z < (1ul << 10));
+        *it = x;
+        *(it + 1) = y;
+        *(it + 2) = z;
+    }
+};
+
+template <>
+struct morton_decoder<2, std::uint64_t> {
+    template <typename It>
+    void operator()(It it, std::uint64_t code) const
+    {
+        static_assert(std::is_same_v<std::uint64_t, typename std::iterator_traits<It>::value_type>);
+        assert(code < (std::uint64_t(1) << (cbits_v<std::uint64_t, 2> * 2u)));
+        std::uint32_t x, y;
+        libmorton::m2D_d_sLUT<std::uint64_t, std::uint32_t>(code, x, y);
+        assert(x < (1ul << 31));
+        assert(y < (1ul << 31));
+        *it = x;
+        *(it + 1) = y;
+    }
+};
+
+template <>
+struct morton_decoder<2, std::uint32_t> {
+    template <typename It>
+    void operator()(It it, std::uint32_t code) const
+    {
+        static_assert(std::is_same_v<std::uint32_t, typename std::iterator_traits<It>::value_type>);
+        assert(code < (std::uint32_t(1) << (cbits_v<std::uint32_t, 2> * 2u)));
+        std::uint16_t x, y;
+        libmorton::m2D_d_sLUT<std::uint32_t, std::uint16_t>(code, x, y);
+        assert(x < (1ul << 15));
+        assert(y < (1ul << 15));
+        *it = x;
+        *(it + 1) = y;
     }
 };
 
@@ -196,6 +308,47 @@ inline bool node_compare(UInt n1, UInt n2)
     const auto s_n1 = n1 << ((cbits - tl1) * NDim);
     const auto s_n2 = n2 << ((cbits - tl2) * NDim);
     return s_n1 < s_n2 || (s_n1 == s_n2 && tl1 < tl2);
+}
+
+// Get the dimension of a node, given its level and a box size.
+template <typename UInt, typename F>
+inline F get_node_dim(UInt node_level, F box_size)
+{
+    return box_size / static_cast<F>(UInt(1) << node_level);
+}
+
+// Determine the geometrical centre of a node, given its code
+// and the box size.
+template <typename F, std::size_t NDim, typename UInt>
+inline void node_centre(F (&out)[NDim], UInt node_code, F box_size)
+{
+    // Compute the level of the node.
+    const auto node_level = tree_level<NDim>(node_code);
+    // Remove the top 1 from the node code, and shift it up
+    // the amount required to turn it into a particle code.
+    // This will be the code of the first cell in the node.
+    const auto c_code = static_cast<UInt>((node_code - (UInt(1) << (node_level * NDim)))
+                                          << ((cbits_v<UInt, NDim> - node_level) * NDim));
+    // Get the size/2 of the node.
+    const auto node_dim_2 = get_node_dim(node_level, box_size) / 2;
+    // Get the size of the cell.
+    const auto cell_size = box_size / static_cast<F>(UInt(1) << cbits_v<UInt, NDim>);
+
+    // Do the decoding. This will produce the discretized coordinates
+    // of the first cell in the node.
+    morton_decoder<NDim, UInt> d;
+    UInt d_code[NDim];
+    d(&d_code[0], c_code);
+
+    // Compute the centre of the node:
+    // - take the discretised coordinate of the first cell of the node,
+    // - multiply by the cell size to get the real coordinate of the first
+    //   corner of the cell,
+    // - offset by -box_size/2 to refer everything to the centre of the box,
+    // - add half of the node dimension to reach the centre of the node.
+    for (std::size_t j = 0; j < NDim; ++j) {
+        out[j] = fma_wrap(static_cast<F>(d_code[j]), cell_size, node_dim_2 - box_size / 2);
+    }
 }
 
 // Apply the indirect sort defined by the vector of indices 'perm'
@@ -242,34 +395,6 @@ inline void checked_uinc(std::atomic<T> &out, T add)
     if (prev > std::numeric_limits<T>::max() - add) {
         throw std::overflow_error("Overflow in the addition of two unsigned integral values");
     }
-}
-
-// Scalar FMA wrappers.
-inline float fma_wrap(float x, float y, float z)
-{
-#if defined(FP_FAST_FMAF)
-    return std::fma(x, y, z);
-#else
-    return x * y + z;
-#endif
-}
-
-inline double fma_wrap(double x, double y, double z)
-{
-#if defined(FP_FAST_FMA)
-    return std::fma(x, y, z);
-#else
-    return x * y + z;
-#endif
-}
-
-inline long double fma_wrap(long double x, long double y, long double z)
-{
-#if defined(FP_FAST_FMAL)
-    return std::fma(x, y, z);
-#else
-    return x * y + z;
-#endif
 }
 
 // Helper to detect is simd is enabled. It is if the type F
@@ -398,7 +523,7 @@ private:
     // Small helper to get the square of the dimension of a node at the tree level node_level.
     F get_sqr_node_dim(UInt node_level) const
     {
-        const auto tmp = m_box_size / static_cast<F>(UInt(1) << node_level);
+        const auto tmp = get_node_dim(node_level, m_box_size);
         return tmp * tmp;
     }
     // A small functor to right shift an input UInt by a fixed amount.
@@ -830,15 +955,26 @@ private:
         const auto size = end - begin;
         // Compute the total mass.
         const auto tot_mass = std::accumulate(m_parts[NDim].data() + begin, m_parts[NDim].data() + end, F(0));
-        // Compute the COM for the coordinates.
-        const auto m_ptr = m_parts[NDim].data() + begin;
-        for (std::size_t j = 0; j < NDim; ++j) {
-            F acc(0);
-            auto c_ptr = m_parts[j].data() + begin;
-            for (std::remove_const_t<decltype(size)> k = 0; k < size; ++k) {
-                acc = fma_wrap(m_ptr[k], c_ptr[k], acc);
+        if (tot_mass == F(0)) {
+            // If the total mass of the node is zero, it does not have a COM.
+            // Use the geometrical centre in its stead.
+            F centre[NDim];
+            // Compute the centre.
+            node_centre(centre, node.code, m_box_size);
+            // Copy over.
+            std::copy(centre, centre + NDim, node.props);
+        } else {
+            // Compute the COM for the coordinates.
+            const auto inv_tot_mass = F(1) / tot_mass;
+            const auto m_ptr = m_parts[NDim].data() + begin;
+            for (std::size_t j = 0; j < NDim; ++j) {
+                F acc(0);
+                auto c_ptr = m_parts[j].data() + begin;
+                for (std::remove_const_t<decltype(size)> k = 0; k < size; ++k) {
+                    acc = fma_wrap(m_ptr[k], c_ptr[k], acc);
+                }
+                node.props[j] = acc * inv_tot_mass;
             }
-            node.props[j] = acc / tot_mass;
         }
         // Store the total mass.
         node.props[NDim] = tot_mass;
@@ -1147,7 +1283,10 @@ public:
     explicit tree(const std::array<It, NDim + 1u> &cm_it, const size_type &N, KwArgs &&... args)
     {
         // Parse the kwargs.
-        ::igor::parser p{args...};
+        igor::parser p{args...};
+
+        // Make sure we have only named arguments in args.
+        static_assert(!p.has_unnamed_arguments(), "Only named arguments can be passed in the parameter pack.");
 
         // Handle the box size.
         F box_size(0);
@@ -2690,7 +2829,10 @@ private:
     template <typename... Args>
     static auto parse_accpot_kwargs(Args &&... args)
     {
-        ::igor::parser p{args...};
+        igor::parser p{args...};
+
+        // Make sure we have only named arguments in args.
+        static_assert(!p.has_unnamed_arguments(), "Only named arguments can be passed in the parameter pack.");
 
         F G(1), eps(0);
         if constexpr (p.has(kwargs::G)) {
@@ -2851,36 +2993,42 @@ public:
         // think it has any performance implications, and perhaps in the future
         // we will use it.
         const auto [G, eps, _] = parse_accpot_kwargs(std::forward<KwArgs>(args)...);
+        ignore(_);
         return exact_acc_pot_impl<false, 0>(idx, G, eps);
     }
     template <typename... KwArgs>
     F exact_pot_u(size_type idx, KwArgs &&... args) const
     {
         const auto [G, eps, _] = parse_accpot_kwargs(std::forward<KwArgs>(args)...);
+        ignore(_);
         return exact_acc_pot_impl<false, 1>(idx, G, eps)[0];
     }
     template <typename... KwArgs>
     std::array<F, NDim + 1u> exact_acc_pot_u(size_type idx, KwArgs &&... args) const
     {
         const auto [G, eps, _] = parse_accpot_kwargs(std::forward<KwArgs>(args)...);
+        ignore(_);
         return exact_acc_pot_impl<false, 2>(idx, G, eps);
     }
     template <typename... KwArgs>
     std::array<F, NDim> exact_acc_o(size_type idx, KwArgs &&... args) const
     {
         const auto [G, eps, _] = parse_accpot_kwargs(std::forward<KwArgs>(args)...);
+        ignore(_);
         return exact_acc_pot_impl<true, 0>(idx, G, eps);
     }
     template <typename... KwArgs>
     F exact_pot_o(size_type idx, KwArgs &&... args) const
     {
         const auto [G, eps, _] = parse_accpot_kwargs(std::forward<KwArgs>(args)...);
+        ignore(_);
         return exact_acc_pot_impl<true, 1>(idx, G, eps)[0];
     }
     template <typename... KwArgs>
     std::array<F, NDim + 1u> exact_acc_pot_o(size_type idx, KwArgs &&... args) const
     {
         const auto [G, eps, _] = parse_accpot_kwargs(std::forward<KwArgs>(args)...);
+        ignore(_);
         return exact_acc_pot_impl<true, 2>(idx, G, eps);
     }
 
@@ -2936,6 +3084,10 @@ public:
     const auto &inv_perm() const
     {
         return m_inv_perm;
+    }
+    const auto &nodes() const
+    {
+        return m_tree;
     }
 
 private:
@@ -3106,6 +3258,9 @@ private:
     std::optional<rocm_state<NDim, F, UInt>> m_rocm;
 #endif
 };
+
+template <typename F>
+using quadtree = tree<2, F>;
 
 template <typename F>
 using octree = tree<3, F>;
