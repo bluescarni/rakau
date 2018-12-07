@@ -1150,6 +1150,8 @@ private:
 
         // Param consistency checks: if size is deduced, box_size must be zero.
         assert(!m_box_size_deduced || m_box_size == F(0));
+        // If you we are moving data, N must be zero.
+        assert(!move_data || N == 0u);
         // Box size checks (if automatically deduced, m_box_size is set to zero, so it will
         // pass the checks).
         if (!std::isfinite(m_box_size) || m_box_size < F(0)) {
@@ -1168,7 +1170,6 @@ private:
 
         if constexpr (move_data) {
             // We can move in the input data.
-            assert(N == 0u);
             const auto v_size = p_data[0].size();
             for (std::size_t j = 0; j < NDim + 1u; ++j) {
                 if (rakau_unlikely(p_data[j].size() != v_size)) {
