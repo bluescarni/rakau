@@ -10,10 +10,25 @@
 #define RAKAU_DETAIL_DI_ALIGNED_ALLOCATOR_HPP
 
 #include <cstddef>
-#include <cstdlib>
 #include <new>
 #include <type_traits>
 #include <utility>
+
+#include <rakau/config.hpp>
+
+#if defined(RAKAU_WITH_CUDA)
+
+#include <cassert>
+#include <limits>
+#include <memory>
+
+#include <cuda_runtime_api.h>
+
+#else
+
+#include <cstdlib>
+
+#endif
 
 namespace rakau
 {
@@ -52,8 +67,54 @@ struct di_aligned_allocator {
     {
         // Total size in bytes. This is prevented from being too large
         // by the default implementation of max_size().
-        const auto size = n * sizeof(T);
+        auto size = n * sizeof(T);
         void *retval;
+#if defined(RAKAU_WITH_CUDA)
+        // The alignment value must fit in 1 byte.
+        static_assert(Alignment <= std::numeric_limits<unsigned char>::max());
+        // ptrdiff_t must be able to represent the alignment value.
+        static_assert(Alignment
+                      <= static_cast<std::make_unsigned_t<std::ptrdiff_t>>(std::numeric_limits<std::ptrdiff_t>::max()));
+
+        // Guard against overflow.
+        if (size > std::numeric_limits<std::size_t>::max() - Alignment) {
+            throw std::bad_alloc{};
+        }
+        // Add the alignment.
+        size += Alignment;
+
+        // Try to allocate.
+        if (::cudaMallocManaged(&retval, size) != ::cudaSuccess) {
+            throw std::bad_alloc{};
+        }
+
+        if (Alignment != 0u) {
+            // With a nonzero alignment, we need to manipulate the returned value.
+            // Store the original pointer.
+            const auto orig_retval = retval;
+
+            // Now try to align.
+            if (std::align(Alignment, size - Alignment, retval, size) == nullptr) {
+                // Alignment failed. Free and throw.
+                // NOTE: if std::align fails, it does not modify retval (which will
+                // still then be the original pointer).
+                ::cudaFree(retval);
+                throw std::bad_alloc{};
+            }
+
+            // Alignment was successful, now retval points to the aligned address.
+            // If the aligned address is the original one, bump it up by Alignment.
+            if (retval == orig_retval) {
+                retval = static_cast<void *>(reinterpret_cast<unsigned char *>(retval) + Alignment);
+            }
+            // Compute the distance in bytes between retval and the original pointer.
+            // NOTE: this cannot be larger than Alignment, because otherwise std::align would've failed.
+            const auto ptr_diff
+                = reinterpret_cast<unsigned char *>(retval) - reinterpret_cast<unsigned char *>(orig_retval);
+            // Store the distance in the byte immediately preceding retval.
+            *(reinterpret_cast<unsigned char *>(retval) - 1) = static_cast<unsigned char>(ptr_diff);
+        }
+#else
         if (Alignment == 0u) {
             retval = std::malloc(size);
         } else {
@@ -70,12 +131,22 @@ struct di_aligned_allocator {
             // Throw on failure.
             throw std::bad_alloc{};
         }
+#endif
         return static_cast<T *>(retval);
     }
     // Deallocation.
     void deallocate(T *ptr, size_type) const
     {
+#if defined(RAKAU_WITH_CUDA)
+        if (Alignment == 0u) {
+            ::cudaFree(ptr);
+        } else {
+            const auto delta = *(reinterpret_cast<unsigned char *>(ptr) - 1);
+            ::cudaFree(static_cast<void *>(reinterpret_cast<unsigned char *>(ptr) - delta));
+        }
+#else
         std::free(ptr);
+#endif
     }
     // Trivial comparison operators.
     friend bool operator==(const di_aligned_allocator &, const di_aligned_allocator &)

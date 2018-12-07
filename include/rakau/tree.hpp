@@ -2696,7 +2696,7 @@ private:
             }
             cpu_run(0, m_crit_nodes.size());
         }
-#elif defined(RAKAU_WITH_CUDA)
+#elif defined(RAKAU_WITH_CUDA) && false
         if constexpr (NDim == 3u && Q == 0u
                       && std::conjunction_v<
                              std::is_same<It, F *>,
