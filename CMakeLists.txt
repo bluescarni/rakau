@@ -25,13 +25,12 @@ if(NOT RAKAU_ENABLE_RSQRT)
   set(RAKAU_DISABLE_RSQRT "#define RAKAU_DISABLE_RSQRT")
 endif()
 
-if(RAKAU_WITH_CUDA)
-  set(RAKAU_ENABLE_CUDA "#define RAKAU_WITH_CUDA")
-  enable_language(CUDA)
-endif()
-
 include(YACMACompilerLinkerSettings)
 include(CheckCXXCompilerFlag)
+
+if(RAKAU_WITH_CUDA AND RAKAU_WITH_ROCM)
+  message(FATAL_ERROR "ROCm and CUDA support cannot be activated together.")
+endif()
 
 if(RAKAU_WITH_ROCM)
   if(NOT YACMA_COMPILER_IS_HCC)
@@ -40,8 +39,9 @@ if(RAKAU_WITH_ROCM)
   set(RAKAU_ENABLE_ROCM "#define RAKAU_WITH_ROCM")
 endif()
 
-if(RAKAU_WITH_CUDA AND RAKAU_WITH_ROCM)
-  message(FATAL_ERROR "ROCm and CUDA support cannot be activated together.")
+if(RAKAU_WITH_CUDA)
+  set(RAKAU_ENABLE_CUDA "#define RAKAU_WITH_CUDA")
+  enable_language(CUDA)
 endif()
 
 # Assemble the flags.
@@ -107,6 +107,8 @@ include(RakauFindThreads)
 # Initial setup of the rakau library.
 if(RAKAU_WITH_ROCM)
   add_library(rakau SHARED "${CMAKE_CURRENT_SOURCE_DIR}/src/rakau_rocm.cpp")
+elseif(RAKAU_WITH_CUDA)
+  add_library(rakau SHARED "${CMAKE_CURRENT_SOURCE_DIR}/src/rakau_cuda.cu")
 else()
   add_library(rakau INTERFACE)
 endif()
@@ -157,11 +159,16 @@ if(RAKAU_WITH_ROCM)
     $<INSTALL_INTERFACE:include>)
 endif()
 
+# Additional CUDA setup.
 if(RAKAU_WITH_CUDA)
+  # Visibility settings.
   set_target_properties(rakau PROPERTIES CXX_VISIBILITY_PRESET hidden)
   set_target_properties(rakau PROPERTIES VISIBILITY_INLINES_HIDDEN TRUE)
+
+  # Highest supported C++ version is C++14 currently.
   target_compile_features(rakau PRIVATE cxx_std_14)
 
+  # Add the rakau includes to the private include dirs of the library.
   target_include_directories(rakau PRIVATE
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
     $<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}/include>
@@ -173,7 +180,7 @@ configure_file("${CMAKE_CURRENT_SOURCE_DIR}/config.hpp.in" "${CMAKE_CURRENT_BINA
 
 # Installation.
 # Setup of the export.
-if(RAKAU_WITH_ROCM)
+if(RAKAU_WITH_ROCM OR RAKAU_WITH_CUDA)
   install(TARGETS rakau EXPORT rakau_export LIBRARY DESTINATION "lib")
 else()
   install(TARGETS rakau EXPORT rakau_export)
