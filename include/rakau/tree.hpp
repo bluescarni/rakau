@@ -137,6 +137,13 @@ inline long double fma_wrap(long double x, long double y, long double z)
 #endif
 }
 
+// Some handy aliases for std::iterator_traits.
+template <typename It>
+using it_value_type = typename std::iterator_traits<It>::value_type;
+
+template <typename It>
+using it_diff_type = typename std::iterator_traits<It>::difference_type;
+
 // Morton encoding machinery.
 template <std::size_t NDim, typename UInt>
 struct morton_encoder {
@@ -147,7 +154,7 @@ struct morton_encoder<3, std::uint64_t> {
     template <typename It>
     std::uint64_t operator()(It it) const
     {
-        static_assert(std::is_same_v<std::uint64_t, typename std::iterator_traits<It>::value_type>);
+        static_assert(std::is_same_v<std::uint64_t, it_value_type<It>>);
         const auto x = *it;
         const auto y = *(it + 1);
         const auto z = *(it + 2);
@@ -170,7 +177,7 @@ struct morton_encoder<3, std::uint32_t> {
     template <typename It>
     std::uint32_t operator()(It it) const
     {
-        static_assert(std::is_same_v<std::uint32_t, typename std::iterator_traits<It>::value_type>);
+        static_assert(std::is_same_v<std::uint32_t, it_value_type<It>>);
         const auto x = *it;
         const auto y = *(it + 1);
         const auto z = *(it + 2);
@@ -193,7 +200,7 @@ struct morton_encoder<2, std::uint64_t> {
     template <typename It>
     std::uint64_t operator()(It it) const
     {
-        static_assert(std::is_same_v<std::uint64_t, typename std::iterator_traits<It>::value_type>);
+        static_assert(std::is_same_v<std::uint64_t, it_value_type<It>>);
         const auto x = *it;
         const auto y = *(it + 1);
         assert(x < (1ul << 31));
@@ -210,7 +217,7 @@ struct morton_encoder<2, std::uint32_t> {
     template <typename It>
     std::uint32_t operator()(It it) const
     {
-        static_assert(std::is_same_v<std::uint32_t, typename std::iterator_traits<It>::value_type>);
+        static_assert(std::is_same_v<std::uint32_t, it_value_type<It>>);
         const auto x = *it;
         const auto y = *(it + 1);
         assert(x < (1ul << 15));
@@ -232,7 +239,7 @@ struct morton_decoder<3, std::uint64_t> {
     template <typename It>
     void operator()(It it, std::uint64_t code) const
     {
-        static_assert(std::is_same_v<std::uint64_t, typename std::iterator_traits<It>::value_type>);
+        static_assert(std::is_same_v<std::uint64_t, it_value_type<It>>);
         assert(code < (std::uint64_t(1) << (cbits_v<std::uint64_t, 3> * 3u)));
         std::uint32_t x, y, z;
         libmorton::m3D_d_sLUT<std::uint64_t, std::uint32_t>(code, x, y, z);
@@ -250,7 +257,7 @@ struct morton_decoder<3, std::uint32_t> {
     template <typename It>
     void operator()(It it, std::uint32_t code) const
     {
-        static_assert(std::is_same_v<std::uint32_t, typename std::iterator_traits<It>::value_type>);
+        static_assert(std::is_same_v<std::uint32_t, it_value_type<It>>);
         assert(code < (std::uint32_t(1) << (cbits_v<std::uint32_t, 3> * 3u)));
         std::uint16_t x, y, z;
         libmorton::m3D_d_sLUT<std::uint32_t, std::uint16_t>(code, x, y, z);
@@ -268,7 +275,7 @@ struct morton_decoder<2, std::uint64_t> {
     template <typename It>
     void operator()(It it, std::uint64_t code) const
     {
-        static_assert(std::is_same_v<std::uint64_t, typename std::iterator_traits<It>::value_type>);
+        static_assert(std::is_same_v<std::uint64_t, it_value_type<It>>);
         assert(code < (std::uint64_t(1) << (cbits_v<std::uint64_t, 2> * 2u)));
         std::uint32_t x, y;
         libmorton::m2D_d_sLUT<std::uint64_t, std::uint32_t>(code, x, y);
@@ -284,7 +291,7 @@ struct morton_decoder<2, std::uint32_t> {
     template <typename It>
     void operator()(It it, std::uint32_t code) const
     {
-        static_assert(std::is_same_v<std::uint32_t, typename std::iterator_traits<It>::value_type>);
+        static_assert(std::is_same_v<std::uint32_t, it_value_type<It>>);
         assert(code < (std::uint32_t(1) << (cbits_v<std::uint32_t, 2> * 2u)));
         std::uint16_t x, y;
         libmorton::m2D_d_sLUT<std::uint32_t, std::uint16_t>(code, x, y);
@@ -394,6 +401,32 @@ inline void checked_uinc(std::atomic<T> &out, T add)
     }
 }
 
+// Check if the difference type of the iterator type It can represent
+// the input unsigned integral value n. If it can't, throw an
+// overflow_error.
+template <typename It, typename I>
+inline void it_diff_check(I n)
+{
+    static_assert(std::is_integral_v<I> && std::is_unsigned_v<I>);
+
+    using it_diff_t = it_diff_type<It>;
+    // NOTE: make_unsigned requires some integral type in input.
+    // For input iterators, the diff type is guaranteed to be a
+    // signed integral. We are basically always requiring ra-iterators
+    // in the interface, so we should always be safe taking
+    // the unsigned counterpart here. Just keep this in mind in case
+    // one day we allow interaction with iterators without a diff type
+    // (e.g., basic output iterators).
+    // See:
+    // http://eel.is/c++draft/iterator.traits
+    // https://en.cppreference.com/w/cpp/types/make_unsigned
+    using it_udiff_t = std::make_unsigned_t<it_diff_t>;
+    if (rakau_unlikely(n > static_cast<it_udiff_t>(std::numeric_limits<it_diff_t>::max()))) {
+        throw std::overflow_error("The difference type of an iterator cannot represent the unsigned integral value "
+                                  + std::to_string(n) + ", resulting in an overflow condition");
+    }
+}
+
 // Helper to detect is simd is enabled. It is if the type F
 // supports it, and if simd is not explicitly disabled via RAKAU_DISABLE_SIMD.
 template <typename F>
@@ -452,6 +485,11 @@ IGOR_MAKE_NAMED_ARGUMENT(split);
 
 } // namespace kwargs
 
+// Vector type for storing floating-point values. The allocator does default-init,
+// rather than value-init, and it enforces the SIMD-mandated alignment value.
+template <typename F>
+using f_vector = std::vector<F, di_aligned_allocator<F, XSIMD_DEFAULT_ALIGNMENT>>;
+
 // NOTE: possible improvements:
 // - it is still not yet clear to me what the NUMA picture is here. During tree traversal, the results
 //   and the target node data are stored in thread local caches, so maybe we can try to ensure that
@@ -498,9 +536,6 @@ class tree
     static constexpr auto cbits = cbits_v<UInt, NDim>;
     // simd_enabled shortcut.
     static constexpr bool simd_enabled = simd_enabled_v<F>;
-    // Main vector type for storing floating-point values. It uses custom alignment to enable
-    // aligned loads/stores whenever possible.
-    using fp_vector = std::vector<F, di_aligned_allocator<F, XSIMD_DEFAULT_ALIGNMENT>>;
 
 public:
     using size_type = tree_size_t<F>;
@@ -508,7 +543,7 @@ public:
 private:
     // Consistency check: the size type which was forward-defined
     // is the same as the actual size type.
-    static_assert(std::is_same_v<size_type, typename fp_vector::size_type>);
+    static_assert(std::is_same_v<size_type, typename f_vector<F>::size_type>);
     // The node type.
     using node_type = tree_node_t<NDim, F, UInt>;
     // The tree type.
@@ -767,12 +802,7 @@ private:
         // NOTE: in the tree builder code, we will be moving around in the codes
         // vector using random access iterators. Thus, we must ensure the difference
         // type of the iterator can represent the size of the codes vector.
-        using it_diff_t = typename std::iterator_traits<decltype(m_codes.begin())>::difference_type;
-        using it_udiff_t = std::make_unsigned_t<it_diff_t>;
-        if (m_codes.size() > static_cast<it_udiff_t>(std::numeric_limits<it_diff_t>::max())) {
-            throw std::overflow_error("The number of particles (" + std::to_string(m_codes.size())
-                                      + ") is too large, and it results in an overflow condition");
-        }
+        it_diff_check<decltype(m_codes.begin())>(m_codes.size());
         // Vector of partial trees. This will eventually contain a sequence of single-node trees
         // and subtrees. A subtree starts with a node and contains all of its children, ordered
         // according to the nodal code.
@@ -1021,7 +1051,7 @@ private:
         // This function is often run in parallel with other functions that touch other members
         // of the tree, and if we try to access those members here we'll end up with data races.
         assert(m_perm.size() == m_inv_perm.size());
-        tbb::parallel_for(tbb::blocked_range<size_type>(0u, static_cast<size_type>(m_perm.size())),
+        tbb::parallel_for(tbb::blocked_range(size_type(0), static_cast<size_type>(m_perm.size())),
                           [this](const auto &range) {
                               for (auto i = range.begin(); i != range.end(); ++i) {
                                   assert(i < m_perm.size());
@@ -1036,7 +1066,7 @@ private:
     template <typename It>
     void indirect_code_sort(It begin, It end) const
     {
-        static_assert(std::is_same_v<size_type, typename std::iterator_traits<It>::value_type>);
+        static_assert(std::is_same_v<size_type, it_value_type<It>>);
         simple_timer st("indirect code sorting");
         tbb::parallel_sort(begin, end, [codes_ptr = m_codes.data()](const size_type &idx1, const size_type &idx2) {
             return codes_ptr[idx1] < codes_ptr[idx2];
@@ -1050,19 +1080,17 @@ private:
     static F determine_box_size(const std::array<It, NDim + 1u> &cm_it, const size_type &N)
     {
         simple_timer st_m("box size deduction");
-        using it_diff_t = typename std::iterator_traits<It>::difference_type;
-        // NOTE: we will be indexing into It up to the value N below. Make sure we checked *outside*
-        // this function that we can do that.
-        assert(N <= static_cast<std::make_unsigned_t<it_diff_t>>(std::numeric_limits<it_diff_t>::max()));
+        // NOTE: we will be indexing into It up to the value N below. Check that we can do that.
+        it_diff_check<It>(N);
         // Local maximum coordinates for each thread. For each thread, the initial value
         // will be std::array<F, NDim>{}, that is, all max coordinates will be zero.
         tbb::enumerable_thread_specific<std::array<F, NDim>> max_coords(std::array<F, NDim>{});
-        tbb::parallel_for(tbb::blocked_range<size_type>(0u, N), [&cm_it, &max_coords](const auto &range) {
+        tbb::parallel_for(tbb::blocked_range(size_type(0), N), [&cm_it, &max_coords](const auto &range) {
             // Copy locally the current max coords array.
             auto local_max = max_coords.local();
             for (auto i = range.begin(); i != range.end(); ++i) {
                 for (std::size_t j = 0; j < NDim; ++j) {
-                    const auto tmp = std::abs(*(cm_it[j] + static_cast<it_diff_t>(i)));
+                    const auto tmp = std::abs(*(cm_it[j] + static_cast<it_diff_type<It>>(i)));
                     if (!std::isfinite(tmp)) {
                         throw std::invalid_argument("While trying to automatically determine the domain size, a "
                                                     "non-finite coordinate with absolute value "
@@ -1100,13 +1128,19 @@ private:
     // because this is used in bulk transfer operations, where we don't want TBB to try to split
     // up the work in packages which are too small.
     static constexpr auto data_chunking = 1000000ul;
-    // Implementation of the constructor.
-    // NOTE: It needs to be a random access iterator, as we need to index into it for parallel iteration.
-    template <typename It>
-    void construct_impl(const F &box_size, bool box_size_deduced, const std::array<It, NDim + 1u> &cm_it,
-                        const size_type &N, const size_type &max_leaf_n, const size_type &ncrit)
+    // Implementation of the constructor. PData can be either an array of iterators (in which case
+    // we will be copying the particle data into the tree), or an rvalue array of f_vector (in which
+    // case we will be moving particle data into the tree). In the latter case, N is expected to be zero.
+    // NOTE: if PData is an array of iterators, the iterator type needs to be a random access iterator,
+    // as we need to index into it for parallel iteration.
+    template <typename PData>
+    void construct_impl(const F &box_size, bool box_size_deduced, PData &&p_data, [[maybe_unused]] const size_type &N,
+                        const size_type &max_leaf_n, const size_type &ncrit)
     {
         simple_timer st("overall tree construction");
+
+        // Detect if we are moving the particle data or not.
+        constexpr auto move_data = std::is_same_v<PData &&, std::array<f_vector<F>, NDim + 1u> &&>;
 
         // Copy in data members.
         m_box_size = box_size;
@@ -1116,6 +1150,8 @@ private:
 
         // Param consistency checks: if size is deduced, box_size must be zero.
         assert(!m_box_size_deduced || m_box_size == F(0));
+        // If you we are moving data, N must be zero.
+        assert(!move_data || N == 0u);
         // Box size checks (if automatically deduced, m_box_size is set to zero, so it will
         // pass the checks).
         if (!std::isfinite(m_box_size) || m_box_size < F(0)) {
@@ -1132,45 +1168,61 @@ private:
                                         "potentials/accelerations must be nonzero");
         }
 
-        // NOTE: in the parallel for loops below, we need to index into the random-access iterator
-        // type It up to the value N. Make sure we can do that.
-        using it_diff_t = typename std::iterator_traits<It>::difference_type;
-        // NOTE: for use in make_unsigned, it_diff_t must be a C++ integral. This should be ensured
-        // by iterator_traits, at least for input iterators:
-        // https://en.cppreference.com/w/cpp/iterator/iterator_traits
-        if (N > static_cast<std::make_unsigned_t<it_diff_t>>(std::numeric_limits<it_diff_t>::max())) {
-            throw std::overflow_error("The number of particles (" + std::to_string(m_parts[0].size())
-                                      + ") is too large, and it results in an overflow condition");
+        if constexpr (move_data) {
+            // We can move in the input data.
+            const auto v_size = p_data[0].size();
+            for (std::size_t j = 0; j < NDim + 1u; ++j) {
+                if (rakau_unlikely(p_data[j].size() != v_size)) {
+                    // Ensure all input vectors have the same size.
+                    throw std::invalid_argument(
+                        "Inconsistent sizes detected in the construction of a tree from an array "
+                        "of vectors: the first vector has a size of "
+                        + std::to_string(v_size) + ", while the vector at index " + std::to_string(j)
+                        + " has a size of " + std::to_string(p_data[j].size())
+                        + " (all the vectors in the input array must have the same size)");
+                }
+                m_parts[j] = std::move(p_data[j]);
+            }
+        } else {
+            // Prepare the vectors.
+            for (auto &vc : m_parts) {
+                vc.resize(N);
+            }
         }
 
-        // Prepare the vectors.
-        for (auto &vc : m_parts) {
-            vc.resize(N);
-        }
         // NOTE: these ensure that, from now on, we can just cast
         // freely between the size types of the masses/coords and codes/indices vectors.
-        m_codes.resize(boost::numeric_cast<decltype(m_codes.size())>(N));
-        m_perm.resize(boost::numeric_cast<decltype(m_perm.size())>(N));
-        m_last_perm.resize(boost::numeric_cast<decltype(m_last_perm.size())>(N));
-        m_inv_perm.resize(boost::numeric_cast<decltype(m_inv_perm.size())>(N));
+        m_codes.resize(boost::numeric_cast<decltype(m_codes.size())>(nparts()));
+        m_perm.resize(boost::numeric_cast<decltype(m_perm.size())>(nparts()));
+        m_last_perm.resize(boost::numeric_cast<decltype(m_last_perm.size())>(nparts()));
+        m_inv_perm.resize(boost::numeric_cast<decltype(m_inv_perm.size())>(nparts()));
 
         {
-            // Copy the input data.
             simple_timer st_m("data movement");
-            // NOTE: we will be essentially doing a memcpy here. Let's try to fix a
-            // large chunk size and let's use a simple partitioner, in order to
-            // limit the parallel overhead while hopefully still getting some speedup.
-            for (std::size_t j = 0; j < NDim + 1u; ++j) {
-                tbb::parallel_for(tbb::blocked_range<size_type>(0u, N, boost::numeric_cast<size_type>(data_chunking)),
-                                  [this, &cm_it, j](const auto &range) {
-                                      std::copy(cm_it[j] + static_cast<it_diff_t>(range.begin()),
-                                                cm_it[j] + static_cast<it_diff_t>(range.end()),
-                                                m_parts[j].data() + range.begin());
-                                  },
-                                  tbb::simple_partitioner());
+            if constexpr (!move_data) {
+                // Copy the input data.
+
+                // NOTE: in the parallel for loops below, we need to index into the random-access iterator
+                // type up to the value N. Make sure we can do that.
+                using it_t = typename std::remove_cv_t<std::remove_reference_t<PData>>::value_type;
+                it_diff_check<it_t>(N);
+
+                // NOTE: we will be essentially doing a memcpy here. Let's try to fix a
+                // large chunk size and let's use a simple partitioner, in order to
+                // limit the parallel overhead while hopefully still getting some speedup.
+                for (std::size_t j = 0; j < NDim + 1u; ++j) {
+                    tbb::parallel_for(
+                        tbb::blocked_range(size_type(0), N, boost::numeric_cast<size_type>(data_chunking)),
+                        [this, &p_data, j](const auto &range) {
+                            std::copy(p_data[j] + static_cast<it_diff_type<it_t>>(range.begin()),
+                                      p_data[j] + static_cast<it_diff_type<it_t>>(range.end()),
+                                      m_parts[j].data() + range.begin());
+                        },
+                        tbb::simple_partitioner());
+                }
             }
             // Generate the initial m_perm data (this is just a iota).
-            tbb::parallel_for(tbb::blocked_range<size_type>(0u, N, boost::numeric_cast<size_type>(data_chunking)),
+            tbb::parallel_for(tbb::blocked_range(size_type(0), nparts(), boost::numeric_cast<size_type>(data_chunking)),
                               [this](const auto &range) {
                                   std::iota(m_perm.data() + range.begin(), m_perm.data() + range.end(), range.begin());
                               },
@@ -1179,14 +1231,14 @@ private:
 
         // Deduce the box size, if needed.
         if (m_box_size_deduced) {
-            // NOTE: this function works ok if N == 0.
-            m_box_size = determine_box_size(p_its_u(), N);
+            // NOTE: this function works ok if nparts() == 0.
+            m_box_size = determine_box_size(p_its_u(), nparts());
         }
 
         {
             // Do the Morton encoding.
             simple_timer st_m("morton encoding");
-            tbb::parallel_for(tbb::blocked_range<size_type>(0u, N), [this](const auto &range) {
+            tbb::parallel_for(tbb::blocked_range(size_type(0), nparts()), [this](const auto &range) {
                 // Temporary structure used in the encoding.
                 std::array<UInt, NDim> tmp_dcoord;
                 // The encoder object.
@@ -1218,18 +1270,19 @@ private:
             // Establish the inverse permutation vector.
             tg.run([this]() { perm_to_inv_perm(); });
             // Copy over m_perm to m_last_perm.
-            tg.run([this, N]() {
-                tbb::parallel_for(tbb::blocked_range<size_type>(0u, N, boost::numeric_cast<size_type>(data_chunking)),
-                                  [this](const auto &range) {
-                                      std::copy(m_perm.data() + range.begin(), m_perm.data() + range.end(),
-                                                m_last_perm.data() + range.begin());
-                                  },
-                                  tbb::simple_partitioner());
+            tg.run([this]() {
+                tbb::parallel_for(
+                    tbb::blocked_range(size_type(0), nparts(), boost::numeric_cast<size_type>(data_chunking)),
+                    [this](const auto &range) {
+                        std::copy(m_perm.data() + range.begin(), m_perm.data() + range.end(),
+                                  m_last_perm.data() + range.begin());
+                    },
+                    tbb::simple_partitioner());
             });
             tg.wait();
         }
         // Now let's proceed to the tree construction.
-        // NOTE: this function works ok if N == 0.
+        // NOTE: this function works ok if nparts() == 0.
         build_tree();
     }
     // ROCm init/reset functions. If ROCm is not enabled, they will be empty.
@@ -1275,9 +1328,11 @@ public:
     {
         rocm_init_state();
     }
-    // Constructor from array of iterators.
-    template <typename It, typename... KwArgs>
-    explicit tree(const std::array<It, NDim + 1u> &cm_it, const size_type &N, KwArgs &&... args)
+
+private:
+    // Helper to parse the named arguments in a ctor.
+    template <typename... KwArgs>
+    static auto parse_ctor_kwargs(KwArgs &&... args)
     {
         // Parse the kwargs.
         igor::parser p{args...};
@@ -1301,6 +1356,17 @@ public:
         if constexpr (p.has(kwargs::ncrit)) {
             ncrit = boost::numeric_cast<size_type>(p(kwargs::ncrit));
         }
+
+        return std::tuple{box_size, box_size_deduced, max_leaf_n, ncrit};
+    }
+
+public:
+    // Constructor from array of iterators.
+    template <typename It, typename... KwArgs>
+    explicit tree(const std::array<It, NDim + 1u> &cm_it, const size_type &N, KwArgs &&... args)
+    {
+        // Parse the named arguments.
+        const auto [box_size, box_size_deduced, max_leaf_n, ncrit] = parse_ctor_kwargs(std::forward<KwArgs>(args)...);
 
         // Do the actual construction.
         construct_impl(box_size, box_size_deduced, cm_it, N, max_leaf_n, ncrit);
@@ -1362,6 +1428,19 @@ public:
         : tree(ctor_vecs_to_its(coords), boost::numeric_cast<size_type>(coords[0].size()),
                std::forward<KwArgs>(args)...)
     {
+    }
+    // Overload for moving in the particle data (rather than copying it).
+    template <typename... KwArgs>
+    explicit tree(std::array<f_vector<F>, NDim + 1u> &&coords, KwArgs &&... args)
+    {
+        // Parse the named arguments.
+        const auto [box_size, box_size_deduced, max_leaf_n, ncrit] = parse_ctor_kwargs(std::forward<KwArgs>(args)...);
+
+        // Do the actual construction.
+        construct_impl(box_size, box_size_deduced, std::move(coords), 0, max_leaf_n, ncrit);
+
+        // NOTE: perhaps we can fold this into construct_impl() eventually.
+        rocm_init_state();
     }
     tree(const tree &other)
         : m_box_size(other.m_box_size), m_box_size_deduced(other.m_box_size_deduced), m_max_leaf_n(other.m_max_leaf_n),
@@ -1604,7 +1683,7 @@ private:
     template <unsigned Q>
     static auto &acc_pot_tmp_vecs()
     {
-        static thread_local std::array<fp_vector, nvecs_tmp<Q>> tmp_vecs;
+        static thread_local std::array<f_vector<F>, nvecs_tmp<Q>> tmp_vecs;
         return tmp_vecs;
     }
     // Helpers to compute how many vectors we will need to store the results
@@ -1621,13 +1700,13 @@ private:
     template <unsigned Q>
     static auto &acc_pot_tmp_res()
     {
-        static thread_local std::array<fp_vector, nvecs_res<Q>> tmp_res;
+        static thread_local std::array<f_vector<F>, nvecs_res<Q>> tmp_res;
         return tmp_res;
     }
     // Temporary vectors to store the data of a target node during traversal.
     static auto &tgt_tmp_data()
     {
-        static thread_local std::array<fp_vector, NDim + 1u> tmp_tgt;
+        static thread_local std::array<f_vector<F>, NDim + 1u> tmp_tgt;
         return tmp_tgt;
     }
     // Compute the element-wise accelerations on the batch of particles at xvec1, yvec1, zvec1 by the
@@ -2585,10 +2664,8 @@ private:
                     }
                     // Write out the result.
                     for (std::size_t j = 0; j < nvecs_res<Q>; ++j) {
-                        std::copy(
-                            res_ptrs[j], res_ptrs[j] + tgt_size,
-                            out[j]
-                                + boost::numeric_cast<typename std::iterator_traits<It>::difference_type>(tgt_begin));
+                        std::copy(res_ptrs[j], res_ptrs[j] + tgt_size,
+                                  out[j] + boost::numeric_cast<it_diff_type<It>>(tgt_begin));
                     }
                 }
 #if defined(RAKAU_WITH_SIMD_COUNTERS)
@@ -2652,13 +2729,7 @@ private:
                     // The final check is that we have enough particles for the ROCm implementation.
 
                     // Make sure we can compute the iterator difference below.
-                    using cn_it_diff_t = typename std::iterator_traits<decltype(m_crit_nodes.begin())>::difference_type;
-                    using cn_it_udiff_t = std::make_unsigned_t<cn_it_diff_t>;
-                    if (m_crit_nodes.size() > static_cast<cn_it_udiff_t>(std::numeric_limits<cn_it_diff_t>::max())) {
-                        throw std::overflow_error("The size of the critical nodes list ("
-                                                  + std::to_string(m_crit_nodes.size())
-                                                  + ") is too large, and it results in an overflow condition");
-                    }
+                    it_diff_check<decltype(m_crit_nodes.begin())>(m_crit_nodes.size());
 
                     // Run the ROCm computation in async mode.
                     // NOTE: futures returned by async() will block on destruction. Thus, even if
@@ -2745,12 +2816,7 @@ private:
         if constexpr (Ordered) {
             // Make sure we don't run into overflows when doing a permutated iteration
             // over the iterators in out.
-            using diff_t = typename std::iterator_traits<It>::difference_type;
-            if (m_parts[0].size() > static_cast<std::make_unsigned_t<diff_t>>(std::numeric_limits<diff_t>::max())) {
-                throw std::overflow_error("The number of particles (" + std::to_string(m_parts[0].size())
-                                          + ") is too large, and it results in an overflow condition when computing "
-                                            "the accelerations/potentials");
-            }
+            it_diff_check<It>(m_parts[0].size());
             using it_t = decltype(boost::make_permutation_iterator(out[0], m_perm.begin()));
             std::array<it_t, nvecs_res<Q>> out_pits;
             for (std::size_t j = 0; j < nvecs_res<Q>; ++j) {
@@ -3016,14 +3082,8 @@ private:
     static auto ord_p_its_impl(Tr &tr)
     {
         using it_t = decltype(boost::make_permutation_iterator(tr.m_parts[0].data(), tr.m_inv_perm.begin()));
-        using diff_t = typename std::iterator_traits<it_t>::difference_type;
-        using udiff_t = std::make_unsigned_t<diff_t>;
         // Ensure that the iterators we return can index up to the particle number.
-        if (tr.m_parts[0].size() > static_cast<udiff_t>(std::numeric_limits<diff_t>::max())) {
-            throw std::overflow_error("The number of particles (" + std::to_string(tr.m_parts[0].size())
-                                      + ") is too large, and it results in an overflow condition when constructing "
-                                        "ordered iterators to the particle data");
-        }
+        it_diff_check<it_t>(tr.m_parts[0].size());
         std::array<it_t, NDim + 1u> retval;
         for (std::size_t j = 0; j < NDim + 1u; ++j) {
             retval[j] = boost::make_permutation_iterator(tr.m_parts[j].data(), tr.m_inv_perm.begin());
@@ -3083,7 +3143,7 @@ private:
         }
 
         // Establish the new codes.
-        tbb::parallel_for(tbb::blocked_range<size_type>(0u, nparts), [this](const auto &range) {
+        tbb::parallel_for(tbb::blocked_range(size_type(0), nparts), [this](const auto &range) {
             std::array<UInt, NDim> tmp_dcoord;
             morton_encoder<NDim, UInt> me;
             for (auto i = range.begin(); i != range.end(); ++i) {
@@ -3093,7 +3153,7 @@ private:
         });
 
         // Reset m_last_perm to a iota.
-        tbb::parallel_for(tbb::blocked_range<size_type>(0u, nparts, boost::numeric_cast<size_type>(data_chunking)),
+        tbb::parallel_for(tbb::blocked_range(size_type(0), nparts, boost::numeric_cast<size_type>(data_chunking)),
                           [this](const auto &range) {
                               std::iota(m_last_perm.data() + range.begin(), m_last_perm.data() + range.end(),
                                         range.begin());
@@ -3200,7 +3260,7 @@ private:
     // particles in that node in a vectorised fashion.
     size_type m_ncrit;
     // The particles: NDim coordinates plus masses.
-    std::array<fp_vector, NDim + 1u> m_parts;
+    std::array<f_vector<F>, NDim + 1u> m_parts;
     // The particles' Morton codes.
     std::vector<UInt, di_aligned_allocator<UInt>> m_codes;
     // The indirect sorting vector. It establishes how to re-order the
