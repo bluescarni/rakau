@@ -35,7 +35,7 @@ static constexpr int ntrials = 10000;
 TEST_CASE("morton")
 {
     tuple_for_each(uint_types{}, [](auto u) {
-        tuple_for_each(dims{}, [u](auto dim) {
+        tuple_for_each(dims{}, [](auto dim) {
             using uint_t = decltype(u);
 
             constexpr auto d = dim();
