@@ -13,6 +13,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cstddef>
 #include <initializer_list>
 #include <limits>
 #include <random>
@@ -230,5 +231,45 @@ TEST_CASE("ctors")
         REQUIRE(t4a.box_size_deduced());
         REQUIRE(t4a.max_leaf_n() == default_max_leaf_n);
         REQUIRE(t4a.ncrit() == default_ncrit);
+
+        // Move constructor from particle data.
+        const std::array idata_0{f_vector<fp_type>{1, 2, 3, 4}, f_vector<fp_type>{-1, -2, -3, 4},
+                                 f_vector<fp_type>{1, -2, 3, -4}, f_vector<fp_type>{1, 1, 1, 1}};
+        auto idata_1 = idata_0;
+        tree_t tm_00{std::array<f_vector<fp_type>, 4>{}};
+        REQUIRE(tm_00.nparts() == 0u);
+        tree_t tm_01{std::array<f_vector<fp_type>, 4>{}, kwargs::box_size = 10};
+        REQUIRE(tm_01.nparts() == 0u);
+        REQUIRE(tm_01.box_size() == 10);
+        tree_t tm_02{std::array<f_vector<fp_type>, 4>{}, kwargs::box_size = 11, kwargs::ncrit = 1,
+                     kwargs::max_leaf_n = 12};
+        REQUIRE(tm_02.nparts() == 0u);
+        REQUIRE(tm_02.box_size() == 11);
+        REQUIRE(tm_02.ncrit() == 1);
+        REQUIRE(tm_02.max_leaf_n() == 12);
+        tree_t tm_03{std::move(idata_1)};
+        REQUIRE(tm_03.nparts() == 4u);
+        auto tm_pits = tm_03.p_its_o();
+        for (std::size_t j = 0; j < 4u; ++j) {
+            REQUIRE(std::equal(tm_pits[j], tm_pits[j] + 4, idata_0[j].begin()));
+        }
+        idata_1 = idata_0;
+        tree_t tm_04{std::move(idata_1), kwargs::box_size = 10};
+        REQUIRE(tm_04.nparts() == 4u);
+        REQUIRE(tm_04.box_size() == 10);
+        tm_pits = tm_04.p_its_o();
+        for (std::size_t j = 0; j < 4u; ++j) {
+            REQUIRE(std::equal(tm_pits[j], tm_pits[j] + 4, idata_0[j].begin()));
+        }
+        idata_1 = idata_0;
+        tree_t tm_05{std::move(idata_1), kwargs::box_size = 10, kwargs::ncrit = 1, kwargs::max_leaf_n = 12};
+        REQUIRE(tm_05.nparts() == 4u);
+        REQUIRE(tm_05.box_size() == 10);
+        REQUIRE(tm_05.ncrit() == 1);
+        REQUIRE(tm_05.max_leaf_n() == 12);
+        tm_pits = tm_05.p_its_o();
+        for (std::size_t j = 0; j < 4u; ++j) {
+            REQUIRE(std::equal(tm_pits[j], tm_pits[j] + 4, idata_0[j].begin()));
+        }
     });
 }

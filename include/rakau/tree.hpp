@@ -1196,29 +1196,32 @@ private:
         m_last_perm.resize(boost::numeric_cast<decltype(m_last_perm.size())>(nparts()));
         m_inv_perm.resize(boost::numeric_cast<decltype(m_inv_perm.size())>(nparts()));
 
-        if constexpr (!move_data) {
-            // Copy the input data.
+        {
             simple_timer st_m("data movement");
+            if constexpr (!move_data) {
+                // Copy the input data.
 
-            // NOTE: in the parallel for loops below, we need to index into the random-access iterator
-            // type up to the value N. Make sure we can do that.
-            using it_t = typename std::remove_cv_t<std::remove_reference_t<PData>>::value_type;
-            it_diff_check<it_t>(N);
+                // NOTE: in the parallel for loops below, we need to index into the random-access iterator
+                // type up to the value N. Make sure we can do that.
+                using it_t = typename std::remove_cv_t<std::remove_reference_t<PData>>::value_type;
+                it_diff_check<it_t>(N);
 
-            // NOTE: we will be essentially doing a memcpy here. Let's try to fix a
-            // large chunk size and let's use a simple partitioner, in order to
-            // limit the parallel overhead while hopefully still getting some speedup.
-            for (std::size_t j = 0; j < NDim + 1u; ++j) {
-                tbb::parallel_for(tbb::blocked_range(size_type(0), N, boost::numeric_cast<size_type>(data_chunking)),
-                                  [this, &p_data, j](const auto &range) {
-                                      std::copy(p_data[j] + static_cast<it_diff_type<it_t>>(range.begin()),
-                                                p_data[j] + static_cast<it_diff_type<it_t>>(range.end()),
-                                                m_parts[j].data() + range.begin());
-                                  },
-                                  tbb::simple_partitioner());
+                // NOTE: we will be essentially doing a memcpy here. Let's try to fix a
+                // large chunk size and let's use a simple partitioner, in order to
+                // limit the parallel overhead while hopefully still getting some speedup.
+                for (std::size_t j = 0; j < NDim + 1u; ++j) {
+                    tbb::parallel_for(
+                        tbb::blocked_range(size_type(0), N, boost::numeric_cast<size_type>(data_chunking)),
+                        [this, &p_data, j](const auto &range) {
+                            std::copy(p_data[j] + static_cast<it_diff_type<it_t>>(range.begin()),
+                                      p_data[j] + static_cast<it_diff_type<it_t>>(range.end()),
+                                      m_parts[j].data() + range.begin());
+                        },
+                        tbb::simple_partitioner());
+                }
             }
             // Generate the initial m_perm data (this is just a iota).
-            tbb::parallel_for(tbb::blocked_range(size_type(0), N, boost::numeric_cast<size_type>(data_chunking)),
+            tbb::parallel_for(tbb::blocked_range(size_type(0), nparts(), boost::numeric_cast<size_type>(data_chunking)),
                               [this](const auto &range) {
                                   std::iota(m_perm.data() + range.begin(), m_perm.data() + range.end(), range.begin());
                               },
