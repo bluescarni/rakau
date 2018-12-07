@@ -517,7 +517,6 @@ using f_vector = std::vector<F, di_aligned_allocator<F, XSIMD_DEFAULT_ALIGNMENT>
 // - would be interesting to see if we can do the permutations in-place efficiently. If that worked, it would probably
 //   help simplifying things on the GPU side. See for instance:
 //   https://stackoverflow.com/questions/7365814/in-place-array-reordering
-// - constructor from rvalue reference of array of vectors (to take ownership of data created from outside).
 template <std::size_t NDim, typename F, typename UInt = std::size_t>
 class tree
 {
