@@ -64,7 +64,7 @@ struct di_aligned_allocator {
             // we will set retval to nullptr to signal that the allocation failed
             // (so that we can handle the allocation failure in the same codepath
             // as aligned_alloc()).
-            if (!::posix_memalign(&retval, Alignment, size)) {
+            if (::posix_memalign(&retval, Alignment, size)) {
                 retval = nullptr;
             }
 #else
