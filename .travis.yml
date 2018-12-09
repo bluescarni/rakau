@@ -10,6 +10,12 @@ branches:
 
 matrix:
   include:
+    - env: RAKAU_BUILD="osx_debug" SPLIT_TEST_NUM="0" TEST_NSPLIT="2"
+      os: osx
+      osx_image: xcode10.1
+    - env: RAKAU_BUILD="osx_debug" SPLIT_TEST_NUM="1" TEST_NSPLIT="2"
+      os: osx
+      osx_image: xcode10.1
     - env: RAKAU_BUILD="gcc7_debug" SPLIT_TEST_NUM="0" TEST_NSPLIT="2"
       compiler: gcc
       os: linux
