@@ -57,6 +57,17 @@ struct di_aligned_allocator {
         if constexpr (Alignment == 0u) {
             retval = std::malloc(size);
         } else {
+#if defined(__apple_build_version__)
+            // NOTE: std::aligned_alloc() is apparently not (yet) available on OSX.
+            // Use posix_memalign() instead.
+            // NOTE: posix_memalign() returns 0 on success. In case of errors,
+            // we will set retval to nullptr to signal that the allocation failed
+            // (so that we can handle the allocation failure in the same codepath
+            // as aligned_alloc()).
+            if (::posix_memalign(&retval, Alignment, size)) {
+                retval = nullptr;
+            }
+#else
             // For use in std::aligned_alloc, the size must be a multiple of the alignment.
             // http://en.cppreference.com/w/cpp/memory/c/aligned_alloc
             // A null pointer will be returned if invalid Alignment and/or size are supplied,
@@ -65,6 +76,7 @@ struct di_aligned_allocator {
             // than std, so let's try to workaround.
             using namespace std;
             retval = aligned_alloc(Alignment, size);
+#endif
         }
         if (!retval) {
             // Throw on failure.
