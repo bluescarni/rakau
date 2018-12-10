@@ -28,7 +28,7 @@ auto make_scoped_cu_array(std::size_t n)
         throw std::bad_alloc();
     }
     T *ret;
-    auto res = ::cudaMalloc(&ret, n * sizeof(T));
+    auto res = ::cudaMallocManaged(&ret, n * sizeof(T));
     if (res != ::cudaSuccess) {
         throw std::bad_alloc();
     }
