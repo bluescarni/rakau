@@ -2766,26 +2766,52 @@ private:
             }
             cpu_run(0, m_crit_nodes.size());
         }
-#elif defined(RAKAU_WITH_CUDA) && false
-        if constexpr (NDim == 3u && Q == 0u
+#elif defined(RAKAU_WITH_CUDA)
+        // Validation of split specific to CUDA.
+
+        // Make sure the number of elements in split is not too large.
+        const auto n_cuda_devices = cuda_device_count();
+        if (split.size() && split.size() - 1u > n_cuda_devices) {
+            throw std::invalid_argument(
+                "Cannot split the computation of accelerations/potentials: the split vector refers to "
+                + std::to_string(split.size() - 1u) + " accelerators, but only " + std::to_string(n_cuda_devices)
+                + " were detected");
+        }
+
+        if constexpr (NDim == 3u
                       && std::conjunction_v<
                              std::is_same<It, F *>,
                              std::disjunction<std::is_same<UInt, std::uint64_t>, std::is_same<UInt, std::uint32_t>>,
                              std::disjunction<std::is_same<F, float>, std::is_same<F, double>>>) {
-            const auto nparts = m_parts[0].size();
-            if (nparts >= cuda_min_size()) {
-                std::array<const F *, NDim + 1u> part_ptrs;
-                for (std::size_t i = 0; i < NDim + 1u; ++i) {
-                    part_ptrs[i] = m_parts[i].data();
-                }
-                cuda_acc_pot_impl<Q>(out, m_tree.data(), m_tree.size(), part_ptrs, m_codes.data(), nparts, theta2, G,
-                                     eps2, m_ncrit);
-            } else {
-                cpu_run();
-            }
         } else {
-            cpu_run();
+            if (split.size() > 1u) {
+                throw std::invalid_argument(
+                    "Cannot compute accelerations/potentials on an accelerator: either the "
+                    "floating-point and/or integral types involved in the computation are supported only on the cpu, "
+                    "or the output iterators are not pointers (this is the case when using the ordered "
+                    "acceleration/potential computation functions)");
+            }
+            cpu_run(0, m_crit_nodes.size());
         }
+        // if constexpr (NDim == 3u && Q == 0u
+        //               && std::conjunction_v<
+        //                      std::is_same<It, F *>,
+        //                      std::disjunction<std::is_same<UInt, std::uint64_t>, std::is_same<UInt, std::uint32_t>>,
+        //                      std::disjunction<std::is_same<F, float>, std::is_same<F, double>>>) {
+        //     const auto nparts = m_parts[0].size();
+        //     if (nparts >= cuda_min_size()) {
+        //         std::array<const F *, NDim + 1u> part_ptrs;
+        //         for (std::size_t i = 0; i < NDim + 1u; ++i) {
+        //             part_ptrs[i] = m_parts[i].data();
+        //         }
+        //         cuda_acc_pot_impl<Q>(out, m_tree.data(), m_tree.size(), part_ptrs, m_codes.data(), nparts, theta2, G,
+        //                              eps2, m_ncrit);
+        //     } else {
+        //         cpu_run();
+        //     }
+        // } else {
+        //     cpu_run();
+        // }
 #else
         if (split.size() > 1u) {
             throw std::invalid_argument("Cannot compute accelerations/potentials on an accelerator: rakau was not "

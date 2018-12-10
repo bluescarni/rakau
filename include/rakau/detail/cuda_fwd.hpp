@@ -20,6 +20,7 @@ inline namespace detail
 {
 
 unsigned cuda_min_size() __attribute__((visibility("default")));
+unsigned cuda_device_count() __attribute__((visibility("default")));
 
 template <unsigned Q, std::size_t NDim, typename F, typename UInt>
 void cuda_acc_pot_impl(const std::array<F *, tree_nvecs_res<Q, NDim>> &, const tree_node_t<NDim, F, UInt> *,

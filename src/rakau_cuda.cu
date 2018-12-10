@@ -21,6 +21,16 @@ unsigned cuda_min_size()
     return 1000u;
 }
 
+// Get the number of cuda devices.
+unsigned cuda_device_count()
+{
+    int ret;
+    if (::cudaGetDeviceCount(&ret) != ::cudaSuccess) {
+        throw std::runtime_error("Cannot determine the number of CUDA devices");
+    }
+    return static_cast<unsigned>(ret);
+}
+
 template <typename T>
 auto make_scoped_cu_array(std::size_t n)
 {
@@ -28,11 +38,10 @@ auto make_scoped_cu_array(std::size_t n)
         throw std::bad_alloc();
     }
     T *ret;
-    auto res = ::cudaMallocManaged(&ret, n * sizeof(T));
-    if (res != ::cudaSuccess) {
+    if (::cudaMallocManaged(&ret, n * sizeof(T)) != ::cudaSuccess) {
         throw std::bad_alloc();
     }
-    return std::unique_ptr<T, decltype(::cudaFree) *>(ret, ::cudaFree);
+    return std::unique_ptr<T[], decltype(::cudaFree) *>(ret, ::cudaFree);
 }
 
 template <typename T>
