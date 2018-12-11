@@ -35,11 +35,11 @@ template <typename T>
 auto make_scoped_cu_array(std::size_t n)
 {
     if (n > std::numeric_limits<std::size_t>::max() / sizeof(T)) {
-        throw std::bad_alloc();
+        throw std::bad_alloc{};
     }
     T *ret;
     if (::cudaMallocManaged(&ret, n * sizeof(T)) != ::cudaSuccess) {
-        throw std::bad_alloc();
+        throw std::bad_alloc{};
     }
     return std::unique_ptr<T[], decltype(::cudaFree) *>(ret, ::cudaFree);
 }
