@@ -42,8 +42,8 @@
 
 #include <tbb/blocked_range.h>
 #include <tbb/concurrent_vector.h>
-#include <tbb/enumerable_thread_specific.h>
 #include <tbb/parallel_for.h>
+#include <tbb/parallel_reduce.h>
 #include <tbb/parallel_sort.h>
 #include <tbb/partitioner.h>
 #include <tbb/task_group.h>
@@ -1073,7 +1073,6 @@ private:
     }
     // Determine the box size from an input sequence of iterators representing the coordinates and
     // the masses (unused) of the particles in the simulation.
-    // NOTE: this function assumes we can index into It up to N.
     // NOTE: this function is safe for N == 0 (it will return zero in that case).
     template <typename It>
     static F determine_box_size(const std::array<It, NDim + 1u> &cm_it, const size_type &N)
@@ -1081,37 +1080,31 @@ private:
         simple_timer st_m("box size deduction");
         // NOTE: we will be indexing into It up to the value N below. Check that we can do that.
         it_diff_check<It>(N);
-        // Local maximum coordinates for each thread. For each thread, the initial value
-        // will be std::array<F, NDim>{}, that is, all max coordinates will be zero.
-        tbb::enumerable_thread_specific<std::array<F, NDim>> max_coords(std::array<F, NDim>{});
-        tbb::parallel_for(tbb::blocked_range(size_type(0), N), [&cm_it, &max_coords](const auto &range) {
-            // Copy locally the current max coords array.
-            auto local_max = max_coords.local();
-            for (auto i = range.begin(); i != range.end(); ++i) {
-                for (std::size_t j = 0; j < NDim; ++j) {
-                    const auto tmp = std::abs(*(cm_it[j] + static_cast<it_diff_type<It>>(i)));
-                    if (!std::isfinite(tmp)) {
-                        throw std::invalid_argument("While trying to automatically determine the domain size, a "
-                                                    "non-finite coordinate with absolute value "
-                                                    + std::to_string(tmp) + " was encountered");
+        // TBB parallel reduction to find the global maximum absolute values for each coordinate.
+        // NOTE: if N is zero, mc will be inited to std::array<F, NDim>{}, i.e., an array of zeroes.
+        const auto mc = tbb::parallel_reduce(
+            tbb::blocked_range(size_type(0), N), std::array<F, NDim>{},
+            [&cm_it](const auto &range, std::array<F, NDim> cur_max) {
+                for (auto i = range.begin(); i != range.end(); ++i) {
+                    for (std::size_t j = 0; j < NDim; ++j) {
+                        const auto tmp = std::abs(*(cm_it[j] + static_cast<it_diff_type<It>>(i)));
+                        if (rakau_unlikely(!std::isfinite(tmp))) {
+                            throw std::invalid_argument("While trying to automatically determine the domain size, a "
+                                                        "non-finite coordinate with absolute value "
+                                                        + std::to_string(tmp) + " was encountered");
+                        }
+                        cur_max[j] = std::max(cur_max[j], tmp);
                     }
-                    local_max[j] = std::max(local_max[j], tmp);
                 }
-            }
-            // Store the updated max coords.
-            max_coords.local() = local_max;
-        });
-        // Combine the maxima from all threads into a single maximum vector.
-        // NOTE: if max_coords is empty (i.e., for N == 0), the combine function will return a
-        // copy of the element used in the construction of the enumerable_thread_specific object,
-        // that is, an array of zeroes.
-        const auto mc = max_coords.combine([](const auto &c1, const auto &c2) {
-            std::array<F, NDim> retval;
-            for (std::size_t j = 0; j < NDim; ++j) {
-                retval[j] = std::max(c1[j], c2[j]);
-            }
-            return retval;
-        });
+                return cur_max;
+            },
+            [](const std::array<F, NDim> &a, const std::array<F, NDim> &b) {
+                std::array<F, NDim> ret;
+                for (std::size_t j = 0; j < NDim; ++j) {
+                    ret[j] = std::max(a[j], b[j]);
+                }
+                return ret;
+            });
         // Pick the max of the NDim coordinates, multiply by 2 to get the box size.
         auto retval = *std::max_element(mc.begin(), mc.end()) * F(2);
         // Add a 5% slack.
@@ -1300,11 +1293,7 @@ private:
         assert(!m_rocm);
         // If no accelerator is available, don't bother and leave m_rocm empty.
         if (rocm_has_accelerator()) {
-            std::array<const F *, NDim + 1u> parts_ptrs;
-            for (std::size_t j = 0; j < NDim + 1u; ++j) {
-                parts_ptrs[j] = m_parts[j].data();
-            }
-            m_rocm.emplace(parts_ptrs, m_codes.data(), boost::numeric_cast<int>(nparts()), m_tree.data(),
+            m_rocm.emplace(p_its_u(), m_codes.data(), boost::numeric_cast<int>(nparts()), m_tree.data(),
                            boost::numeric_cast<int>(m_tree.size()));
         }
 #endif
@@ -2695,7 +2684,7 @@ private:
                 "Cannot split the computation of accelerations/potentials: no accelerator has been detected");
         }
 
-        if constexpr (NDim == 3u
+        if constexpr ((NDim == 3u || NDim == 2u)
                       && std::conjunction_v<
                              std::is_same<It, F *>,
                              std::disjunction<std::is_same<UInt, std::uint64_t>, std::is_same<UInt, std::uint32_t>>,
