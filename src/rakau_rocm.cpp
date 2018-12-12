@@ -353,8 +353,8 @@ void rocm_state<NDim, F, UInt>::acc_pot(int p_begin, int p_end, const std::array
 
 // Define the values/types that we will use for the concrete instantiations.
 
-// Only octrees for the moment.
-#define RAKAU_ROCM_INST_DIM_SEQUENCE (3)
+// Only quadtrees and octrees for the moment.
+#define RAKAU_ROCM_INST_DIM_SEQUENCE (2)(3)
 
 // float and double only on the gpu.
 #define RAKAU_ROCM_INST_FP_SEQUENCE (float)(double)
