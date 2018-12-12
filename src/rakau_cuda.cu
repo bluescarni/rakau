@@ -4,8 +4,11 @@
 #include <limits>
 #include <memory>
 #include <new>
+#include <vector>
 
 #include <boost/numeric/conversion/cast.hpp>
+#include <boost/preprocessor/seq/elem.hpp>
+#include <boost/preprocessor/seq/for_each_product.hpp>
 
 #include <rakau/detail/tree_fwd.hpp>
 
@@ -31,28 +34,34 @@ unsigned cuda_device_count()
     return static_cast<unsigned>(ret);
 }
 
+// Small helper to create a unique_ptr to managed memory
+// with enough storage for n objects of type T.
 template <typename T>
 auto make_scoped_cu_array(std::size_t n)
 {
     if (n > std::numeric_limits<std::size_t>::max() / sizeof(T)) {
         throw std::bad_alloc{};
     }
-    T *ret;
+    void *ret;
     if (::cudaMallocManaged(&ret, n * sizeof(T)) != ::cudaSuccess) {
         throw std::bad_alloc{};
     }
-    return std::unique_ptr<T[], decltype(::cudaFree) *>(ret, ::cudaFree);
+    return std::unique_ptr<T, decltype(::cudaFree) *>(static_cast<T *>(ret), ::cudaFree);
 }
 
+// Small wrapper to handle arrays in managed memory.
 template <typename T>
 class scoped_cu_array
 {
     using ptr_t = decltype(make_scoped_cu_array<T>(0));
 
 public:
+    // Def ctor, inits to nullptr.
     scoped_cu_array() : m_ptr(nullptr, ::cudaFree) {}
+    // Constructor from size.
     explicit scoped_cu_array(std::size_t n) : m_ptr(make_scoped_cu_array<T>(n)) {}
-    auto get() const
+    // Get a pointer to the start of the array.
+    T *get() const
     {
         return m_ptr.get();
     }
@@ -132,13 +141,15 @@ __global__ void acc_pot_kernel(F *__restrict__ res_x, F *__restrict__ res_y, F *
 } // namespace detail
 
 template <unsigned Q, std::size_t NDim, typename F, typename UInt>
-void cuda_acc_pot_impl(const std::array<F *, tree_nvecs_res<Q, NDim>> &out, const tree_node_t<NDim, F, UInt> *tree,
+void cuda_acc_pot_impl(const std::array<F *, tree_nvecs_res<Q, NDim>> &out,
+                       const std::vector<tree_size_t<F>> &split_indices, const tree_node_t<NDim, F, UInt> *tree,
                        tree_size_t<F> tree_size, const std::array<const F *, NDim + 1u> &p_parts, const UInt *codes,
-                       tree_size_t<F> nparts, F theta2, F G, F eps2, tree_size_t<F>)
+                       tree_size_t<F> nparts, F theta2, F G, F eps2)
 {
-    static_assert(Q == 0u);
-
     // TODO error handling for memcopy.
+    // TODO numeric casting?
+
+    // Create the arrays for the results.
     std::array<scoped_cu_array<F>, tree_nvecs_res<Q, NDim>> res_arrs;
     F *res_ptrs[tree_nvecs_res<Q, NDim>];
     for (std::size_t j = 0; j < tree_nvecs_res<Q, NDim>; ++j) {
@@ -172,21 +183,41 @@ void cuda_acc_pot_impl(const std::array<F *, tree_nvecs_res<Q, NDim>> &out, cons
     }
 }
 
-// Explicit instantiations.
-#define RAKAU_CUDA_EXPLICIT_INST(Q, NDim, F, UInt)                                                                     \
-    template void cuda_acc_pot_impl<Q, NDim, F, UInt>(                                                                 \
-        const std::array<F *, tree_nvecs_res<Q, NDim>> &, const tree_node_t<NDim, F, UInt> *, tree_size_t<F>,          \
-        const std::array<const F *, NDim + 1u> &, const UInt *, tree_size_t<F>, F, F, F, tree_size_t<F>)
+// Explicit instantiations of the templates implemented above. We are going to use Boost.Preprocessor.
+// It's gonna look ugly, but it will allow us to avoid a lot of typing.
 
-RAKAU_CUDA_EXPLICIT_INST(0, 3, float, std::uint64_t);
+// Define the values/types that we will use for the concrete instantiations.
 
-RAKAU_CUDA_EXPLICIT_INST(0, 3, double, std::uint64_t);
+// Only quadtrees and octrees for the moment.
+#define RAKAU_CUDA_INST_DIM_SEQUENCE (2)(3)
 
-RAKAU_CUDA_EXPLICIT_INST(0, 3, float, std::uint32_t);
+// float and double only on the gpu.
+#define RAKAU_CUDA_INST_FP_SEQUENCE (float)(double)
 
-RAKAU_CUDA_EXPLICIT_INST(0, 3, double, std::uint32_t);
+// 32/64bit types for the particle codes.
+#define RAKAU_CUDA_INST_UINT_SEQUENCE (std::uint32_t)(std::uint64_t)
 
-#undef RAKAU_CUDA_EXPLICIT_INST
+// Computation of accelerations, potentials or both.
+#define RAKAU_CUDA_INST_Q_SEQUENCE (0)(1)(2)
+
+// Macro for the instantiation of the main function. NDim, F, UInt and Q will be passed in
+// as a sequence named Args (in that order).
+#define RAKAU_CUDA_EXPLICIT_INST_FUN(r, Args)                                                                          \
+    template void cuda_acc_pot_impl<BOOST_PP_SEQ_ELEM(3, Args), BOOST_PP_SEQ_ELEM(0, Args),                            \
+                                    BOOST_PP_SEQ_ELEM(1, Args), BOOST_PP_SEQ_ELEM(2, Args)>(                           \
+        const std::array<BOOST_PP_SEQ_ELEM(1, Args) *,                                                                 \
+                         tree_nvecs_res<BOOST_PP_SEQ_ELEM(3, Args), BOOST_PP_SEQ_ELEM(0, Args)>> &,                    \
+        const std::vector<tree_size_t<BOOST_PP_SEQ_ELEM(1, Args)>> &,                                                  \
+        const tree_node_t<BOOST_PP_SEQ_ELEM(0, Args), BOOST_PP_SEQ_ELEM(1, Args), BOOST_PP_SEQ_ELEM(2, Args)> *,       \
+        tree_size_t<BOOST_PP_SEQ_ELEM(1, Args)>,                                                                       \
+        const std::array<const BOOST_PP_SEQ_ELEM(1, Args) *, BOOST_PP_SEQ_ELEM(0, Args) + 1u> &,                       \
+        const BOOST_PP_SEQ_ELEM(2, Args) *, tree_size_t<BOOST_PP_SEQ_ELEM(1, Args)>, BOOST_PP_SEQ_ELEM(1, Args),       \
+        BOOST_PP_SEQ_ELEM(1, Args), BOOST_PP_SEQ_ELEM(1, Args));
+
+// Do the actual instantiation via a cartesian product over the sequences.
+// clang-format off
+BOOST_PP_SEQ_FOR_EACH_PRODUCT(RAKAU_CUDA_EXPLICIT_INST_FUN, (RAKAU_CUDA_INST_DIM_SEQUENCE)(RAKAU_CUDA_INST_FP_SEQUENCE)(RAKAU_CUDA_INST_UINT_SEQUENCE)(RAKAU_CUDA_INST_Q_SEQUENCE));
+// clang-format on
 
 } // namespace detail
 } // namespace rakau

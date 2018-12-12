@@ -2829,9 +2829,9 @@ private:
                     it_diff_check<decltype(m_crit_nodes.begin())>(m_crit_nodes.size());
 
                     // Run the CUDA computation in async mode.
-                    auto cuda_fut = std::async(std::launch::async, [split_indices, &out, theta2, G, eps2]() {
-                        //         cuda_acc_pot_impl<Q>(out, m_tree.data(), m_tree.size(), part_ptrs, m_codes.data(),
-                        //         nparts, theta2, G, eps2, m_ncrit);
+                    auto cuda_fut = std::async(std::launch::async, [&out, &split_indices, this, np, theta2, G, eps2]() {
+                        cuda_acc_pot_impl<Q>(out, split_indices, m_tree.data(), m_tree.size(), p_its_u(),
+                                             m_codes.data(), np, theta2, G, eps2);
                     });
 
                     // Run the cpu implementation.
