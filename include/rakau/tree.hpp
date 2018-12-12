@@ -2777,14 +2777,14 @@ private:
 
                 // Vector of indices resulting from the projection of split onto the particle indices.
                 std::vector<size_type> split_indices(
-                    boost::numeric_cast<std::vector<size_type>::size_type>(split.size()));
+                    boost::numeric_cast<typename std::vector<size_type>::size_type>(split.size()));
                 // Accumulate the value in split.
                 const auto split_acc = std::accumulate(split.begin(), split.end(), 0.);
                 // Temporary accumulator.
                 auto tmp_acc = split[0];
                 // Do all the values, except the last one.
                 for (decltype(split.size()) i = 0; i < split.size() - 1u; ++i) {
-                    split_indices[i] = boost::numeric_cast<size_type>(tmp_acc / split_acc * np);
+                    split_indices[i] = boost::numeric_cast<size_type>(tmp_acc / split_acc * static_cast<F>(np));
                     tmp_acc += split[i + 1u];
                 }
                 // Do the last value manually.
