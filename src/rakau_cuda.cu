@@ -102,10 +102,9 @@ struct arr_wrap {
 };
 
 template <unsigned Q, std::size_t NDim, typename F, typename UInt>
-static __global__ void acc_pot_kernel(arr_wrap<F *, tree_nvecs_res<Q, NDim>> res_ptrs, int p_begin, int p_end,
-                                      const tree_node_t<NDim, F, UInt> *tree_ptr, int tree_size,
-                                      arr_wrap<const F *, NDim + 1u> parts_ptrs, const UInt *codes_ptr, F theta2, F G,
-                                      F eps2)
+__global__ void acc_pot_kernel(arr_wrap<F *, tree_nvecs_res<Q, NDim>> res_ptrs, int p_begin, int p_end,
+                               const tree_node_t<NDim, F, UInt> *tree_ptr, int tree_size,
+                               arr_wrap<const F *, NDim + 1u> parts_ptrs, const UInt *codes_ptr, F theta2, F G, F eps2)
 {
     // Get the local and global particle indices.
     const auto loc_idx = blockIdx.x * blockDim.x + threadIdx.x;
