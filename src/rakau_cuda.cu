@@ -96,11 +96,21 @@ static inline void cuda_set_device(int device)
     }
 }
 
+static inline void cuda_mem_advise(const void *ptr, std::size_t count, ::cudaMemoryAdvise advice, int device)
+{
+    if (::cudaMemAdvise(ptr, count, advice, device) != ::cudaSuccess) {
+        throw std::runtime_error("cudaMemAdvise() returned an error code");
+    }
+}
+
+// Small wrapper to allow passing arrays of pointers
+// as kernel arguments.
 template <typename T, std::size_t N>
 struct arr_wrap {
     T value[N];
 };
 
+// Kernel for the computation of accelerations/potentials.
 template <unsigned Q, std::size_t NDim, typename F, typename UInt>
 __global__ void acc_pot_kernel(arr_wrap<F *, tree_nvecs_res<Q, NDim>> res_ptrs, int p_begin, int p_end,
                                const tree_node_t<NDim, F, UInt> *tree_ptr, int tree_size,
@@ -306,9 +316,11 @@ void cuda_acc_pot_impl(const std::array<F *, tree_nvecs_res<Q, NDim>> &out,
         typename decltype(res_arrs)::value_type tmp_arrs;
         typename decltype(res_ptrs)::value_type tmp_ptrs;
         for (std::size_t j = 0; j < tree_nvecs_res<Q, NDim>; ++j) {
-            tmp_arrs.value[j]
-                = scoped_cu_array<F>(boost::numeric_cast<std::size_t>(split_indices[i + 1u] - split_indices[i]));
+            const auto a_size = boost::numeric_cast<std::size_t>(split_indices[i + 1u] - split_indices[i]);
+            tmp_arrs.value[j] = scoped_cu_array<F>(a_size);
             tmp_ptrs.value[j] = tmp_arrs.value[j].get();
+            cuda_mem_advise(tmp_ptrs.value[j], sizeof(F) * a_size, ::cudaMemAdviseSetPreferredLocation,
+                            static_cast<int>(i));
         }
         res_arrs.emplace_back(std::move(tmp_arrs));
         res_ptrs.emplace_back(std::move(tmp_ptrs));
@@ -318,6 +330,10 @@ void cuda_acc_pot_impl(const std::array<F *, tree_nvecs_res<Q, NDim>> &out,
     scoped_cu_array<tree_node_t<NDim, F, UInt>> tree_arr(boost::numeric_cast<std::size_t>(tree_size));
     cuda_memcpy(tree_arr.get(), tree, sizeof(tree_node_t<NDim, F, UInt>) * tree_size, ::cudaMemcpyDefault);
     const auto *tree_ptr = tree_arr.get();
+    for (auto i = 0u; i < ngpus; ++i) {
+        cuda_mem_advise(tree_ptr, sizeof(tree_node_t<NDim, F, UInt>) * tree_size, ::cudaMemAdviseSetReadMostly,
+                        static_cast<int>(i));
+    }
 
     // Copy over the particles' data.
     arr_wrap<scoped_cu_array<F>, NDim + 1u> parts_arrs;
@@ -326,12 +342,18 @@ void cuda_acc_pot_impl(const std::array<F *, tree_nvecs_res<Q, NDim>> &out,
         parts_arrs.value[j] = scoped_cu_array<F>(boost::numeric_cast<std::size_t>(nparts));
         cuda_memcpy(parts_arrs.value[j].get(), p_parts[j], sizeof(F) * nparts, ::cudaMemcpyDefault);
         parts_ptrs.value[j] = parts_arrs.value[j].get();
+        for (auto i = 0u; i < ngpus; ++i) {
+            cuda_mem_advise(parts_ptrs.value[j], sizeof(F) * nparts, ::cudaMemAdviseSetReadMostly, static_cast<int>(i));
+        }
     }
 
     // Copy over the codes.
     scoped_cu_array<UInt> codes_arr(boost::numeric_cast<std::size_t>(nparts));
     cuda_memcpy(codes_arr.get(), codes, sizeof(UInt) * nparts, ::cudaMemcpyDefault);
     const auto *codes_ptr = codes_arr.get();
+    for (auto i = 0u; i < ngpus; ++i) {
+        cuda_mem_advise(codes_ptr, sizeof(UInt) * nparts, ::cudaMemAdviseSetReadMostly, static_cast<int>(i));
+    }
 
     // NOTE: not 100% sure this is necessary here, as the docs say that memory copy
     // functions have "mostly" synchronizing behaviour. Better safe than sorry, I guess?
