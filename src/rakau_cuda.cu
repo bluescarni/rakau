@@ -106,7 +106,10 @@ static inline void cuda_set_device(int device)
 
 static inline void cuda_mem_advise(const void *ptr, std::size_t count, ::cudaMemoryAdvise advice, int device)
 {
-    if (::cudaMemAdvise(ptr, count, advice, device) != ::cudaSuccess) {
+    const auto ret = ::cudaMemAdvise(ptr, count, advice, device);
+    // NOTE: this might fail with cudaErrorInvalidDevice on older
+    // devices, in which case we don't want to error out.
+    if (ret != ::cudaSuccess && ret != ::cudaErrorInvalidDevice) {
         throw std::runtime_error("cudaMemAdvise() returned an error code");
     }
 }
@@ -364,7 +367,8 @@ void cuda_acc_pot_impl(const std::array<F *, tree_nvecs_res<Q, NDim>> &out,
     }
 
     // NOTE: not 100% sure this is necessary here, as the docs say that memory copy
-    // functions have "mostly" synchronizing behaviour. Better safe than sorry, I guess?
+    // functions have "mostly" synchronizing behaviour. However, cudaMemAdvise() has async
+    // behaviour, so it's probably better to enforce a barrier.
     for (auto i = 0u; i < ngpus; ++i) {
         cuda_set_device(static_cast<int>(i));
         cuda_device_synchronize();
@@ -398,7 +402,7 @@ void cuda_acc_pot_impl(const std::array<F *, tree_nvecs_res<Q, NDim>> &out,
         cuda_set_device(static_cast<int>(i));
         for (std::size_t j = 0; j < tree_nvecs_res<Q, NDim>; ++j) {
             cuda_memcpy_async(out[j] + split_indices[i], res_ptrs[i].value[j],
-                        sizeof(F) * (split_indices[i + 1u] - split_indices[i]), ::cudaMemcpyDefault, streams[i]);
+                              sizeof(F) * (split_indices[i + 1u] - split_indices[i]), ::cudaMemcpyDefault, streams[i]);
         }
     }
 
