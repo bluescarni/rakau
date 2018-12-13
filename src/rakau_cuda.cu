@@ -375,10 +375,11 @@ void cuda_acc_pot_impl(const std::array<F *, tree_nvecs_res<Q, NDim>> &out,
 
     // Run the computations on the devices.
     for (auto i = 0u; i < ngpus; ++i) {
-        ::cudaStreamCreate(&streams[i]);
-
         // Set the device.
         cuda_set_device(static_cast<int>(i));
+
+        // Create the stream.
+        ::cudaStreamCreate(&streams[i]);
 
         // Number of particles for which we will be
         // computing the accelerations/potentials for
@@ -394,6 +395,7 @@ void cuda_acc_pot_impl(const std::array<F *, tree_nvecs_res<Q, NDim>> &out,
 
     // Write out the results.
     for (auto i = 0u; i < ngpus; ++i) {
+        cuda_set_device(static_cast<int>(i));
         for (std::size_t j = 0; j < tree_nvecs_res<Q, NDim>; ++j) {
             cuda_memcpy_async(out[j] + split_indices[i], res_ptrs[i].value[j],
                         sizeof(F) * (split_indices[i + 1u] - split_indices[i]), ::cudaMemcpyDefault, streams[i]);
@@ -402,6 +404,7 @@ void cuda_acc_pot_impl(const std::array<F *, tree_nvecs_res<Q, NDim>> &out,
 
     // Wait out.
     for (auto i = 0u; i < ngpus; ++i) {
+        cuda_set_device(static_cast<int>(i));
         ::cudaStreamSynchronize(streams[i]);
         ::cudaStreamDestroy(streams[i]);
     }
