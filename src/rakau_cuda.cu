@@ -82,6 +82,14 @@ static inline void cuda_memcpy(void *dst, const void *src, std::size_t count, ::
     }
 }
 
+static inline void cuda_memcpy_async(void *dst, const void *src, std::size_t count, ::cudaMemcpyKind kind,
+                                     ::cudaStream_t stream)
+{
+    if (::cudaMemcpyAsync(dst, src, count, kind, stream) != ::cudaSuccess) {
+        throw std::runtime_error("cudaMemcpyAsync() returned an error code");
+    }
+}
+
 static inline void cuda_device_synchronize()
 {
     if (::cudaDeviceSynchronize() != ::cudaSuccess) {
@@ -357,10 +365,18 @@ void cuda_acc_pot_impl(const std::array<F *, tree_nvecs_res<Q, NDim>> &out,
 
     // NOTE: not 100% sure this is necessary here, as the docs say that memory copy
     // functions have "mostly" synchronizing behaviour. Better safe than sorry, I guess?
-    cuda_device_synchronize();
+    for (auto i = 0u; i < ngpus; ++i) {
+        cuda_set_device(static_cast<int>(i));
+        cuda_device_synchronize();
+    }
+
+    // TODO overflow check.
+    std::vector<::cudaStream_t> streams(ngpus);
 
     // Run the computations on the devices.
     for (auto i = 0u; i < ngpus; ++i) {
+        ::cudaStreamCreate(&streams[i]);
+
         // Set the device.
         cuda_set_device(static_cast<int>(i));
 
@@ -371,24 +387,32 @@ void cuda_acc_pot_impl(const std::array<F *, tree_nvecs_res<Q, NDim>> &out,
 
         // Run the kernel.
         // TODO overflow checks on kernel launch param?
-        acc_pot_kernel<Q, NDim, F, UInt><<<(loc_nparts + 31u) / 32u, 32u>>>(
+        acc_pot_kernel<Q, NDim, F, UInt><<<(loc_nparts + 31u) / 32u, 32u, 0, &streams[i]>>>(
             res_ptrs[i], boost::numeric_cast<int>(split_indices[i]), boost::numeric_cast<int>(split_indices[i + 1u]),
             tree_ptr, boost::numeric_cast<int>(tree_size), parts_ptrs, codes_ptr, theta2, G, eps2);
     }
 
     // Wait for all the kernels to finish.
-    cuda_device_synchronize();
+    // cuda_device_synchronize();
 
     // Write out the results.
     for (auto i = 0u; i < ngpus; ++i) {
         for (std::size_t j = 0; j < tree_nvecs_res<Q, NDim>; ++j) {
-            cuda_memcpy(out[j] + split_indices[i], res_ptrs[i].value[j],
-                        sizeof(F) * (split_indices[i + 1u] - split_indices[i]), ::cudaMemcpyDefault);
+            cuda_memcpy_async(out[j] + split_indices[i], res_ptrs[i].value[j],
+                        sizeof(F) * (split_indices[i + 1u] - split_indices[i]), ::cudaMemcpyDefault, streams[i]);
         }
     }
 
-    // Last sync.
-    cuda_device_synchronize();
+    // Wait out.
+    for (auto i = 0u; i < ngpus; ++i) {
+        ::cudaStreamSynchronize(streams[i]);
+        ::cudaStreamDestroy(streams[i]);
+    }
+
+    for (auto i = 0u; i < ngpus; ++i) {
+        cuda_set_device(static_cast<int>(i));
+        cuda_device_synchronize();
+    }
 }
 
 // Explicit instantiations of the templates implemented above. We are going to use Boost.Preprocessor.
