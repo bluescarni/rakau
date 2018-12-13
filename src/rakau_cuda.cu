@@ -370,7 +370,7 @@ void cuda_acc_pot_impl(const std::array<F *, tree_nvecs_res<Q, NDim>> &out,
         cuda_device_synchronize();
     }
 
-    // TODO overflow check.
+    // TODO stream handling.
     std::vector<::cudaStream_t> streams(ngpus);
 
     // Run the computations on the devices.
@@ -387,13 +387,10 @@ void cuda_acc_pot_impl(const std::array<F *, tree_nvecs_res<Q, NDim>> &out,
 
         // Run the kernel.
         // TODO overflow checks on kernel launch param?
-        acc_pot_kernel<Q, NDim, F, UInt><<<(loc_nparts + 31u) / 32u, 32u, 0, &streams[i]>>>(
+        acc_pot_kernel<Q, NDim, F, UInt><<<(loc_nparts + 31u) / 32u, 32u, 0, streams[i]>>>(
             res_ptrs[i], boost::numeric_cast<int>(split_indices[i]), boost::numeric_cast<int>(split_indices[i + 1u]),
             tree_ptr, boost::numeric_cast<int>(tree_size), parts_ptrs, codes_ptr, theta2, G, eps2);
     }
-
-    // Wait for all the kernels to finish.
-    // cuda_device_synchronize();
 
     // Write out the results.
     for (auto i = 0u; i < ngpus; ++i) {
@@ -407,11 +404,6 @@ void cuda_acc_pot_impl(const std::array<F *, tree_nvecs_res<Q, NDim>> &out,
     for (auto i = 0u; i < ngpus; ++i) {
         ::cudaStreamSynchronize(streams[i]);
         ::cudaStreamDestroy(streams[i]);
-    }
-
-    for (auto i = 0u; i < ngpus; ++i) {
-        cuda_set_device(static_cast<int>(i));
-        cuda_device_synchronize();
     }
 }
 
