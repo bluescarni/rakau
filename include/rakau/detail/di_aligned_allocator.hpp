@@ -54,7 +54,7 @@ struct di_aligned_allocator {
         // by the default implementation of max_size().
         const auto size = n * sizeof(T);
         void *retval;
-        if constexpr (Alignment == 0u) {
+        if (Alignment == 0u) {
             retval = std::malloc(size);
         } else {
 #if defined(__apple_build_version__)
@@ -99,18 +99,19 @@ struct di_aligned_allocator {
         return false;
     }
     // The construction function.
+    template <typename U>
+    void construct(U *p) const
+    {
+        // When no construction arguments are supplied, do default
+        // initialisation rather than value initialisation.
+        ::new (static_cast<void *>(p)) U;
+    }
     template <typename U, typename... Args>
     void construct(U *p, Args &&... args) const
     {
-        if constexpr (sizeof...(args) == 0u) {
-            // When no construction arguments are supplied, do default
-            // initialisation rather than value initialisation.
-            ::new (static_cast<void *>(p)) U;
-        } else {
-            // This is the standard std::allocator implementation.
-            // http://en.cppreference.com/w/cpp/memory/allocator/construct
-            ::new (static_cast<void *>(p)) U(std::forward<Args>(args)...);
-        }
+        // This is the standard std::allocator implementation.
+        // http://en.cppreference.com/w/cpp/memory/allocator/construct
+        ::new (static_cast<void *>(p)) U(std::forward<Args>(args)...);
     }
 };
 
