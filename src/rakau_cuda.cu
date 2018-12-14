@@ -446,16 +446,34 @@ void cuda_acc_pot_impl(const std::array<F *, tree_nvecs_res<Q, NDim>> &out,
         cuda_device_synchronize();
     }
 
-    // TODO stream handling.
-    std::vector<::cudaStream_t> streams(ngpus);
+    // Prepare a vector of streams.
+    std::vector<::cudaStream_t> streams;
+
+    // Function to wait on the streams and destroy them.
+    auto wait_destroy_streams = [&streams]() noexcept
+    {
+        for (decltype(streams.size()) i = 0; i < streams.size(); ++i) {
+            cuda_set_device(static_cast<int>(i));
+            ::cudaStreamSynchronize(streams[i]);
+            ::cudaStreamDestroy(streams[i]);
+        }
+    };
+    // Make sure this is always called, even if exceptions are thrown.
+    scoped_guard<decltype(wait_destroy_streams)> sg_wait_destroy_streams(wait_destroy_streams);
+
+    // Actually create the streams.
+    streams.reserve(boost::numeric_cast<decltype(streams.size())>(ngpus));
+    for (auto i = 0u; i < ngpus; ++i) {
+        cuda_set_device(static_cast<int>(i));
+        ::cudaStream_t tmp;
+        cuda_stream_create(&tmp);
+        streams.push_back(tmp);
+    }
 
     // Run the computations on the devices.
     for (auto i = 0u; i < ngpus; ++i) {
         // Set the device.
         cuda_set_device(static_cast<int>(i));
-
-        // Create the stream.
-        ::cudaStreamCreate(&streams[i]);
 
         // Number of particles for which we will be
         // computing the accelerations/potentials for
@@ -463,7 +481,9 @@ void cuda_acc_pot_impl(const std::array<F *, tree_nvecs_res<Q, NDim>> &out,
         const auto loc_nparts = split_indices[i + 1u] - split_indices[i];
 
         // Run the kernel.
-        // TODO overflow checks on kernel launch param?
+        if (loc_nparts > std::numeric_limits<unsigned>::max() - 31u) {
+            throw std::overflow_error("Overflow in the number of particles to be assigned to a CUDA kernel");
+        }
         acc_pot_kernel<Q, NDim, F, UInt><<<(loc_nparts + 31u) / 32u, 32u, 0, streams[i]>>>(
             res_ptrs[i], boost::numeric_cast<int>(split_indices[i]), boost::numeric_cast<int>(split_indices[i + 1u]),
             tree_ptr, boost::numeric_cast<int>(tree_size), parts_ptrs, codes_ptr, theta2, G, eps2);
@@ -476,13 +496,6 @@ void cuda_acc_pot_impl(const std::array<F *, tree_nvecs_res<Q, NDim>> &out,
             cuda_memcpy_async(out[j] + split_indices[i], res_ptrs[i].value[j],
                               sizeof(F) * (split_indices[i + 1u] - split_indices[i]), ::cudaMemcpyDefault, streams[i]);
         }
-    }
-
-    // Wait out.
-    for (auto i = 0u; i < ngpus; ++i) {
-        cuda_set_device(static_cast<int>(i));
-        ::cudaStreamSynchronize(streams[i]);
-        ::cudaStreamDestroy(streams[i]);
     }
 }
 
