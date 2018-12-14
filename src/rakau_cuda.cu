@@ -398,6 +398,7 @@ void cuda_acc_pot_impl(const std::array<F *, tree_nvecs_res<Q, NDim>> &out,
     for (auto i = 0u; i < ngpus; ++i) {
         typename decltype(res_arrs)::value_type tmp_arrs;
         typename decltype(res_ptrs)::value_type tmp_ptrs;
+        // NOTE: set explicitly the device, we are allocating directly on the card here.
         cuda_set_device(static_cast<int>(i));
         for (std::size_t j = 0; j < tree_nvecs_res<Q, NDim>; ++j) {
             const auto a_size = boost::numeric_cast<std::size_t>(split_indices[i + 1u] - split_indices[i]);
@@ -453,7 +454,12 @@ void cuda_acc_pot_impl(const std::array<F *, tree_nvecs_res<Q, NDim>> &out,
     auto wait_destroy_streams = [&streams]() noexcept
     {
         for (decltype(streams.size()) i = 0; i < streams.size(); ++i) {
+            // NOTE: not 100% sure this is needed, but we do it for consistency
+            // with stream creation (where we *do* have to set the device before
+            // creating the stream).
             cuda_set_device(static_cast<int>(i));
+            // NOTE: stream synchronisation also acts as a unified memory
+            // synchronisation barrier.
             ::cudaStreamSynchronize(streams[i]);
             ::cudaStreamDestroy(streams[i]);
         }
@@ -464,6 +470,7 @@ void cuda_acc_pot_impl(const std::array<F *, tree_nvecs_res<Q, NDim>> &out,
     // Actually create the streams.
     streams.reserve(boost::numeric_cast<decltype(streams.size())>(ngpus));
     for (auto i = 0u; i < ngpus; ++i) {
+        // NOTE: stream creation is device-dependent.
         cuda_set_device(static_cast<int>(i));
         ::cudaStream_t tmp;
         cuda_stream_create(&tmp);
@@ -472,7 +479,7 @@ void cuda_acc_pot_impl(const std::array<F *, tree_nvecs_res<Q, NDim>> &out,
 
     // Run the computations on the devices.
     for (auto i = 0u; i < ngpus; ++i) {
-        // Set the device.
+        // Set the device for the kernel launch.
         cuda_set_device(static_cast<int>(i));
 
         // Number of particles for which we will be
