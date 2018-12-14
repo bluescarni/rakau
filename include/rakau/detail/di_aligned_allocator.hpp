@@ -99,14 +99,14 @@ struct di_aligned_allocator {
         return false;
     }
     // The construction function.
-    template <typename U, typename... Args, std::enable_if_t<sizeof...(Args) == 0u, int> = 0>
-    void construct(U *p, Args &&... args) const
+    template <typename U>
+    void construct(U *p) const
     {
         // When no construction arguments are supplied, do default
         // initialisation rather than value initialisation.
         ::new (static_cast<void *>(p)) U;
     }
-    template <typename U, typename... Args, std::enable_if_t<sizeof...(Args) != 0u, int> = 0>
+    template <typename U, typename... Args>
     void construct(U *p, Args &&... args) const
     {
         // This is the standard std::allocator implementation.
