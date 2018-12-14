@@ -336,7 +336,7 @@ void cuda_acc_pot_impl(const std::array<F *, tree_nvecs_res<Q, NDim>> &out,
 {
     assert(split_indices.size() && split_indices.size() - 1u <= cuda_device_count());
 
-    // Attempt to pin the input and output memory. We will record
+    // Attempt to pin the input memory areas. We will record
     // in an array of booleans which areas were actually successfully
     // pinned, so that we can unpin them later.
     std::array<bool, tree_nvecs_res<Q, NDim> + NDim + 3u> pin_flags{};
@@ -491,7 +491,6 @@ void cuda_acc_pot_impl(const std::array<F *, tree_nvecs_res<Q, NDim>> &out,
 
     // Write out the results.
     for (auto i = 0u; i < ngpus; ++i) {
-        cuda_set_device(static_cast<int>(i));
         for (std::size_t j = 0; j < tree_nvecs_res<Q, NDim>; ++j) {
             cuda_memcpy_async(out[j] + split_indices[i], res_ptrs[i].value[j],
                               sizeof(F) * (split_indices[i + 1u] - split_indices[i]), ::cudaMemcpyDefault, streams[i]);
