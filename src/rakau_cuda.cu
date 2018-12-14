@@ -52,7 +52,10 @@ auto make_scoped_cu_array(std::size_t n)
     return std::unique_ptr<T, decltype(::cudaFree) *>(static_cast<T *>(ret), ::cudaFree);
 }
 
-// Small wrapper to handle arrays in managed memory.
+// Small wrapper to create and manage an array of objects of type T
+// in CUDA managed memory.
+// NOTE: we need this instead of a naked unique_ptr because we want
+// to be able to default-construct for use in arrays.
 template <typename T>
 class scoped_cu_array
 {
@@ -111,6 +114,13 @@ static inline void cuda_mem_advise(const void *ptr, std::size_t count, ::cudaMem
     // devices, in which case we don't want to error out.
     if (ret != ::cudaSuccess && ret != ::cudaErrorInvalidDevice) {
         throw std::runtime_error("cudaMemAdvise() returned an error code");
+    }
+}
+
+static inline void cuda_stream_create(::cudaStream_t *ptr)
+{
+    if (::cudaStreamCreate(ptr) != ::cudaSuccess) {
+        throw std::runtime_error("cudaStreamCreate() returned an error code");
     }
 }
 
@@ -306,6 +316,17 @@ __global__ void acc_pot_kernel(arr_wrap<F *, tree_nvecs_res<Q, NDim>> res_ptrs, 
     }
 }
 
+// Small wrapper to automatically execute a function upon destruction.
+template <typename T>
+struct scoped_guard {
+    explicit scoped_guard(const T &f) : m_f(f) {}
+    ~scoped_guard()
+    {
+        m_f();
+    }
+    const T &m_f;
+};
+
 template <unsigned Q, std::size_t NDim, typename F, typename UInt>
 void cuda_acc_pot_impl(const std::array<F *, tree_nvecs_res<Q, NDim>> &out,
                        const std::vector<tree_size_t<F>> &split_indices, const tree_node_t<NDim, F, UInt> *tree,
@@ -314,13 +335,62 @@ void cuda_acc_pot_impl(const std::array<F *, tree_nvecs_res<Q, NDim>> &out,
 {
     assert(split_indices.size() && split_indices.size() - 1u <= cuda_device_count());
 
+    // Attempt to pin the input and output memory. We will record
+    // in an array of booleans which areas were actually successfully
+    // pinned, so that we can unpin them later.
+    std::array<bool, tree_nvecs_res<Q, NDim> + NDim + 3u> pin_flags{};
+    auto pin_memory = [&pin_flags, &out, nparts, tree, tree_size, codes, &p_parts]() {
+        std::size_t i = 0;
+        for (auto ptr : out) {
+            pin_flags[i++]
+                = ::cudaHostRegister(const_cast<void *>((const void *)ptr), sizeof(F) * nparts, cudaHostRegisterDefault)
+                  == ::cudaSuccess;
+        }
+        pin_flags[i++] = ::cudaHostRegister(const_cast<void *>((const void *)tree),
+                                            sizeof(tree_node_t<NDim, F, UInt>) * tree_size, cudaHostRegisterDefault)
+                         == ::cudaSuccess;
+        pin_flags[i++] = ::cudaHostRegister(const_cast<void *>((const void *)codes), sizeof(UInt) * nparts,
+                                            cudaHostRegisterDefault)
+                         == ::cudaSuccess;
+        for (auto ptr : p_parts) {
+            pin_flags[i++]
+                = ::cudaHostRegister(const_cast<void *>((const void *)ptr), sizeof(F) * nparts, cudaHostRegisterDefault)
+                  == ::cudaSuccess;
+        }
+    };
+    pin_memory();
+
+    // Function to unpin the pinned memory areas.
+    auto unpin_memory = [&pin_flags, &out, tree, codes, &p_parts]() {
+        std::size_t i = 0;
+        for (auto ptr : out) {
+            if (pin_flags[i++]) {
+                ::cudaHostUnregister(const_cast<void *>((const void *)ptr));
+            }
+        }
+        if (pin_flags[i++]) {
+            ::cudaHostUnregister(const_cast<void *>((const void *)tree));
+        }
+        if (pin_flags[i++]) {
+            ::cudaHostUnregister(const_cast<void *>((const void *)codes));
+        }
+        for (auto ptr : p_parts) {
+            if (pin_flags[i++]) {
+                ::cudaHostUnregister(const_cast<void *>((const void *)ptr));
+            }
+        }
+    };
+    // Make sure unpin_memory is executed before exiting the current function,
+    // even in case of exceptions.
+    scoped_guard<decltype(unpin_memory)> sg_unpin_memory(unpin_memory);
+
     // Fetch how many gpus we will actually be using.
     // NOTE: this is ensured to be not greater than the value returned
     // by the CUDA api, due to the checks we do outside this function.
     // So, we can freely cast it around to unsigned and signed int as well.
     const auto ngpus = static_cast<unsigned>(split_indices.size() - 1u);
 
-    // Create the arrays that will hold the results.
+    // Create the arrays in managed memory that will hold the results.
     std::vector<arr_wrap<scoped_cu_array<F>, tree_nvecs_res<Q, NDim>>> res_arrs;
     std::vector<arr_wrap<F *, tree_nvecs_res<Q, NDim>>> res_ptrs;
     for (auto i = 0u; i < ngpus; ++i) {
@@ -330,11 +400,12 @@ void cuda_acc_pot_impl(const std::array<F *, tree_nvecs_res<Q, NDim>> &out,
             const auto a_size = boost::numeric_cast<std::size_t>(split_indices[i + 1u] - split_indices[i]);
             tmp_arrs.value[j] = scoped_cu_array<F>(a_size);
             tmp_ptrs.value[j] = tmp_arrs.value[j].get();
+            // Tell the memory subsystem that we will use device i for this chunk of memory.
             cuda_mem_advise(tmp_ptrs.value[j], sizeof(F) * a_size, ::cudaMemAdviseSetPreferredLocation,
                             static_cast<int>(i));
         }
-        res_arrs.emplace_back(std::move(tmp_arrs));
-        res_ptrs.emplace_back(std::move(tmp_ptrs));
+        res_arrs.push_back(std::move(tmp_arrs));
+        res_ptrs.push_back(std::move(tmp_ptrs));
     }
 
     // Copy over the tree data.
@@ -342,6 +413,7 @@ void cuda_acc_pot_impl(const std::array<F *, tree_nvecs_res<Q, NDim>> &out,
     cuda_memcpy(tree_arr.get(), tree, sizeof(tree_node_t<NDim, F, UInt>) * tree_size, ::cudaMemcpyDefault);
     const auto *tree_ptr = tree_arr.get();
     for (auto i = 0u; i < ngpus; ++i) {
+        // This will be read-only memory.
         cuda_mem_advise(tree_ptr, sizeof(tree_node_t<NDim, F, UInt>) * tree_size, ::cudaMemAdviseSetReadMostly,
                         static_cast<int>(i));
     }
