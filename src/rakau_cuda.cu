@@ -38,35 +38,36 @@ unsigned cuda_device_count()
     return static_cast<unsigned>(ret);
 }
 
-// Small helper to create a unique_ptr to managed memory
+// Small helper to create a unique_ptr to managed or device memory
 // with enough storage for n objects of type T.
-template <typename T>
+template <bool Managed, typename T>
 auto make_scoped_cu_array(std::size_t n)
 {
     if (n > std::numeric_limits<std::size_t>::max() / sizeof(T)) {
         throw std::bad_alloc{};
     }
     void *ret;
-    if (::cudaMallocManaged(&ret, n * sizeof(T)) != ::cudaSuccess) {
+    const auto res = Managed ? ::cudaMallocManaged(&ret, n * sizeof(T)) : ::cudaMalloc(&ret, n * sizeof(T));
+    if (res != ::cudaSuccess) {
         throw std::bad_alloc{};
     }
     return std::unique_ptr<T, decltype(::cudaFree) *>(static_cast<T *>(ret), ::cudaFree);
 }
 
 // Small wrapper to create and manage an array of objects of type T
-// in CUDA managed memory.
+// in CUDA memory (managed or device).
 // NOTE: we need this instead of a naked unique_ptr because we want
 // to be able to default-construct for use in arrays.
-template <typename T>
+template <bool Managed, typename T>
 class scoped_cu_array
 {
-    using ptr_t = decltype(make_scoped_cu_array<T>(0));
+    using ptr_t = decltype(make_scoped_cu_array<Managed, T>(0));
 
 public:
     // Def ctor, inits to nullptr.
     scoped_cu_array() : m_ptr(nullptr, ::cudaFree) {}
     // Constructor from size.
-    explicit scoped_cu_array(std::size_t n) : m_ptr(make_scoped_cu_array<T>(n)) {}
+    explicit scoped_cu_array(std::size_t n) : m_ptr(make_scoped_cu_array<Managed, T>(n)) {}
     // Get a pointer to the start of the array.
     T *get() const
     {
@@ -78,7 +79,6 @@ private:
 };
 
 // A few CUDA API wrappers with some minimal error checking.
-
 static inline void cuda_memcpy(void *dst, const void *src, std::size_t count, ::cudaMemcpyKind kind)
 {
     if (::cudaMemcpy(dst, src, count, kind) != ::cudaSuccess) {
@@ -391,26 +391,25 @@ void cuda_acc_pot_impl(const std::array<F *, tree_nvecs_res<Q, NDim>> &out,
     // So, we can freely cast it around to unsigned and signed int as well.
     const auto ngpus = static_cast<unsigned>(split_indices.size() - 1u);
 
-    // Create the arrays in managed memory that will hold the results.
-    std::vector<arr_wrap<scoped_cu_array<F>, tree_nvecs_res<Q, NDim>>> res_arrs;
+    // Create the arrays that will hold the results. Each array is allocated on
+    // a different device.
+    std::vector<arr_wrap<scoped_cu_array<false, F>, tree_nvecs_res<Q, NDim>>> res_arrs;
     std::vector<arr_wrap<F *, tree_nvecs_res<Q, NDim>>> res_ptrs;
     for (auto i = 0u; i < ngpus; ++i) {
         typename decltype(res_arrs)::value_type tmp_arrs;
         typename decltype(res_ptrs)::value_type tmp_ptrs;
+        cuda_set_device(static_cast<int>(i));
         for (std::size_t j = 0; j < tree_nvecs_res<Q, NDim>; ++j) {
             const auto a_size = boost::numeric_cast<std::size_t>(split_indices[i + 1u] - split_indices[i]);
-            tmp_arrs.value[j] = scoped_cu_array<F>(a_size);
+            tmp_arrs.value[j] = scoped_cu_array<false, F>(a_size);
             tmp_ptrs.value[j] = tmp_arrs.value[j].get();
-            // Tell the memory subsystem that we will use device i for this chunk of memory.
-            cuda_mem_advise(tmp_ptrs.value[j], sizeof(F) * a_size, ::cudaMemAdviseSetPreferredLocation,
-                            static_cast<int>(i));
         }
         res_arrs.push_back(std::move(tmp_arrs));
         res_ptrs.push_back(std::move(tmp_ptrs));
     }
 
     // Copy over the tree data.
-    scoped_cu_array<tree_node_t<NDim, F, UInt>> tree_arr(boost::numeric_cast<std::size_t>(tree_size));
+    scoped_cu_array<true, tree_node_t<NDim, F, UInt>> tree_arr(boost::numeric_cast<std::size_t>(tree_size));
     cuda_memcpy(tree_arr.get(), tree, sizeof(tree_node_t<NDim, F, UInt>) * tree_size, ::cudaMemcpyDefault);
     const auto *tree_ptr = tree_arr.get();
     for (auto i = 0u; i < ngpus; ++i) {
@@ -420,10 +419,10 @@ void cuda_acc_pot_impl(const std::array<F *, tree_nvecs_res<Q, NDim>> &out,
     }
 
     // Copy over the particles' data.
-    arr_wrap<scoped_cu_array<F>, NDim + 1u> parts_arrs;
+    arr_wrap<scoped_cu_array<true, F>, NDim + 1u> parts_arrs;
     arr_wrap<const F *, NDim + 1u> parts_ptrs;
     for (std::size_t j = 0; j < NDim + 1u; ++j) {
-        parts_arrs.value[j] = scoped_cu_array<F>(boost::numeric_cast<std::size_t>(nparts));
+        parts_arrs.value[j] = scoped_cu_array<true, F>(boost::numeric_cast<std::size_t>(nparts));
         cuda_memcpy(parts_arrs.value[j].get(), p_parts[j], sizeof(F) * nparts, ::cudaMemcpyDefault);
         parts_ptrs.value[j] = parts_arrs.value[j].get();
         for (auto i = 0u; i < ngpus; ++i) {
@@ -432,7 +431,7 @@ void cuda_acc_pot_impl(const std::array<F *, tree_nvecs_res<Q, NDim>> &out,
     }
 
     // Copy over the codes.
-    scoped_cu_array<UInt> codes_arr(boost::numeric_cast<std::size_t>(nparts));
+    scoped_cu_array<true, UInt> codes_arr(boost::numeric_cast<std::size_t>(nparts));
     cuda_memcpy(codes_arr.get(), codes, sizeof(UInt) * nparts, ::cudaMemcpyDefault);
     const auto *codes_ptr = codes_arr.get();
     for (auto i = 0u; i < ngpus; ++i) {
