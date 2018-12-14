@@ -32,7 +32,8 @@ unsigned cuda_device_count()
 {
     int ret;
     if (::cudaGetDeviceCount(&ret) != ::cudaSuccess) {
-        throw std::runtime_error("Cannot determine the number of CUDA devices");
+        // In case of troubles, just return 0 devices.
+        return 0;
     }
     return static_cast<unsigned>(ret);
 }
