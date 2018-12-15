@@ -393,6 +393,10 @@ void cuda_acc_pot_impl(const std::array<F *, tree_nvecs_res<Q, NDim>> &out,
 
     // Create the arrays that will hold the results. Each array is allocated on
     // a different device.
+    // NOTE: perhaps down the line it turns out it's better to have this in managed
+    // memory as well, as it is used to be: performance does not seem to change,
+    // and perhaps if the out pointers are already in managed memory, we can avoid
+    // the allocations here (assuming the runtime is smart enough to understand that).
     std::vector<arr_wrap<scoped_cu_array<false, F>, tree_nvecs_res<Q, NDim>>> res_arrs;
     std::vector<arr_wrap<F *, tree_nvecs_res<Q, NDim>>> res_ptrs;
     for (auto i = 0u; i < ngpus; ++i) {
