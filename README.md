@@ -59,3 +59,36 @@ rakau has the following mandatory dependencies:
 In order to run on AMD GPUs, rakau must be compiled with the ``hcc`` compiler from the
 [ROCm toolchain](https://rocm.github.io/). Support for Nvidia GPUs requires the
 [CUDA](https://en.wikipedia.org/wiki/CUDA) software stack.
+
+rakau is written in C++17, thus a reasonably recent (and conforming) C++ compiler is required.
+GCC 7/8 and clang 6/7 are the main compilers used during development.
+
+Installation
+------------
+
+rakau uses the [CMake](https://cmake.org/) build system. The main configuration variables
+are:
+
+* ``RAKAU_BUILD_BENCHMARKS``: build the benchmark suite,
+* ``RAKAU_BUILD_TESTS``: build the test suite,
+* ``RAKAU_WITH_ROCM``: enable support for AMD GPUs via ROCm,
+* ``RAKAU_WITH_CUDA``: enable support for Nvidia GPUs via CUDA.
+
+If no GPU support is enabled, rakau is a header-only library. If support
+for AMD or Nvidia GPUs is enabled, a dynamic library will be built and installed
+in addition to the header files.
+
+rakau's build system installs a CMake config-file package which allows to easily
+find and use rakau from other CMake-based projects:
+
+```cmake
+# Locate rakau on th system.
+find_package(rakau)
+# Link rakau (and its dependencies) to an executable.
+target_link_libraries(my_executable rakau::rakau)
+```
+
+Usage
+-----
+
+
