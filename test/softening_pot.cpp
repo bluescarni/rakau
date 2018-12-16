@@ -36,7 +36,7 @@ using fp_types = std::tuple<float, double>;
 static std::mt19937 rng(2);
 
 static const std::vector<double> sp =
-#if defined(RAKAU_WITH_ROCM)
+#if defined(RAKAU_WITH_ROCM) || defined(RAKAU_WITH_CUDA)
     {0.5, 0.5}
 #else
     {}

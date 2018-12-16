@@ -353,8 +353,8 @@ void rocm_state<NDim, F, UInt>::acc_pot(int p_begin, int p_end, const std::array
 
 // Define the values/types that we will use for the concrete instantiations.
 
-// Only octrees for the moment.
-#define RAKAU_ROCM_INST_DIM_SEQUENCE (3)
+// Only quadtrees and octrees for the moment.
+#define RAKAU_ROCM_INST_DIM_SEQUENCE (2)(3)
 
 // float and double only on the gpu.
 #define RAKAU_ROCM_INST_FP_SEQUENCE (float)(double)
@@ -372,8 +372,8 @@ void rocm_state<NDim, F, UInt>::acc_pot(int p_begin, int p_end, const std::array
         acc_pot<BOOST_PP_SEQ_ELEM(3, Args)>(                                                                           \
             int, int,                                                                                                  \
             const std::array<BOOST_PP_SEQ_ELEM(1, Args) *,                                                             \
-                             tree_nvecs_res<BOOST_PP_SEQ_ELEM(3, Args), BOOST_PP_SEQ_ELEM(0, Args)>> &out,             \
-            BOOST_PP_SEQ_ELEM(1, Args) theta2, BOOST_PP_SEQ_ELEM(1, Args) G, BOOST_PP_SEQ_ELEM(1, Args) eps2) const;
+                             tree_nvecs_res<BOOST_PP_SEQ_ELEM(3, Args), BOOST_PP_SEQ_ELEM(0, Args)>> &,                \
+            BOOST_PP_SEQ_ELEM(1, Args), BOOST_PP_SEQ_ELEM(1, Args), BOOST_PP_SEQ_ELEM(1, Args)) const;
 
 // Do the actual instantiation via a cartesian product over the sequences.
 // clang-format off

@@ -8,6 +8,7 @@ include(RakauFindBoost)
 include(RakauFindThreads)
 find_package(xsimd REQUIRED)
 find_package(TBB REQUIRED)
+@_RAKAU_CONFIG_OPTIONAL_DEPS@
 # Restore the original module path.
 set(CMAKE_MODULE_PATH "${_RAKAU_CONFIG_OLD_MODULE_PATH}")
 unset(_RAKAU_CONFIG_OLD_MODULE_PATH)

@@ -110,15 +110,15 @@ inline unsigned clz(UInt n)
     [[hc]]
 #endif
 {
-    static_assert(std::is_integral_v<UInt> && std::is_unsigned_v<UInt>);
+    static_assert(std::is_integral<UInt>::value && std::is_unsigned<UInt>::value);
     assert(n);
 #if defined(__clang__) || defined(__GNUC__)
     // Implementation using GCC's and clang's builtins.
-    if constexpr (std::is_same_v<UInt, unsigned>) {
+    if (std::is_same<UInt, unsigned>::value) {
         return static_cast<unsigned>(__builtin_clz(n));
-    } else if constexpr (std::is_same_v<UInt, unsigned long>) {
+    } else if (std::is_same<UInt, unsigned long>::value) {
         return static_cast<unsigned>(__builtin_clzl(n));
-    } else if constexpr (std::is_same_v<UInt, unsigned long long>) {
+    } else if (std::is_same<UInt, unsigned long long>::value) {
         return static_cast<unsigned>(__builtin_clzll(n));
     } else {
         // In this case we are dealing with an unsigned integral type which

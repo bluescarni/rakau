@@ -19,6 +19,7 @@ option(RAKAU_BUILD_TESTS "Build unit tests." OFF)
 option(RAKAU_BUILD_BENCHMARKS "Build benchmarks." OFF)
 option(RAKAU_ENABLE_RSQRT "Enable the use of rsqrt intrinsics." ON)
 option(RAKAU_WITH_ROCM "Enable support for ROCm." OFF)
+option(RAKAU_WITH_CUDA "Enable support for CUDA." OFF)
 
 if(NOT RAKAU_ENABLE_RSQRT)
   set(RAKAU_DISABLE_RSQRT "#define RAKAU_DISABLE_RSQRT")
@@ -27,11 +28,20 @@ endif()
 include(YACMACompilerLinkerSettings)
 include(CheckCXXCompilerFlag)
 
+if(RAKAU_WITH_CUDA AND RAKAU_WITH_ROCM)
+  message(FATAL_ERROR "ROCm and CUDA support cannot be activated together.")
+endif()
+
 if(RAKAU_WITH_ROCM)
   if(NOT YACMA_COMPILER_IS_HCC)
     message(FATAL_ERROR "ROCm support requires the hcc compiler.")
   endif()
   set(RAKAU_ENABLE_ROCM "#define RAKAU_WITH_ROCM")
+endif()
+
+if(RAKAU_WITH_CUDA)
+  set(RAKAU_ENABLE_CUDA "#define RAKAU_WITH_CUDA")
+  enable_language(CUDA)
 endif()
 
 # Assemble the flags.
@@ -97,6 +107,8 @@ include(RakauFindThreads)
 # Initial setup of the rakau library.
 if(RAKAU_WITH_ROCM)
   add_library(rakau SHARED "${CMAKE_CURRENT_SOURCE_DIR}/src/rakau_rocm.cpp")
+elseif(RAKAU_WITH_CUDA)
+  add_library(rakau SHARED "${CMAKE_CURRENT_SOURCE_DIR}/src/rakau_cuda.cu")
 else()
   add_library(rakau INTERFACE)
 endif()
@@ -147,17 +159,35 @@ if(RAKAU_WITH_ROCM)
     $<INSTALL_INTERFACE:include>)
 endif()
 
+# Additional CUDA setup.
+if(RAKAU_WITH_CUDA)
+  # Visibility settings.
+  set_target_properties(rakau PROPERTIES CXX_VISIBILITY_PRESET hidden)
+  set_target_properties(rakau PROPERTIES VISIBILITY_INLINES_HIDDEN TRUE)
+
+  # Highest supported C++ version is C++14 currently.
+  target_compile_features(rakau PRIVATE cxx_std_14)
+
+  # Add the rakau includes to the private include dirs of the library.
+  target_include_directories(rakau PRIVATE
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}/include>
+    $<INSTALL_INTERFACE:include>)
+endif()
+
 # Configure config.hpp.
 configure_file("${CMAKE_CURRENT_SOURCE_DIR}/config.hpp.in" "${CMAKE_CURRENT_BINARY_DIR}/include/rakau/config.hpp" @ONLY)
 
 # Installation.
 # Setup of the export.
-if(RAKAU_WITH_ROCM)
+set(_RAKAU_CONFIG_OPTIONAL_DEPS)
+configure_file("${CMAKE_CURRENT_SOURCE_DIR}/rakau-config.cmake.in" "${CMAKE_CURRENT_BINARY_DIR}/rakau-config.cmake" @ONLY)
+if(RAKAU_WITH_ROCM OR RAKAU_WITH_CUDA)
   install(TARGETS rakau EXPORT rakau_export LIBRARY DESTINATION "lib")
 else()
   install(TARGETS rakau EXPORT rakau_export)
 endif()
-install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/rakau-config.cmake" DESTINATION "lib/cmake/rakau")
+install(FILES "${CMAKE_CURRENT_BINARY_DIR}/rakau-config.cmake" DESTINATION "lib/cmake/rakau")
 install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RakauFindBoost.cmake" DESTINATION "lib/cmake/rakau")
 install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/cmake/FindTBB.cmake" DESTINATION "lib/cmake/rakau")
 install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RakauFindThreads.cmake" DESTINATION "lib/cmake/rakau")
@@ -167,6 +197,7 @@ include(CMakePackageConfigHelpers)
 write_basic_package_version_file("${CMAKE_CURRENT_BINARY_DIR}/rakau-config-version.cmake" VERSION ${rakau_VERSION}
 	COMPATIBILITY SameMajorVersion)
 install(FILES "${CMAKE_CURRENT_BINARY_DIR}/rakau-config-version.cmake" DESTINATION "lib/cmake/rakau")
+unset(_RAKAU_CONFIG_OPTIONAL_DEPS)
 
 # Installation of the header files.
 install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/include/rakau" DESTINATION include)
