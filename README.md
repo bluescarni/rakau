@@ -39,12 +39,14 @@ The Barnes-Hut theta parameter is set to 0.75, the computation is done in single
 | 2 x Intel Xeon Gold 6148 (AVX-512) | CPU (40 cores + SMT) | GCC 8 | 83 ms |
 | 2 x Intel Xeon E5-2698 (AVX2) | CPU (40 cores) | GCC 7 | 136 ms |
 | AMD Ryzen 1700 (AVX2) | CPU (8 cores + SMT) | GCC 8 | 592 ms |
+| AMD Ryzen 1700 (AVX2) | CPU (8 cores + SMT) | HCC 1.9 | 700 ms |
 | AMD Radeon RX 570 | GPU (Polaris) | HCC 1.9 | 256 ms |
+| Ryzen 1700 + RX 570 | CPU+GPU | HCC 1.9 | 196 ms |
 | Nvidia GeForce GTX 1080 Ti | GPU (Pascal) | NVCC | 140 ms |
 | Nvidia V100 | GPU (Volta) | NVCC | 95 ms |
 | Intel Core i7-3610QM (AVX) | CPU (4 cores + SMT) | GCC 8 | 1530 ms |
 | Nvidia GeForce GT 650M | GPU (Kepler) | NVCC | 3135 ms |
-| i7-3610QM + GT 650M | GPU+CPU | GCC 8 + NVCC | 1130 ms |
+| i7-3610QM + GT 650M | CPU+GPU | GCC 8 + NVCC | 1130 ms |
 
 Dependencies
 ------------
