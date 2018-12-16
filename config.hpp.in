@@ -20,4 +20,13 @@
 // clang-format on
 // End of defines instantiated by CMake.
 
+// NOTE: at this time, it looks like we cannot link a ROCm-enabled
+// librakau to code which has not been compiled with hcc. Thus, force
+// for now the use of hcc if ROCm is enabled.
+#if defined(RAKAU_WITH_ROCM) && !defined(__HCC__)
+
+#error The hcc compiler must be used when rakau is configured with support for ROCm
+
+#endif
+
 #endif
