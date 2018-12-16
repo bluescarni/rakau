@@ -56,7 +56,7 @@ rakau has the following mandatory dependencies:
 * the [Boost libraries](https://www.boost.org) (the header-only parts are sufficient,
   apart from the benchmark suite which needs the compiled Boost.Program_options library).
 
-In order to run on AMD GPUs, rakau must be compiled with the ``hcc`` compiler from the
+In order to run on AMD GPUs, rakau must be compiled with the HCC compiler from the
 [ROCm toolchain](https://rocm.github.io/). Support for Nvidia GPUs requires the
 [CUDA](https://en.wikipedia.org/wiki/CUDA) software stack.
 
