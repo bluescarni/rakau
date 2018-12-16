@@ -39,11 +39,11 @@ The Barnes-Hut theta parameter is set to 0.75, the computation is done in single
 | 2 x Intel Xeon Gold 6148 (AVX-512) | CPU (40 cores + SMT) | 83 ms |
 | 2 x Intel Xeon E5-2698 (AVX2) | CPU (40 cores) | 136 ms |
 | AMD Ryzen 1700 (AVX2) | CPU (8 cores + SMT) | 592 ms |
-| AMD Radeon RX 570 | GPU | 256 ms |
-| Nvidia GeForce GTX 1080 Ti | GPU | 140 ms |
-| Nvidia V100 | GPU | 95 ms |
+| AMD Radeon RX 570 | GPU (GCN Polaris) | 256 ms |
+| Nvidia GeForce GTX 1080 Ti | GPU (Pascal) | 140 ms |
+| Nvidia V100 | GPU (Volta) | 95 ms |
 | Intel Core i7-3610QM (AVX) | CPU (4 cores + SMT) | 1530 ms |
-| Nvidia GeForce GT 650M | GPU | 3135 ms |
+| Nvidia GeForce GT 650M | GPU (Kepler) | 3135 ms |
 | i7-3610QM + GT 650M | GPU+CPU | 1130 ms |
 
 Dependencies
@@ -82,7 +82,7 @@ rakau's build system installs a CMake config-file package which allows to easily
 find and use rakau from other CMake-based projects:
 
 ```cmake
-# Locate rakau on th system.
+# Locate rakau on the system.
 find_package(rakau)
 # Link rakau (and its dependencies) to an executable.
 target_link_libraries(my_executable rakau::rakau)
