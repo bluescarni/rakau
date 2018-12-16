@@ -12,7 +12,7 @@ The core of the library is a high-performance implementation of the
 [Barnes-Hut tree algorithm](https://en.wikipedia.org/wiki/Barnes%E2%80%93Hut_simulation), capable of
 taking advantage of modern heterogeneous hardware architectures. Specifically, rakau can run on:
 
-* multicore CPUs, where it takes advantage of both multithreading and vector instructions,
+* multicore CPUs, where it takes advantage of both multithreading and [SIMD](https://en.wikipedia.org/wiki/SIMD) instructions,
 * AMD GPUs, via [ROCm](https://rocm.github.io/),
 * Nvidia GPUs, via [CUDA](https://en.wikipedia.org/wiki/CUDA).
 
@@ -30,9 +30,10 @@ construction).
 Performance
 -----------
 
-The following table lists the wall runtime, for various hardware configurations, for a complete tree traversal
-on a system of 4 million particles distributed according to the [Plummer model](https://en.wikipedia.org/wiki/Plummer_model).
-The Barnes-Hut theta parameter is set to 0.75, the computation is done in single precision.
+The following table lists the runtime for the computation of the gravitational accelerations
+in a system of 4 million particles distributed according to the [Plummer model](https://en.wikipedia.org/wiki/Plummer_model).
+Various hardware configurations are tested. The Barnes-Hut theta parameter is set to 0.75,
+the computation is done in single precision.
 
 | Hardware | Type | Compiler | Runtime |
 | :------- | :--- | :------- | ------: |
@@ -47,6 +48,35 @@ The Barnes-Hut theta parameter is set to 0.75, the computation is done in single
 | Intel Core i7-3610QM (AVX) | CPU (4 cores + SMT) | GCC 8 | 1530 ms |
 | Nvidia GeForce GT 650M | GPU (Kepler) | NVCC | 3135 ms |
 | i7-3610QM + GT 650M | CPU+GPU | GCC 8 + NVCC | 1130 ms |
+
+Features
+--------
+
+Current:
+
+* single and double precision<sup>1</sup>,
+* 2D and 3D<sup>2</sup>,
+* computation of accelerations and/or potentials,
+* highly configurable tree structure,
+* ergonomic API based on modern C++ idioms.
+
+Planned:
+
+* higher multipole moments,
+* wider selection of MACs (multipole acceptance criteria),
+* support for integration schemes based on hierarchical timesteps,
+* better support for multi-GPU setups<sup>3</sup>,
+* Python interface.
+
+<sup>1</sup>``long double`` is supported as well,
+but it is available only on the CPU and there's no SIMD support for extended precision
+on any architecture at this time.
+
+<sup>2</sup>The 2D CPU codepaths have not beem SIMDified yet.
+
+<sup>3</sup>Multi-GPU support is available on CUDA (and potentially ROCm,
+if I can get my hands on a multi-GPU ROCm machine), but it currently exhibits poor
+scaling properties.
 
 Dependencies
 ------------
@@ -81,11 +111,12 @@ for AMD or Nvidia GPUs is enabled, a dynamic library will be built and installed
 in addition to the header files.
 
 rakau's build system installs a CMake config-file package which allows to easily
-find and use rakau from other CMake-based projects:
+find and use rakau from other CMake-based projects. A minimal example:
 
 ```cmake
 # Locate rakau on the system.
 find_package(rakau)
+
 # Link rakau (and its dependencies) to an executable.
 target_link_libraries(my_executable rakau::rakau)
 ```
@@ -93,4 +124,29 @@ target_link_libraries(my_executable rakau::rakau)
 Usage
 -----
 
+```c++
+#include <array>
+#include <initializer_list>
+#include <vector>
 
+#include <rakau/tree.hpp>
+
+using namespace rakau;
+
+int main()
+{
+    // Generate some particles in 3D.
+    std::vector<float> x_coords = {1, 2, 3};
+    std::vector<float> y_coords = {4, 5, 6};
+    std::vector<float> z_coords = {7, 8, 9};
+
+    // Create an octree from the vectors of particle coordinates.
+    octree<float> t{{x_coords, y_coords, z_coords}};
+
+    // Prepare output vectors for the accelerations.
+    std::array<std::vector<float>, 3> accs;
+
+    // Compute the accelerations with a theta parameter of 0.4.
+    t.accs_u(accs, 0.4f);
+}
+```
