@@ -32,14 +32,14 @@ Performance
 
 The following table lists the wall runtime, for various hardware configurations, for a complete tree traversal
 on a system of 4 million particles distributed according to the [Plummer model](https://en.wikipedia.org/wiki/Plummer_model).
-The Barnes-Hut theta parameter is set to 0.75, the computation is done in single-precision.
+The Barnes-Hut theta parameter is set to 0.75, the computation is done in single precision.
 
 | Hardware | Type | Runtime |
 | :------- | :--- | ------: |
 | 2 x Intel Xeon Gold 6148 (AVX-512) | CPU (40 cores + SMT) | 83 ms |
 | 2 x Intel Xeon E5-2698 (AVX2) | CPU (40 cores) | 136 ms |
 | AMD Ryzen 1700 (AVX2) | CPU (8 cores + SMT) | 592 ms |
-| AMD Radeon RX 570 | GPU (GCN Polaris) | 256 ms |
+| AMD Radeon RX 570 | GPU (Polaris) | 256 ms |
 | Nvidia GeForce GTX 1080 Ti | GPU (Pascal) | 140 ms |
 | Nvidia V100 | GPU (Volta) | 95 ms |
 | Intel Core i7-3610QM (AVX) | CPU (4 cores + SMT) | 1530 ms |
