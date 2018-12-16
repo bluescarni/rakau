@@ -24,7 +24,7 @@ At the present time, rakau can accelerate on GPUs the tree traversal part of the
 During tree traversal, the CPU and the GPU can be used concurrently, and the user is free to choose
 (depending on the available hardware) how to split the computation between CPU and GPU.
 
-Work is ongoing to accelerate other parts of the Barnes-Hut algorithm on GPUs (most notably, tree
+Work is ongoing to accelerate on GPUs other parts of the Barnes-Hut algorithm (most notably, tree
 construction).
 
 Performance
@@ -36,9 +36,12 @@ The Barnes-Hut theta parameter is set to 0.75, the computation is done in single
 
 | Hardware | Type | Runtime |
 | :------- | :--- | ------: |
-| 2 x Xeon Gold 6148 (AVX-512) | CPU (40 cores + SMT) | 83 ms |
-| 2 x Xeon E5-2698 (AVX2) | CPU (40 cores) | 136 ms |
-| Ryzen 1700 (AVX2) | CPU (8 cores + SMT) | 592 ms |
+| 2 x Intel Xeon Gold 6148 (AVX-512) | CPU (40 cores + SMT) | 83 ms |
+| 2 x Intel Xeon E5-2698 (AVX2) | CPU (40 cores) | 136 ms |
+| AMD Ryzen 1700 (AVX2) | CPU (8 cores + SMT) | 592 ms |
 | AMD Radeon RX 570 | GPU | 256 ms |
 | Nvidia GTX 1080 Ti | GPU | 140 ms |
 | Nvidia V100 | GPU | 95 ms |
+| Intel Core i7-3610QM (AVX) | CPU (4 cores + SMT) | 1530 ms |
+| Nvidia GeForce GT 650M | GPU | 3135 ms |
+| i7-3610QM + GT 650M | GPU+CPU | 1130 ms |
