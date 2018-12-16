@@ -40,8 +40,22 @@ The Barnes-Hut theta parameter is set to 0.75, the computation is done in single
 | 2 x Intel Xeon E5-2698 (AVX2) | CPU (40 cores) | 136 ms |
 | AMD Ryzen 1700 (AVX2) | CPU (8 cores + SMT) | 592 ms |
 | AMD Radeon RX 570 | GPU | 256 ms |
-| Nvidia GTX 1080 Ti | GPU | 140 ms |
+| Nvidia GeForce GTX 1080 Ti | GPU | 140 ms |
 | Nvidia V100 | GPU | 95 ms |
 | Intel Core i7-3610QM (AVX) | CPU (4 cores + SMT) | 1530 ms |
 | Nvidia GeForce GT 650M | GPU | 3135 ms |
 | i7-3610QM + GT 650M | GPU+CPU | 1130 ms |
+
+Dependencies
+------------
+
+rakau has the following mandatory dependencies:
+
+* the [TBB library](https://www.threadingbuildingblocks.org/),
+* the [xsimd library](https://github.com/QuantStack/xsimd),
+* the [Boost libraries](https://www.boost.org) (the header-only parts are sufficient,
+  apart from the benchmark suite which needs the compiled Boost.Program_options library).
+
+In order to run on AMD GPUs, rakau must be compiled with the ``hcc`` compiler from the
+[ROCm toolchain](https://rocm.github.io/). Support for Nvidia GPUs requires the
+[CUDA](https://en.wikipedia.org/wiki/CUDA) software stack.
