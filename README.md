@@ -31,7 +31,8 @@ Performance
 -----------
 
 The following table lists the runtime for the computation of the gravitational accelerations
-in a system of 4 million particles distributed according to the [Plummer model](https://en.wikipedia.org/wiki/Plummer_model).
+(i.e., the tree traversal part of the Barnes-Hut algorithm) in a system of 4 million particles
+distributed according to the [Plummer model](https://en.wikipedia.org/wiki/Plummer_model).
 Various hardware configurations are tested. The Barnes-Hut theta parameter is set to 0.75,
 the computation is done in single precision.
 
