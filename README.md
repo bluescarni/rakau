@@ -124,6 +124,15 @@ target_link_libraries(my_executable rakau::rakau)
 Usage
 -----
 
+rakau's usual workflow involves two basic operations:
+
+* the construction of the tree structure from a distribution of
+  particles in space,
+* the traversal of the tree structure for the computation of the
+  gravitational accelerations/potentials on the particles.
+
+A minimal example:
+
 ```c++
 #include <array>
 #include <initializer_list>
@@ -136,9 +145,7 @@ using namespace rakau;
 int main()
 {
     // Generate some particles in 3D.
-    std::vector<float> x_coords = {1, 2, 3};
-    std::vector<float> y_coords = {4, 5, 6};
-    std::vector<float> z_coords = {7, 8, 9};
+    std::vector<float> x_coords = {1, 2, 3}, y_coords = {4, 5, 6}, z_coords = {7, 8, 9};
 
     // Create an octree from the vectors of particle coordinates.
     octree<float> t{{x_coords, y_coords, z_coords}};
@@ -150,3 +157,13 @@ int main()
     t.accs_u(accs, 0.4f);
 }
 ```
+
+More examples and details are available in the user guide (TODO).
+
+Acknowledgements
+----------------
+
+The development of rakau was in part supported by the German
+Deutsche Forschungsgemeinschaft (DFG) priority program 1833, "Building a Habitable Earth".
+
+![SP1833](https://github.com/bluescarni/igor/raw/master/sp1833.png)
