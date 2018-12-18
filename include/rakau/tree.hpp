@@ -976,21 +976,25 @@ private:
                                       + ") is too large, and it results in an overflow condition");
         }
     }
-    void compute_node_properties(node_type &node)
+    // Compute a node's properties (which will be written into the node itself).
+    // NOTE: SIMDification at this time does not seem to provide
+    // much benefit, but it might come handy when we introduce higher
+    // multipole moments.
+    void compute_node_properties(node_type &node) const
     {
+        assert(node.end > node.begin);
         // Get the indices and the size for the current node.
-        const auto begin = node.begin, end = node.end;
-        assert(end > begin);
-        const auto size = end - begin;
+        const auto begin = node.begin, end = node.end, size = static_cast<size_type>(end - begin);
 
         // Pointers to the coords/masses for this node.
         std::array<const F *, NDim> c_ptrs;
         for (std::size_t j = 0; j < NDim; ++j) {
             c_ptrs[j] = m_parts[j].data() + begin;
         }
-        auto m_ptr = m_parts[NDim].data() + begin;
+        const auto m_ptr = m_parts[NDim].data() + begin;
 
         // Scalar accumulators for total mass and com position.
+        // Make sure to init com_pos to an array of zeroes.
         F tot_mass(0), com_pos[NDim]{};
 
         size_type i = 0;
@@ -1043,7 +1047,9 @@ private:
         }
 
         // Copy over the compute com and its mass.
-        std::copy(com_pos, com_pos + NDim, node.props);
+        for (std::size_t j = 0; j < NDim; ++j) {
+            node.props[j] = com_pos[j];
+        }
         node.props[NDim] = tot_mass;
     }
     // Discretize the coordinates of the particle at index idx. The result will
