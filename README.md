@@ -166,4 +166,4 @@ Acknowledgements
 The development of rakau was in part supported by the German
 Deutsche Forschungsgemeinschaft (DFG) priority program 1833, "Building a Habitable Earth".
 
-![SP1833](https://github.com/bluescarni/igor/raw/master/sp1833.png)
+![SP1833](https://github.com/bluescarni/rakau/raw/master/sp1833.png | width=100)
