@@ -1046,7 +1046,7 @@ private:
             }
         }
 
-        // Copy over the compute com and its mass.
+        // Copy over to the node.
         for (std::size_t j = 0; j < NDim; ++j) {
             node.props[j] = com_pos[j];
         }
