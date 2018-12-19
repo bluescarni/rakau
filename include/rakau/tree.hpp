@@ -976,36 +976,80 @@ private:
                                       + ") is too large, and it results in an overflow condition");
         }
     }
-    void compute_node_properties(node_type &node)
+    // Compute a node's properties (which will be written into the node itself).
+    // NOTE: SIMDification at this time does not seem to provide
+    // much benefit, but it might come handy when we introduce higher
+    // multipole moments.
+    void compute_node_properties(node_type &node) const
     {
+        assert(node.end > node.begin);
         // Get the indices and the size for the current node.
-        const auto begin = node.begin, end = node.end;
-        assert(end > begin);
-        const auto size = end - begin;
-        // Compute the total mass.
-        const auto tot_mass = std::accumulate(m_parts[NDim].data() + begin, m_parts[NDim].data() + end, F(0));
-        if (tot_mass == F(0)) {
-            // If the total mass of the node is zero, it does not have a COM.
-            // Use the geometrical centre in its stead.
-            F centre[NDim];
-            // Compute the centre.
-            node_centre(centre, node.code, m_box_size);
-            // Copy over.
-            std::copy(centre, centre + NDim, node.props);
-        } else {
-            // Compute the COM for the coordinates.
-            const auto inv_tot_mass = F(1) / tot_mass;
-            const auto m_ptr = m_parts[NDim].data() + begin;
+        const auto begin = node.begin, end = node.end, size = static_cast<size_type>(end - begin);
+
+        // Pointers to the coords/masses for this node.
+        std::array<const F *, NDim> c_ptrs;
+        for (std::size_t j = 0; j < NDim; ++j) {
+            c_ptrs[j] = m_parts[j].data() + begin;
+        }
+        const auto m_ptr = m_parts[NDim].data() + begin;
+
+        // Scalar accumulators for total mass and com position.
+        // Make sure to init com_pos to an array of zeroes.
+        F tot_mass(0), com_pos[NDim]{};
+
+        size_type i = 0;
+        if constexpr (simd_enabled && NDim == 3u) {
+            using batch_type = xsimd::simd_type<F>;
+            constexpr auto batch_size = batch_type::size;
+            const size_type vec_size = size - size % batch_size;
+
+            // Get out pointers to the coords.
+            auto [x_ptr, y_ptr, z_ptr] = c_ptrs;
+
+            // Init the vector accumulators.
+            batch_type tot_mass_vec(F(0)), com_pos_x_vec(F(0)), com_pos_y_vec(F(0)), com_pos_z_vec(F(0));
+
+            for (; i < vec_size; i += batch_size) {
+                // Load the mass.
+                const auto mass_vec = xsimd::load_unaligned(m_ptr + i);
+
+                // Update the accumulators.
+                tot_mass_vec += mass_vec;
+                com_pos_x_vec = xsimd_fma(mass_vec, xsimd::load_unaligned(x_ptr + i), com_pos_x_vec);
+                com_pos_y_vec = xsimd_fma(mass_vec, xsimd::load_unaligned(y_ptr + i), com_pos_y_vec);
+                com_pos_z_vec = xsimd_fma(mass_vec, xsimd::load_unaligned(z_ptr + i), com_pos_z_vec);
+            }
+
+            // Flatten the vectors into the scalar accumulators.
+            tot_mass = xsimd::hadd(tot_mass_vec);
+            com_pos[0] = xsimd::hadd(com_pos_x_vec);
+            com_pos[1] = xsimd::hadd(com_pos_y_vec);
+            com_pos[2] = xsimd::hadd(com_pos_z_vec);
+        }
+        for (; i < size; ++i) {
+            const auto mass = m_ptr[i];
+            tot_mass += mass;
             for (std::size_t j = 0; j < NDim; ++j) {
-                F acc(0);
-                auto c_ptr = m_parts[j].data() + begin;
-                for (std::remove_const_t<decltype(size)> k = 0; k < size; ++k) {
-                    acc = fma_wrap(m_ptr[k], c_ptr[k], acc);
-                }
-                node.props[j] = acc * inv_tot_mass;
+                com_pos[j] = fma_wrap(mass, c_ptrs[j][i], com_pos[j]);
             }
         }
-        // Store the total mass.
+
+        if (tot_mass == F(0)) {
+            // If the total mass of the node is zero, it does not have a com.
+            // Use the geometrical centre in its stead.
+            node_centre(com_pos, node.code, m_box_size);
+        } else {
+            // Otherwise, divide by the total mass to get the com.
+            const auto inv_tot_mass = F(1) / tot_mass;
+            for (std::size_t j = 0; j < NDim; ++j) {
+                com_pos[j] *= inv_tot_mass;
+            }
+        }
+
+        // Copy over to the node.
+        for (std::size_t j = 0; j < NDim; ++j) {
+            node.props[j] = com_pos[j];
+        }
         node.props[NDim] = tot_mass;
     }
     // Discretize the coordinates of the particle at index idx. The result will
