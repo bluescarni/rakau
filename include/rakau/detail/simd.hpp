@@ -134,67 +134,63 @@ struct simd_traits<xsimd::batch<T, N>> {
     static constexpr auto size = N;
 };
 
-// Create an array of batches of type B containing all zeroes.
-template <typename B, std::size_t... I>
-inline auto batches_zero_impl(const std::index_sequence<I...> &)
+// Machinery for the implementation of the functions below. This
+// is a way of using index_sequence with variadic lambdas. See:
+// http://aherrmann.github.io/programming/2016/02/28/unpacking-tuples-in-cpp14/
+template <typename F, std::size_t... I>
+constexpr auto index_apply_impl(const F &f, const std::index_sequence<I...> &)
 {
-    using scalar_t = typename simd_traits<B>::scalar_type;
-    return std::array{(void(I), B(scalar_t(0)))...};
+    return f(std::integral_constant<std::size_t, I>{}...);
 }
 
+template <std::size_t N, typename F>
+constexpr auto index_apply(const F &f)
+{
+    return index_apply_impl(f, std::make_index_sequence<N>{});
+}
+
+// Create an array of batches of type B containing all zeroes.
 template <typename B, std::size_t N>
 inline auto batches_zero()
 {
-    return batches_zero_impl<B>(std::make_index_sequence<N>{});
+    return index_apply<N>([](auto... I) {
+        using scalar_t = typename simd_traits<B>::scalar_type;
+        return std::array{(void(I), B(scalar_t(0)))...};
+    });
 }
 
 // Create an array of batches loading data from the input pointers. The batch type
 // will be the default one for the type T. Aligned specifies whether
 // the pointers point to aligned memory or not. An optional offset will
 // be added to the pointers.
-template <bool Aligned, typename T, std::size_t N, std::size_t... I>
-inline auto batches_load_impl(const std::array<T *, N> &ptrs, std::size_t offset, const std::index_sequence<I...> &)
-{
-    if constexpr (Aligned) {
-        return std::array{xsimd::load_aligned(std::get<I>(ptrs) + offset)...};
-    } else {
-        return std::array{xsimd::load_unaligned(std::get<I>(ptrs) + offset)...};
-    }
-}
-
 template <bool Aligned, typename T, std::size_t N>
 inline auto batches_load(const std::array<T *, N> &ptrs, std::size_t offset = 0)
 {
-    return batches_load_impl<Aligned>(ptrs, offset, std::make_index_sequence<N>{});
+    return index_apply<N>([&ptrs, offset](auto... I) {
+        if constexpr (Aligned) {
+            return std::array{xsimd::load_aligned(std::get<I>(ptrs) + offset)...};
+        } else {
+            return std::array{xsimd::load_unaligned(std::get<I>(ptrs) + offset)...};
+        }
+    });
 }
 
 // Store the data in the input batches at the addresses specified by ptrs.
 // Aligned specifies whether the pointers point to aligned memory or not. An optional offset will
 // be added to the pointers.
-template <bool Aligned, typename B, typename T, std::size_t N, std::size_t... I>
-inline void batches_store_impl(const std::array<B, N> &batches, const std::array<T *, N> &ptrs, std::size_t offset,
-                               const std::index_sequence<I...> &)
-{
-    if constexpr (Aligned) {
-        ((std::get<I>(batches).store_aligned(std::get<I>(ptrs) + offset)), ...);
-    } else {
-        ((std::get<I>(batches).store_unaligned(std::get<I>(ptrs) + offset)), ...);
-    }
-}
-
 template <bool Aligned, typename B, typename T, std::size_t N>
 inline void batches_store(const std::array<B, N> &batches, const std::array<T *, N> &ptrs, std::size_t offset = 0)
 {
-    batches_store_impl<Aligned>(batches, ptrs, offset, std::make_index_sequence<N>{});
+    index_apply<N>([&batches, &ptrs, offset](auto... I) {
+        if constexpr (Aligned) {
+            ((std::get<I>(batches).store_aligned(std::get<I>(ptrs) + offset)), ...);
+        } else {
+            ((std::get<I>(batches).store_unaligned(std::get<I>(ptrs) + offset)), ...);
+        }
+    });
 }
 
 // Compute the square of the softened l2 norm of a.
-template <typename B, std::size_t N, std::size_t... I>
-inline auto batches_softened_norm2_impl(const std::array<B, N> &a, const B &eps2, const std::index_sequence<I...> &)
-{
-    return ((std::get<I>(a) * std::get<I>(a)) + ... + (xsimd_fma(std::get<N - 1u>(a), std::get<N - 1u>(a), eps2)));
-}
-
 template <typename B, std::size_t N>
 inline auto batches_softened_norm2(const std::array<B, N> &a, const B &eps2)
 {
@@ -202,7 +198,9 @@ inline auto batches_softened_norm2(const std::array<B, N> &a, const B &eps2)
     // The last element will instead be used for init in conjunction with
     // an FMA operation.
     static_assert(N > 0u);
-    return batches_softened_norm2_impl(a, eps2, std::make_index_sequence<N - 1u>{});
+    return index_apply<N - 1u>([&a, &eps2](auto... I) {
+        return ((std::get<I>(a) * std::get<I>(a)) + ... + (xsimd_fma(std::get<N - 1u>(a), std::get<N - 1u>(a), eps2)));
+    });
 }
 
 // Small variable template helper to establish if a fast implementation
