@@ -9,7 +9,9 @@
 #ifndef RAKAU_DETAIL_SIMD_HPP
 #define RAKAU_DETAIL_SIMD_HPP
 
+#include <array>
 #include <atomic>
+#include <cstddef>
 #include <type_traits>
 
 #include <xsimd/xsimd.hpp>
@@ -120,6 +122,88 @@ inline xsimd::batch<float, 8> inv_sqrt_3(xsimd::batch<float, 8> x)
 }
 
 #endif
+
+// Minimal traits class for xsimd batches.
+template <typename T>
+struct simd_traits {
+};
+
+template <typename T, std::size_t N>
+struct simd_traits<xsimd::batch<T, N>> {
+    using scalar_type = T;
+    static constexpr auto size = N;
+};
+
+// Create an array of batches of type B containing all zeroes.
+template <typename B, std::size_t... I>
+inline auto batches_zero_impl(const std::index_sequence<I...> &)
+{
+    using scalar_t = typename simd_traits<B>::scalar_type;
+    return std::array{(void(I), B(scalar_t(0)))...};
+}
+
+template <typename B, std::size_t N>
+inline auto batches_zero()
+{
+    return batches_zero_impl<B>(std::make_index_sequence<N>{});
+}
+
+// Create an array of batches loading data from the input pointers. The batch type
+// will be the default one for the type T. Aligned specifies whether
+// the pointers point to aligned memory or not. An optional offset will
+// be added to the pointers.
+template <bool Aligned, typename T, std::size_t N, std::size_t... I>
+inline auto batches_load_impl(const std::array<T *, N> &ptrs, std::size_t offset, const std::index_sequence<I...> &)
+{
+    if constexpr (Aligned) {
+        return std::array{xsimd::load_aligned(std::get<I>(ptrs) + offset)...};
+    } else {
+        return std::array{xsimd::load_unaligned(std::get<I>(ptrs) + offset)...};
+    }
+}
+
+template <bool Aligned, typename T, std::size_t N>
+inline auto batches_load(const std::array<T *, N> &ptrs, std::size_t offset = 0)
+{
+    return batches_load_impl<Aligned>(ptrs, offset, std::make_index_sequence<N>{});
+}
+
+// Store the data in the input batches at the addresses specified by ptrs.
+// Aligned specifies whether the pointers point to aligned memory or not. An optional offset will
+// be added to the pointers.
+template <bool Aligned, typename B, typename T, std::size_t N, std::size_t... I>
+inline void batches_store_impl(const std::array<B, N> &batches, const std::array<T *, N> &ptrs, std::size_t offset,
+                               const std::index_sequence<I...> &)
+{
+    if constexpr (Aligned) {
+        ((std::get<I>(batches).store_aligned(std::get<I>(ptrs) + offset)), ...);
+    } else {
+        ((std::get<I>(batches).store_unaligned(std::get<I>(ptrs) + offset)), ...);
+    }
+}
+
+template <bool Aligned, typename B, typename T, std::size_t N>
+inline void batches_store(const std::array<B, N> &batches, const std::array<T *, N> &ptrs, std::size_t offset = 0)
+{
+    batches_store_impl<Aligned>(batches, ptrs, offset, std::make_index_sequence<N>{});
+}
+
+// Compute the square of the softened l2 norm of a.
+template <typename B, std::size_t N, std::size_t... I>
+inline auto batches_softened_norm2_impl(const std::array<B, N> &a, const B &eps2, const std::index_sequence<I...> &)
+{
+    return ((std::get<I>(a) * std::get<I>(a)) + ... + (xsimd_fma(std::get<N - 1u>(a), std::get<N - 1u>(a), eps2)));
+}
+
+template <typename B, std::size_t N>
+inline auto batches_softened_norm2(const std::array<B, N> &a, const B &eps2)
+{
+    // NOTE: we will skip iterating over the last element of the array.
+    // The last element will instead be used for init in conjunction with
+    // an FMA operation.
+    static_assert(N > 0u);
+    return batches_softened_norm2_impl(a, eps2, std::make_index_sequence<N - 1u>{});
+}
 
 // Small variable template helper to establish if a fast implementation
 // of the inverse sqrt for an xsimd batch of type B is available.
