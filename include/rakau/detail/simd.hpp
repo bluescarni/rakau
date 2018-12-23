@@ -138,13 +138,13 @@ struct simd_traits<xsimd::batch<T, N>> {
 // is a way of using index_sequence with variadic lambdas. See:
 // http://aherrmann.github.io/programming/2016/02/28/unpacking-tuples-in-cpp14/
 template <typename F, std::size_t... I>
-constexpr auto index_apply_impl(const F &f, const std::index_sequence<I...> &)
+inline auto index_apply_impl(const F &f, const std::index_sequence<I...> &)
 {
     return f(std::integral_constant<std::size_t, I>{}...);
 }
 
 template <std::size_t N, typename F>
-constexpr auto index_apply(const F &f)
+inline auto index_apply(const F &f)
 {
     return index_apply_impl(f, std::make_index_sequence<N>{});
 }
