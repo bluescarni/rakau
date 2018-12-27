@@ -1231,10 +1231,10 @@ private:
 
         // NOTE: these ensure that, from now on, we can just cast
         // freely between the size types of the masses/coords and codes/indices vectors.
-        m_codes.resize(boost::numeric_cast<decltype(m_codes.size())>(nparts()));
-        m_perm.resize(boost::numeric_cast<decltype(m_perm.size())>(nparts()));
-        m_last_perm.resize(boost::numeric_cast<decltype(m_last_perm.size())>(nparts()));
-        m_inv_perm.resize(boost::numeric_cast<decltype(m_inv_perm.size())>(nparts()));
+        m_codes.resize(boost::numeric_cast<decltype(m_codes.size())>(N));
+        m_perm.resize(boost::numeric_cast<decltype(m_perm.size())>(N));
+        m_last_perm.resize(boost::numeric_cast<decltype(m_last_perm.size())>(N));
+        m_inv_perm.resize(boost::numeric_cast<decltype(m_inv_perm.size())>(N));
 
         {
             simple_timer st_m("data movement");
@@ -1261,7 +1261,7 @@ private:
                 }
             }
             // Generate the initial m_perm data (this is just a iota).
-            tbb::parallel_for(tbb::blocked_range(size_type(0), nparts(), boost::numeric_cast<size_type>(data_chunking)),
+            tbb::parallel_for(tbb::blocked_range(size_type(0), N, boost::numeric_cast<size_type>(data_chunking)),
                               [this](const auto &range) {
                                   std::iota(m_perm.data() + range.begin(), m_perm.data() + range.end(), range.begin());
                               },
@@ -1270,14 +1270,14 @@ private:
 
         // Deduce the box size, if needed.
         if (m_box_size_deduced) {
-            // NOTE: this function works ok if nparts() == 0.
-            m_box_size = determine_box_size(p_its_u(), nparts());
+            // NOTE: this function works ok if N == 0.
+            m_box_size = determine_box_size(p_its_u(), N);
         }
 
         {
             // Do the Morton encoding.
             simple_timer st_m("morton encoding");
-            tbb::parallel_for(tbb::blocked_range(size_type(0), nparts()), [this](const auto &range) {
+            tbb::parallel_for(tbb::blocked_range(size_type(0), N), [this](const auto &range) {
                 // Temporary structure used in the encoding.
                 std::array<UInt, NDim> tmp_dcoord;
                 // The encoder object.
@@ -1311,7 +1311,7 @@ private:
             // Copy over m_perm to m_last_perm.
             tg.run([this]() {
                 tbb::parallel_for(
-                    tbb::blocked_range(size_type(0), nparts(), boost::numeric_cast<size_type>(data_chunking)),
+                    tbb::blocked_range(size_type(0), N, boost::numeric_cast<size_type>(data_chunking)),
                     [this](const auto &range) {
                         std::copy(m_perm.data() + range.begin(), m_perm.data() + range.end(),
                                   m_last_perm.data() + range.begin());
@@ -1321,7 +1321,7 @@ private:
             tg.wait();
         }
         // Now let's proceed to the tree construction.
-        // NOTE: this function works ok if nparts() == 0.
+        // NOTE: this function works ok if N == 0.
         build_tree();
     }
     // ROCm init/reset functions. If ROCm is not enabled, they will be empty.
