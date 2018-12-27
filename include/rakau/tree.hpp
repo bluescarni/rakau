@@ -1309,14 +1309,13 @@ private:
             // Establish the inverse permutation vector.
             tg.run([this]() { perm_to_inv_perm(); });
             // Copy over m_perm to m_last_perm.
-            tg.run([this]() {
-                tbb::parallel_for(
-                    tbb::blocked_range(size_type(0), N, boost::numeric_cast<size_type>(data_chunking)),
-                    [this](const auto &range) {
-                        std::copy(m_perm.data() + range.begin(), m_perm.data() + range.end(),
-                                  m_last_perm.data() + range.begin());
-                    },
-                    tbb::simple_partitioner());
+            tg.run([this, N]() {
+                tbb::parallel_for(tbb::blocked_range(size_type(0), N, boost::numeric_cast<size_type>(data_chunking)),
+                                  [this](const auto &range) {
+                                      std::copy(m_perm.data() + range.begin(), m_perm.data() + range.end(),
+                                                m_last_perm.data() + range.begin());
+                                  },
+                                  tbb::simple_partitioner());
             });
             tg.wait();
         }
