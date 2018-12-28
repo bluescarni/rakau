@@ -1234,12 +1234,20 @@ private:
             }
         }
 
+        // Read the actual number of particles.
+        // This could be different from N in case we moved
+        // data above. Also, we need to call and store the
+        // result of nparts() here because below we will be touching
+        // m_parts (from which nparts() is computed). If we kept
+        // on calling nparts() below, we would run into data races.
+        const auto np = nparts();
+
         // NOTE: these ensure that, from now on, we can just cast
         // freely between the size types of the masses/coords and codes/indices vectors.
-        m_codes.resize(boost::numeric_cast<decltype(m_codes.size())>(nparts()));
-        m_perm.resize(boost::numeric_cast<decltype(m_perm.size())>(nparts()));
-        m_last_perm.resize(boost::numeric_cast<decltype(m_last_perm.size())>(nparts()));
-        m_inv_perm.resize(boost::numeric_cast<decltype(m_inv_perm.size())>(nparts()));
+        m_codes.resize(boost::numeric_cast<decltype(m_codes.size())>(np));
+        m_perm.resize(boost::numeric_cast<decltype(m_perm.size())>(np));
+        m_last_perm.resize(boost::numeric_cast<decltype(m_last_perm.size())>(np));
+        m_inv_perm.resize(boost::numeric_cast<decltype(m_inv_perm.size())>(np));
 
         {
             simple_timer st_m("data movement");
@@ -1247,16 +1255,16 @@ private:
                 // Copy the input data.
 
                 // NOTE: in the parallel for loops below, we need to index into the random-access iterator
-                // type up to the value N. Make sure we can do that.
+                // type up to the value np. Make sure we can do that.
                 using it_t = typename std::remove_cv_t<std::remove_reference_t<PData>>::value_type;
-                it_diff_check<it_t>(N);
+                it_diff_check<it_t>(np);
 
                 // NOTE: we will be essentially doing a memcpy here. Let's try to fix a
                 // large chunk size and let's use a simple partitioner, in order to
                 // limit the parallel overhead while hopefully still getting some speedup.
                 for (std::size_t j = 0; j < NDim + 1u; ++j) {
                     tbb::parallel_for(
-                        tbb::blocked_range(size_type(0), N, boost::numeric_cast<size_type>(data_chunking)),
+                        tbb::blocked_range(size_type(0), np, boost::numeric_cast<size_type>(data_chunking)),
                         [this, &p_data, j](const auto &range) {
                             std::copy(p_data[j] + static_cast<it_diff_type<it_t>>(range.begin()),
                                       p_data[j] + static_cast<it_diff_type<it_t>>(range.end()),
@@ -1266,7 +1274,7 @@ private:
                 }
             }
             // Generate the initial m_perm data (this is just a iota).
-            tbb::parallel_for(tbb::blocked_range(size_type(0), nparts(), boost::numeric_cast<size_type>(data_chunking)),
+            tbb::parallel_for(tbb::blocked_range(size_type(0), np, boost::numeric_cast<size_type>(data_chunking)),
                               [this](const auto &range) {
                                   std::iota(m_perm.data() + range.begin(), m_perm.data() + range.end(), range.begin());
                               },
@@ -1275,14 +1283,14 @@ private:
 
         // Deduce the box size, if needed.
         if (m_box_size_deduced) {
-            // NOTE: this function works ok if nparts() == 0.
-            m_box_size = determine_box_size(p_its_u(), nparts());
+            // NOTE: this function works ok if np == 0.
+            m_box_size = determine_box_size(p_its_u(), np);
         }
 
         {
             // Do the Morton encoding.
             simple_timer st_m("morton encoding");
-            tbb::parallel_for(tbb::blocked_range(size_type(0), nparts()), [this](const auto &range) {
+            tbb::parallel_for(tbb::blocked_range(size_type(0), np), [this](const auto &range) {
                 // Temporary structure used in the encoding.
                 std::array<UInt, NDim> tmp_dcoord;
                 // The encoder object.
@@ -1314,19 +1322,18 @@ private:
             // Establish the inverse permutation vector.
             tg.run([this]() { perm_to_inv_perm(); });
             // Copy over m_perm to m_last_perm.
-            tg.run([this]() {
-                tbb::parallel_for(
-                    tbb::blocked_range(size_type(0), nparts(), boost::numeric_cast<size_type>(data_chunking)),
-                    [this](const auto &range) {
-                        std::copy(m_perm.data() + range.begin(), m_perm.data() + range.end(),
-                                  m_last_perm.data() + range.begin());
-                    },
-                    tbb::simple_partitioner());
+            tg.run([this, np]() {
+                tbb::parallel_for(tbb::blocked_range(size_type(0), np, boost::numeric_cast<size_type>(data_chunking)),
+                                  [this](const auto &range) {
+                                      std::copy(m_perm.data() + range.begin(), m_perm.data() + range.end(),
+                                                m_last_perm.data() + range.begin());
+                                  },
+                                  tbb::simple_partitioner());
             });
             tg.wait();
         }
         // Now let's proceed to the tree construction.
-        // NOTE: this function works ok if nparts() == 0.
+        // NOTE: this function works ok if np == 0.
         build_tree();
     }
     // ROCm init/reset functions. If ROCm is not enabled, they will be empty.
