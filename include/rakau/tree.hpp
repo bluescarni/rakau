@@ -2882,7 +2882,7 @@ private:
                     auto cuda_fut
                         = std::async(std::launch::async, [&out, &split_indices, this, np, inv_theta2, G, eps2]() {
                               cuda_acc_pot_impl<Q>(out, split_indices, m_tree.data(), m_tree.size(), p_its_u(),
-                                                   m_codes.data(), np, F(1) / inv_theta2, G, eps2);
+                                                   m_codes.data(), np, inv_theta2, G, eps2);
                           });
 
                     // Run the cpu implementation.
