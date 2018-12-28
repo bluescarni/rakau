@@ -2359,8 +2359,6 @@ private:
         const auto &src_node = m_tree[src_idx];
         // Copy locally the number of children of the source node.
         const auto n_children_src = src_node.n_children;
-        // Copy locally the properties of the source node.
-        const auto props = src_node.props;
         // Copy locally the dim2 of the source node.
         const auto src_dim2 = src_node.dim2;
         // The flag for the BH criterion check. Initially set to true,
@@ -2372,8 +2370,8 @@ private:
             using batch_type = xsimd::simd_type<F>;
             constexpr auto batch_size = batch_type::size;
             // Splatted vector versions of the scalar variables.
-            const batch_type src_dim2_vec(src_dim2), theta2_vec(theta2), eps2_vec(eps2), x_com_vec(props[0]),
-                y_com_vec(props[1]), z_com_vec(props[2]);
+            const batch_type src_dim2_vec(src_dim2), theta2_vec(theta2), eps2_vec(eps2), x_com_vec(src_node.props[0]),
+                y_com_vec(src_node.props[1]), z_com_vec(src_node.props[2]);
             // Pointers to the coordinates.
             const auto [x_ptr, y_ptr, z_ptr, m_ptr] = p_ptrs;
             (void)m_ptr;
@@ -2465,7 +2463,7 @@ private:
             for (size_type i = 0; i < tgt_size; ++i) {
                 F dist2(0);
                 for (std::size_t j = 0; j < NDim; ++j) {
-                    const auto diff = props[j] - p_ptrs[j][i];
+                    const auto diff = src_node.props[j] - p_ptrs[j][i];
                     if constexpr (Q == 0u || Q == 2u) {
                         // Store the differences for later use, if we are computing
                         // accelerations.
