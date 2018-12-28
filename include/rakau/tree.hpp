@@ -140,6 +140,10 @@ inline long double fma_wrap(long double x, long double y, long double z)
 #endif
 }
 
+// Handy type traits aliases.
+template <typename T>
+using uncvref_t = igor::uncvref_t<T>;
+
 // Some handy aliases for std::iterator_traits.
 template <typename It>
 using it_value_type = typename std::iterator_traits<It>::value_type;
@@ -485,6 +489,7 @@ IGOR_MAKE_NAMED_ARGUMENT(ncrit);
 IGOR_MAKE_NAMED_ARGUMENT(G);
 IGOR_MAKE_NAMED_ARGUMENT(eps);
 IGOR_MAKE_NAMED_ARGUMENT(split);
+IGOR_MAKE_NAMED_ARGUMENT(indices);
 
 } // namespace kwargs
 
@@ -2934,9 +2939,9 @@ private:
     // Top level dispatcher for the accs/pots functions. It will run a few checks and then invoke acc_pot_impl().
     // out is the array of output iterators, theta the opening angle, G the grav const, eps the softening length.
     // Q indicates which quantities will be computed (accs, potentials, or both).
-    template <bool Ordered, unsigned Q, typename It>
+    template <bool Ordered, unsigned Q, typename It, typename Indices>
     void acc_pot_dispatch(const std::array<It, nvecs_res<Q>> &out, F theta, F G, F eps,
-                          const std::vector<double> &split) const
+                          const std::vector<double> &split, const Indices &indices) const
     {
         simple_timer st("vector accs/pots computation");
         const auto theta2 = theta * theta, eps2 = eps * eps;
@@ -2969,25 +2974,26 @@ private:
     }
     // Helper overload for an array of vectors. It will prepare the vectors and then
     // call the other overload.
-    template <bool Ordered, unsigned Q, typename Allocator>
+    template <bool Ordered, unsigned Q, typename Allocator, typename Indices>
     void acc_pot_dispatch(std::array<std::vector<F, Allocator>, nvecs_res<Q>> &out, F theta, F G, F eps,
-                          const std::vector<double> &split) const
+                          const std::vector<double> &split, const Indices &indices) const
     {
         std::array<F *, nvecs_res<Q>> out_ptrs;
         for (std::size_t j = 0; j < nvecs_res<Q>; ++j) {
             out[j].resize(boost::numeric_cast<decltype(out[j].size())>(m_parts[0].size()));
             out_ptrs[j] = out[j].data();
         }
-        acc_pot_dispatch<Ordered, Q>(out_ptrs, theta, G, eps, split);
+        acc_pot_dispatch<Ordered, Q>(out_ptrs, theta, G, eps, split, indices);
     }
     // Helper overload for a single vector. It will prepare the vector and then
     // call the other overload. This is used for the potential-only computations.
-    template <bool Ordered, unsigned Q, typename Allocator>
-    void acc_pot_dispatch(std::vector<F, Allocator> &out, F theta, F G, F eps, const std::vector<double> &split) const
+    template <bool Ordered, unsigned Q, typename Allocator, typename Indices>
+    void acc_pot_dispatch(std::vector<F, Allocator> &out, F theta, F G, F eps, const std::vector<double> &split,
+                          const Indices &indices) const
     {
         static_assert(Q == 1u);
         out.resize(boost::numeric_cast<decltype(out.size())>(m_parts[0].size()));
-        acc_pot_dispatch<Ordered, Q>(std::array{out.data()}, theta, G, eps, split);
+        acc_pot_dispatch<Ordered, Q>(std::array{out.data()}, theta, G, eps, split, indices);
     }
     // Small helper to turn an init list into an array, in the functions for the computation
     // of the accelerations/potentials. Q indicates which quantities will be computed (accs,
@@ -3023,25 +3029,38 @@ private:
             eps = boost::numeric_cast<F>(p(kwargs::eps));
         }
 
-        if constexpr (p.has(kwargs::split)) {
-            return std::tuple{G, eps, std::cref(p(kwargs::split))};
-        } else {
-            return std::tuple{G, eps, std::vector<double>{}};
-        }
+        return std::tuple{
+            G, eps,
+            [&p]() {
+                if constexpr (p.has(kwargs::split)) {
+                    static_assert(std::is_same_v<uncvref_t<decltype(p(kwargs::split))>, std::vector<double>>);
+                    return std::cref(p(kwargs::split));
+                } else {
+                    return std::vector<double>{};
+                }
+            }(),
+            [&p]() {
+                if constexpr (p.has(kwargs::indices)) {
+                    static_assert(std::is_same_v<uncvref_t<decltype(p(kwargs::indices))>, std::vector<size_type>>);
+                    return std::cref(p(kwargs::indices));
+                } else {
+                    return nullptr;
+                }
+            }()};
     }
 
 public:
     template <typename Allocator, typename... KwArgs>
     void accs_u(std::array<std::vector<F, Allocator>, NDim> &out, F theta, KwArgs &&... args) const
     {
-        const auto [G, eps, split] = parse_accpot_kwargs(std::forward<KwArgs>(args)...);
-        acc_pot_dispatch<false, 0>(out, theta, G, eps, split);
+        const auto [G, eps, split, indices] = parse_accpot_kwargs(std::forward<KwArgs>(args)...);
+        acc_pot_dispatch<false, 0>(out, theta, G, eps, split, indices);
     }
     template <typename It, typename... KwArgs>
     void accs_u(const std::array<It, NDim> &out, F theta, KwArgs &&... args) const
     {
-        const auto [G, eps, split] = parse_accpot_kwargs(std::forward<KwArgs>(args)...);
-        acc_pot_dispatch<false, 0>(out, theta, G, eps, split);
+        const auto [G, eps, split, indices] = parse_accpot_kwargs(std::forward<KwArgs>(args)...);
+        acc_pot_dispatch<false, 0>(out, theta, G, eps, split, indices);
     }
     template <typename It, typename... KwArgs>
     void accs_u(std::initializer_list<It> out, F theta, KwArgs &&... args) const
@@ -3051,26 +3070,26 @@ public:
     template <typename Allocator, typename... KwArgs>
     void pots_u(std::vector<F, Allocator> &out, F theta, KwArgs &&... args) const
     {
-        const auto [G, eps, split] = parse_accpot_kwargs(std::forward<KwArgs>(args)...);
-        acc_pot_dispatch<false, 1>(out, theta, G, eps, split);
+        const auto [G, eps, split, indices] = parse_accpot_kwargs(std::forward<KwArgs>(args)...);
+        acc_pot_dispatch<false, 1>(out, theta, G, eps, split, indices);
     }
     template <typename It, typename... KwArgs>
     void pots_u(It out, F theta, KwArgs &&... args) const
     {
-        const auto [G, eps, split] = parse_accpot_kwargs(std::forward<KwArgs>(args)...);
-        acc_pot_dispatch<false, 1>(std::array{out}, theta, G, eps, split);
+        const auto [G, eps, split, indices] = parse_accpot_kwargs(std::forward<KwArgs>(args)...);
+        acc_pot_dispatch<false, 1>(std::array{out}, theta, G, eps, split, indices);
     }
     template <typename Allocator, typename... KwArgs>
     void accs_pots_u(std::array<std::vector<F, Allocator>, NDim + 1u> &out, F theta, KwArgs &&... args) const
     {
-        const auto [G, eps, split] = parse_accpot_kwargs(std::forward<KwArgs>(args)...);
-        acc_pot_dispatch<false, 2>(out, theta, G, eps, split);
+        const auto [G, eps, split, indices] = parse_accpot_kwargs(std::forward<KwArgs>(args)...);
+        acc_pot_dispatch<false, 2>(out, theta, G, eps, split, indices);
     }
     template <typename It, typename... KwArgs>
     void accs_pots_u(const std::array<It, NDim + 1u> &out, F theta, KwArgs &&... args) const
     {
-        const auto [G, eps, split] = parse_accpot_kwargs(std::forward<KwArgs>(args)...);
-        acc_pot_dispatch<false, 2>(out, theta, G, eps, split);
+        const auto [G, eps, split, indices] = parse_accpot_kwargs(std::forward<KwArgs>(args)...);
+        acc_pot_dispatch<false, 2>(out, theta, G, eps, split, indices);
     }
     template <typename It, typename... KwArgs>
     void accs_pots_u(std::initializer_list<It> out, F theta, KwArgs &&... args) const
@@ -3080,14 +3099,14 @@ public:
     template <typename Allocator, typename... KwArgs>
     void accs_o(std::array<std::vector<F, Allocator>, NDim> &out, F theta, KwArgs &&... args) const
     {
-        const auto [G, eps, split] = parse_accpot_kwargs(std::forward<KwArgs>(args)...);
-        acc_pot_dispatch<true, 0>(out, theta, G, eps, split);
+        const auto [G, eps, split, indices] = parse_accpot_kwargs(std::forward<KwArgs>(args)...);
+        acc_pot_dispatch<true, 0>(out, theta, G, eps, split, indices);
     }
     template <typename It, typename... KwArgs>
     void accs_o(const std::array<It, NDim> &out, F theta, KwArgs &&... args) const
     {
-        const auto [G, eps, split] = parse_accpot_kwargs(std::forward<KwArgs>(args)...);
-        acc_pot_dispatch<true, 0>(out, theta, G, eps, split);
+        const auto [G, eps, split, indices] = parse_accpot_kwargs(std::forward<KwArgs>(args)...);
+        acc_pot_dispatch<true, 0>(out, theta, G, eps, split, indices);
     }
     template <typename It, typename... KwArgs>
     void accs_o(std::initializer_list<It> out, F theta, KwArgs &&... args) const
@@ -3097,26 +3116,26 @@ public:
     template <typename Allocator, typename... KwArgs>
     void pots_o(std::vector<F, Allocator> &out, F theta, KwArgs &&... args) const
     {
-        const auto [G, eps, split] = parse_accpot_kwargs(std::forward<KwArgs>(args)...);
-        acc_pot_dispatch<true, 1>(out, theta, G, eps, split);
+        const auto [G, eps, split, indices] = parse_accpot_kwargs(std::forward<KwArgs>(args)...);
+        acc_pot_dispatch<true, 1>(out, theta, G, eps, split, indices);
     }
     template <typename It, typename... KwArgs>
     void pots_o(It out, F theta, KwArgs &&... args) const
     {
-        const auto [G, eps, split] = parse_accpot_kwargs(std::forward<KwArgs>(args)...);
-        acc_pot_dispatch<true, 1>(std::array{out}, theta, G, eps, split);
+        const auto [G, eps, split, indices] = parse_accpot_kwargs(std::forward<KwArgs>(args)...);
+        acc_pot_dispatch<true, 1>(std::array{out}, theta, G, eps, split, indices);
     }
     template <typename Allocator, typename... KwArgs>
     void accs_pots_o(std::array<std::vector<F, Allocator>, NDim + 1u> &out, F theta, KwArgs &&... args) const
     {
-        const auto [G, eps, split] = parse_accpot_kwargs(std::forward<KwArgs>(args)...);
-        acc_pot_dispatch<true, 2>(out, theta, G, eps, split);
+        const auto [G, eps, split, indices] = parse_accpot_kwargs(std::forward<KwArgs>(args)...);
+        acc_pot_dispatch<true, 2>(out, theta, G, eps, split, indices);
     }
     template <typename It, typename... KwArgs>
     void accs_pots_o(const std::array<It, NDim + 1u> &out, F theta, KwArgs &&... args) const
     {
-        const auto [G, eps, split] = parse_accpot_kwargs(std::forward<KwArgs>(args)...);
-        acc_pot_dispatch<true, 2>(out, theta, G, eps, split);
+        const auto [G, eps, split, indices] = parse_accpot_kwargs(std::forward<KwArgs>(args)...);
+        acc_pot_dispatch<true, 2>(out, theta, G, eps, split, indices);
     }
     template <typename It, typename... KwArgs>
     void accs_pots_o(std::initializer_list<It> out, F theta, KwArgs &&... args) const
@@ -3173,43 +3192,43 @@ public:
         // NOTE: we are also parsing the split kwarg here, which is not used. I don't
         // think it has any performance implications, and perhaps in the future
         // we will use it.
-        const auto [G, eps, _] = parse_accpot_kwargs(std::forward<KwArgs>(args)...);
-        ignore(_);
+        const auto [G, eps, _1, _2] = parse_accpot_kwargs(std::forward<KwArgs>(args)...);
+        ignore(_1, _2);
         return exact_acc_pot_impl<false, 0>(idx, G, eps);
     }
     template <typename... KwArgs>
     F exact_pot_u(size_type idx, KwArgs &&... args) const
     {
-        const auto [G, eps, _] = parse_accpot_kwargs(std::forward<KwArgs>(args)...);
-        ignore(_);
+        const auto [G, eps, _1, _2] = parse_accpot_kwargs(std::forward<KwArgs>(args)...);
+        ignore(_1, _2);
         return exact_acc_pot_impl<false, 1>(idx, G, eps)[0];
     }
     template <typename... KwArgs>
     std::array<F, NDim + 1u> exact_acc_pot_u(size_type idx, KwArgs &&... args) const
     {
-        const auto [G, eps, _] = parse_accpot_kwargs(std::forward<KwArgs>(args)...);
-        ignore(_);
+        const auto [G, eps, _1, _2] = parse_accpot_kwargs(std::forward<KwArgs>(args)...);
+        ignore(_1, _2);
         return exact_acc_pot_impl<false, 2>(idx, G, eps);
     }
     template <typename... KwArgs>
     std::array<F, NDim> exact_acc_o(size_type idx, KwArgs &&... args) const
     {
-        const auto [G, eps, _] = parse_accpot_kwargs(std::forward<KwArgs>(args)...);
-        ignore(_);
+        const auto [G, eps, _1, _2] = parse_accpot_kwargs(std::forward<KwArgs>(args)...);
+        ignore(_1, _2);
         return exact_acc_pot_impl<true, 0>(idx, G, eps);
     }
     template <typename... KwArgs>
     F exact_pot_o(size_type idx, KwArgs &&... args) const
     {
-        const auto [G, eps, _] = parse_accpot_kwargs(std::forward<KwArgs>(args)...);
-        ignore(_);
+        const auto [G, eps, _1, _2] = parse_accpot_kwargs(std::forward<KwArgs>(args)...);
+        ignore(_1, _2);
         return exact_acc_pot_impl<true, 1>(idx, G, eps)[0];
     }
     template <typename... KwArgs>
     std::array<F, NDim + 1u> exact_acc_pot_o(size_type idx, KwArgs &&... args) const
     {
-        const auto [G, eps, _] = parse_accpot_kwargs(std::forward<KwArgs>(args)...);
-        ignore(_);
+        const auto [G, eps, _1, _2] = parse_accpot_kwargs(std::forward<KwArgs>(args)...);
+        ignore(_1, _2);
         return exact_acc_pot_impl<true, 2>(idx, G, eps);
     }
 
