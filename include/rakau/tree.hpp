@@ -2321,12 +2321,12 @@ private:
     }
     // Function to check if a source node satisfies the BH criterion and, possibly, to compute the
     // accelerations/potentials due to that source node. src_idx is the index, in the tree structure, of the source
-    // node, theta2 the square of the opening angle, eps2 the square of the softening length, tgt_size the number of
-    // particles in the target node, p_ptrs pointers to the coordinates/masses of the particles in the target node,
-    // res_ptrs pointers to the output arrays. The return value is the index of the next source node in the tree
+    // node, inv_theta2 the inv square of the opening angle, eps2 the square of the softening length, tgt_size the
+    // number of particles in the target node, p_ptrs pointers to the coordinates/masses of the particles in the target
+    // node, res_ptrs pointers to the output arrays. The return value is the index of the next source node in the tree
     // traversal. Q indicates which quantities will be computed (accs, potentials, or both).
     template <unsigned Q>
-    size_type tree_acc_pot_bh_check(size_type src_idx, F theta2, F eps2, size_type tgt_size,
+    size_type tree_acc_pot_bh_check(size_type src_idx, F inv_theta2, F eps2, size_type tgt_size,
                                     const std::array<const F *, NDim + 1u> &p_ptrs,
                                     const std::array<F *, nvecs_res<Q>> &res_ptrs) const
     {
@@ -2359,10 +2359,8 @@ private:
         const auto &src_node = m_tree[src_idx];
         // Copy locally the number of children of the source node.
         const auto n_children_src = src_node.n_children;
-        // Copy locally the properties of the source node.
-        const auto props = src_node.props;
-        // Copy locally the dim2 of the source node.
-        const auto src_dim2 = src_node.dim2;
+        // Left-hand side of the BH check.
+        const auto bh_lh = src_node.dim2 * inv_theta2;
         // The flag for the BH criterion check. Initially set to true,
         // it will be set to false if at least one particle in the
         // target node fails the check.
@@ -2372,8 +2370,8 @@ private:
             using batch_type = xsimd::simd_type<F>;
             constexpr auto batch_size = batch_type::size;
             // Splatted vector versions of the scalar variables.
-            const batch_type src_dim2_vec(src_dim2), theta2_vec(theta2), eps2_vec(eps2), x_com_vec(props[0]),
-                y_com_vec(props[1]), z_com_vec(props[2]);
+            const batch_type eps2_vec(eps2), bh_lh_vec(bh_lh), x_com_vec(src_node.props[0]),
+                y_com_vec(src_node.props[1]), z_com_vec(src_node.props[2]);
             // Pointers to the coordinates.
             const auto [x_ptr, y_ptr, z_ptr, m_ptr] = p_ptrs;
             (void)m_ptr;
@@ -2387,7 +2385,7 @@ private:
                                diff_y = y_com_vec - batch_type(y_ptr + i, xsimd::aligned_mode{}),
                                diff_z = z_com_vec - batch_type(z_ptr + i, xsimd::aligned_mode{});
                     auto dist2 = diff_x * diff_x + diff_y * diff_y + diff_z * diff_z;
-                    if (xsimd::any(src_dim2_vec >= theta2_vec * dist2)) {
+                    if (xsimd::any(bh_lh_vec >= dist2)) {
                         // At least one particle in the current batch fails the BH criterion
                         // check. Mark the bh_flag as false, then break out.
                         bh_flag = false;
@@ -2414,7 +2412,7 @@ private:
                                diff_y = y_com_vec - batch_type(y_ptr + i, xsimd::aligned_mode{}),
                                diff_z = z_com_vec - batch_type(z_ptr + i, xsimd::aligned_mode{});
                     auto dist2 = diff_x * diff_x + diff_y * diff_y + diff_z * diff_z;
-                    if (xsimd::any(src_dim2_vec >= theta2_vec * dist2)) {
+                    if (xsimd::any(bh_lh_vec >= dist2)) {
                         // At least one particle in the current batch fails the BH criterion
                         // check. Mark the bh_flag as false, then break out.
                         bh_flag = false;
@@ -2438,7 +2436,7 @@ private:
                                diff_y = y_com_vec - batch_type(y_ptr + i, xsimd::aligned_mode{}),
                                diff_z = z_com_vec - batch_type(z_ptr + i, xsimd::aligned_mode{});
                     auto dist2 = diff_x * diff_x + diff_y * diff_y + diff_z * diff_z;
-                    if (xsimd::any(src_dim2_vec >= theta2_vec * dist2)) {
+                    if (xsimd::any(bh_lh_vec >= dist2)) {
                         // At least one particle in the current batch fails the BH criterion
                         // check. Mark the bh_flag as false, then break out.
                         bh_flag = false;
@@ -2465,7 +2463,7 @@ private:
             for (size_type i = 0; i < tgt_size; ++i) {
                 F dist2(0);
                 for (std::size_t j = 0; j < NDim; ++j) {
-                    const auto diff = props[j] - p_ptrs[j][i];
+                    const auto diff = src_node.props[j] - p_ptrs[j][i];
                     if constexpr (Q == 0u || Q == 2u) {
                         // Store the differences for later use, if we are computing
                         // accelerations.
@@ -2473,7 +2471,7 @@ private:
                     }
                     dist2 = fma_wrap(diff, diff, dist2);
                 }
-                if (src_dim2 >= theta2 * dist2) {
+                if (bh_lh >= dist2) {
                     // At least one of the particles in the target
                     // node is too close to the COM. Set the flag
                     // to false and exit.
@@ -2514,12 +2512,12 @@ private:
         // In any case, we keep traversing the tree moving to the next node in depth-first order.
         return static_cast<size_type>(src_idx + 1u);
     }
-    // Tree traversal for the computation of the accelerations/potentials. theta2 is the square of the opening angle,
-    // eps2 the square of the softening length, tgt_size the number of particles in the target node, tgt_code its code,
-    // p_ptrs are pointers to the coordinates/masses of the particles in the target node, res_ptrs pointers to the
-    // output arrays. Q indicates which quantities will be computed (accs, potentials, or both).
+    // Tree traversal for the computation of the accelerations/potentials. inv_theta2 is the inverse square of the
+    // opening angle, eps2 the square of the softening length, tgt_size the number of particles in the target node,
+    // tgt_code its code, p_ptrs are pointers to the coordinates/masses of the particles in the target node, res_ptrs
+    // pointers to the output arrays. Q indicates which quantities will be computed (accs, potentials, or both).
     template <unsigned Q>
-    void tree_acc_pot(F theta2, F eps2, size_type tgt_size, UInt tgt_code,
+    void tree_acc_pot(F inv_theta2, F eps2, size_type tgt_size, UInt tgt_code,
                       const std::array<const F *, NDim + 1u> &p_ptrs,
                       const std::array<F *, nvecs_res<Q>> &res_ptrs) const
     {
@@ -2563,7 +2561,7 @@ private:
                 // The source node is not an ancestor of the target. We need to run the BH criterion
                 // check. The tree_acc_pot_bh_check() function will return the index of the next node
                 // in the traversal.
-                src_idx = tree_acc_pot_bh_check<Q>(src_idx, theta2, eps2, tgt_size, p_ptrs, res_ptrs);
+                src_idx = tree_acc_pot_bh_check<Q>(src_idx, inv_theta2, eps2, tgt_size, p_ptrs, res_ptrs);
             }
         }
 
@@ -2571,10 +2569,10 @@ private:
         tree_self_interactions<Q>(eps2, tgt_size, p_ptrs, res_ptrs);
     }
     // Top level function for the computation of the accelerations/potentials. out is the array of output iterators,
-    // theta2 the square of the opening angle, G the grav constant, eps2 the square of the softening length. Q indicates
-    // which quantities will be computed (accs, potentials, or both).
+    // inv_theta2 the inverse square of the opening angle, G the grav constant, eps2 the square of the softening length.
+    // Q indicates which quantities will be computed (accs, potentials, or both).
     template <unsigned Q, typename It>
-    void acc_pot_impl(const std::array<It, nvecs_res<Q>> &out, F theta2, F G, F eps2,
+    void acc_pot_impl(const std::array<It, nvecs_res<Q>> &out, F inv_theta2, F G, F eps2,
                       const std::vector<double> &split) const
     {
         // Validation of split, common to all codepaths.
@@ -2589,7 +2587,7 @@ private:
         }
 
         using c_size_type = decltype(m_crit_nodes.size());
-        auto cpu_run = [this, &out, theta2, G, eps2](c_size_type c_begin, c_size_type c_end) {
+        auto cpu_run = [this, &out, inv_theta2, G, eps2](c_size_type c_begin, c_size_type c_end) {
             assert(c_begin <= c_end);
             assert(c_end <= m_crit_nodes.size());
 
@@ -2614,7 +2612,7 @@ private:
             // Now we require this distance to be large enough to always satisfy the BH criterion (as written
             // above), that is, sqrt(NDim) / 2 * (2*M - b_size) > b_size / theta, which yields the requirement
             // M > b_size / (theta * sqrt(NDim)) + b_size / 2.
-            const auto M = m_box_size / (std::sqrt(theta2) * std::sqrt(F(NDim))) + m_box_size / F(2);
+            const auto M = m_box_size / (std::sqrt(F(1) / inv_theta2) * std::sqrt(F(NDim))) + m_box_size / F(2);
             // NOTE: M is mathematically always >= m_box_size / F(2), which puts it on the top right
             // corner of the box for theta2 == inf. To make it completely safe with respect to the requirement
             // of avoiding singularities in the self interaction routine, we double it.
@@ -2624,7 +2622,7 @@ private:
                     "The calculation of the SIMD padding coordinate produced the non-finite value "
                     + std::to_string(pad_coord));
             }
-            tbb::parallel_for(tbb::blocked_range(c_begin, c_end), [this, theta2, G, eps2, pad_coord,
+            tbb::parallel_for(tbb::blocked_range(c_begin, c_end), [this, inv_theta2, G, eps2, pad_coord,
                                                                    &out](const auto &range) {
                 // Get references to the local temporary data.
                 auto &tmp_res = acc_pot_tmp_res<Q>();
@@ -2685,7 +2683,7 @@ private:
                         p_ptrs[j] = tmp_tgt[j].data();
                     }
                     // Do the computation.
-                    tree_acc_pot<Q>(theta2, eps2, tgt_size, tgt_code, p_ptrs, res_ptrs);
+                    tree_acc_pot<Q>(inv_theta2, eps2, tgt_size, tgt_code, p_ptrs, res_ptrs);
                     // Multiply by G, if needed.
                     if (G != F(1)) {
                         for (std::size_t j = 0; j < nvecs_res<Q>; ++j) {
@@ -2777,10 +2775,11 @@ private:
                     // NOTE: futures returned by async() will block on destruction. Thus, even if
                     // cpu_run() throws, we will be sure that this thread will end before the exception
                     // is handled.
-                    auto roc_fut = std::async(std::launch::async, [this, particle_split_idx, &out, theta2, G, eps2]() {
-                        m_rocm->template acc_pot<Q>(boost::numeric_cast<int>(particle_split_idx),
-                                                    boost::numeric_cast<int>(nparts()), out, theta2, G, eps2);
-                    });
+                    auto roc_fut
+                        = std::async(std::launch::async, [this, particle_split_idx, &out, inv_theta2, G, eps2]() {
+                              m_rocm->template acc_pot<Q>(boost::numeric_cast<int>(particle_split_idx),
+                                                          boost::numeric_cast<int>(nparts()), out, inv_theta2, G, eps2);
+                          });
 
                     // Run the cpu implementation.
                     cpu_run(0, boost::numeric_cast<c_size_type>(cn_it - m_crit_nodes.begin()));
@@ -2880,10 +2879,11 @@ private:
                     it_diff_check<decltype(m_crit_nodes.begin())>(m_crit_nodes.size());
 
                     // Run the CUDA computation in async mode.
-                    auto cuda_fut = std::async(std::launch::async, [&out, &split_indices, this, np, theta2, G, eps2]() {
-                        cuda_acc_pot_impl<Q>(out, split_indices, m_tree.data(), m_tree.size(), p_its_u(),
-                                             m_codes.data(), np, theta2, G, eps2);
-                    });
+                    auto cuda_fut
+                        = std::async(std::launch::async, [&out, &split_indices, this, np, inv_theta2, G, eps2]() {
+                              cuda_acc_pot_impl<Q>(out, split_indices, m_tree.data(), m_tree.size(), p_its_u(),
+                                                   m_codes.data(), np, inv_theta2, G, eps2);
+                          });
 
                     // Run the cpu implementation.
                     cpu_run(0, boost::numeric_cast<c_size_type>(cn_it - m_crit_nodes.begin()));
@@ -2917,23 +2917,26 @@ private:
         cpu_run(0, m_crit_nodes.size());
 #endif
     }
-    // Small helper to check the value of the softening length and its square.
-    // Used more than once, hence factored out.
-    static void check_eps_eps2(F eps, F eps2)
+    // Small helper to check the value of the softening length, and compute its square.
+    // Re-used in a few places, hence factored out.
+    static F compute_eps2(const F &eps)
     {
-        if (!std::isfinite(eps2) || eps2 < F(0)) {
+        if (rakau_unlikely(!std::isfinite(eps) || eps < F(0))) {
+            throw std::domain_error("The softening length must be finite and non-negative, but it is "
+                                    + std::to_string(eps) + " instead");
+        }
+        auto eps2 = eps * eps;
+        // Check the output value as well.
+        if (rakau_unlikely(!std::isfinite(eps2) || eps2 < F(0))) {
             throw std::domain_error("The square of the softening length must be finite and non-negative, but it is "
                                     + std::to_string(eps2) + " instead");
         }
-        if (eps < F(0)) {
-            throw std::domain_error("The softening length must be non-negative, but it is " + std::to_string(eps)
-                                    + " instead");
-        }
+        return eps2;
     }
     // Small helper to check the value of the gravitational constant.
-    static void check_G_const(F G)
+    static void check_G_const(const F &G)
     {
-        if (!std::isfinite(G)) {
+        if (rakau_unlikely(!std::isfinite(G))) {
             throw std::domain_error("The value of the gravitational constant G must be finite, but it is "
                                     + std::to_string(G) + " instead");
         }
@@ -2946,17 +2949,18 @@ private:
                           const std::vector<double> &split) const
     {
         simple_timer st("vector accs/pots computation");
-        const auto theta2 = theta * theta, eps2 = eps * eps;
         // Input param check.
-        if (!std::isfinite(theta2) || theta2 <= F(0)) {
-            throw std::domain_error("The square of the theta parameter must be finite and positive, but it is "
-                                    + std::to_string(theta2) + " instead");
+        if (rakau_unlikely(!std::isfinite(theta) || theta <= F(0))) {
+            throw std::domain_error("The theta parameter must be finite and positive, but it is "
+                                    + std::to_string(theta) + " instead");
         }
-        if (theta < F(0)) {
-            throw std::domain_error("The theta parameter must be non-negative, but it is " + std::to_string(theta)
-                                    + " instead");
+        const auto inv_theta2 = F(1) / (theta * theta);
+        // Check that the computation of inv_theta2 did not produce something weird.
+        if (rakau_unlikely(!std::isfinite(inv_theta2) || inv_theta2 <= F(0))) {
+            throw std::domain_error("The inverse square of the theta parameter must be finite and positive, but it is "
+                                    + std::to_string(inv_theta2) + " instead");
         }
-        check_eps_eps2(eps, eps2);
+        const auto eps2 = compute_eps2(eps);
         check_G_const(G);
         if constexpr (Ordered) {
             // Make sure we don't run into overflows when doing a permutated iteration
@@ -2969,9 +2973,9 @@ private:
             }
             // NOTE: we are checking in the acc_pot_impl() function that we can index into
             // the permuted iterators without overflows (see the use of boost::numeric_cast()).
-            acc_pot_impl<Q>(out_pits, theta2, G, eps2, split);
+            acc_pot_impl<Q>(out_pits, inv_theta2, G, eps2, split);
         } else {
-            acc_pot_impl<Q>(out, theta2, G, eps2, split);
+            acc_pot_impl<Q>(out, inv_theta2, G, eps2, split);
         }
     }
     // Helper overload for an array of vectors. It will prepare the vectors and then
@@ -3136,9 +3140,8 @@ private:
     auto exact_acc_pot_impl(size_type orig_idx, F G, F eps) const
     {
         simple_timer st("exact acc/pot computation");
-        const auto eps2 = eps * eps;
-        // Check eps.
-        check_eps_eps2(eps, eps2);
+        // Compute eps2.
+        const auto eps2 = compute_eps2(eps);
         // Check G.
         check_G_const(G);
         const auto size = m_parts[0].size();

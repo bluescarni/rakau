@@ -136,7 +136,7 @@ struct arr_wrap {
 template <unsigned Q, std::size_t NDim, typename F, typename UInt>
 __global__ void acc_pot_kernel(arr_wrap<F *, tree_nvecs_res<Q, NDim>> res_ptrs, int p_begin, int p_end,
                                const tree_node_t<NDim, F, UInt> *tree_ptr, int tree_size,
-                               arr_wrap<const F *, NDim + 1u> parts_ptrs, const UInt *codes_ptr, F theta2, F G, F eps2)
+                               arr_wrap<const F *, NDim + 1u> parts_ptrs, const UInt *codes_ptr, F inv_theta2, F G, F eps2)
 {
     // Get the local and global particle indices.
     const auto loc_idx = blockIdx.x * blockDim.x + threadIdx.x;
@@ -182,8 +182,8 @@ __global__ void acc_pot_kernel(arr_wrap<F *, tree_nvecs_res<Q, NDim>> res_ptrs, 
         }
         // Level of the source node.
         const auto src_level = src_node.level;
-        // Square of the dimension of the source node.
-        const auto src_dim2 = src_node.dim2;
+        // Left-hand side of the BH check.
+        const auto bh_lh = src_node.dim2 * inv_theta2;
 
         // Compute the shifted particle code. This is the particle code with one extra
         // top bit and then shifted down according to the level of the source node, so that
@@ -238,7 +238,7 @@ __global__ void acc_pot_kernel(arr_wrap<F *, tree_nvecs_res<Q, NDim>> res_ptrs, 
         }
 
         // Now let's run the BH/ancestor check on all the target particles in the same warp.
-        if (__all_sync(unsigned(-1), s_p_code != src_code && src_dim2 < theta2 * dist2)) {
+        if (__all_sync(unsigned(-1), s_p_code != src_code && bh_lh < dist2)) {
             // The source node does not contain the target particle and it satisfies the BH check.
             // We will then add the (approximated) contribution of the source node
             // to the final result.
@@ -332,7 +332,7 @@ template <unsigned Q, std::size_t NDim, typename F, typename UInt>
 void cuda_acc_pot_impl(const std::array<F *, tree_nvecs_res<Q, NDim>> &out,
                        const std::vector<tree_size_t<F>> &split_indices, const tree_node_t<NDim, F, UInt> *tree,
                        tree_size_t<F> tree_size, const std::array<const F *, NDim + 1u> &p_parts, const UInt *codes,
-                       tree_size_t<F> nparts, F theta2, F G, F eps2)
+                       tree_size_t<F> nparts, F inv_theta2, F G, F eps2)
 {
     assert(split_indices.size() && split_indices.size() - 1u <= cuda_device_count());
 
@@ -497,7 +497,7 @@ void cuda_acc_pot_impl(const std::array<F *, tree_nvecs_res<Q, NDim>> &out,
         }
         acc_pot_kernel<Q, NDim, F, UInt><<<(loc_nparts + 31u) / 32u, 32u, 0, streams[i]>>>(
             res_ptrs[i], boost::numeric_cast<int>(split_indices[i]), boost::numeric_cast<int>(split_indices[i + 1u]),
-            tree_ptr, boost::numeric_cast<int>(tree_size), parts_ptrs, codes_ptr, theta2, G, eps2);
+            tree_ptr, boost::numeric_cast<int>(tree_size), parts_ptrs, codes_ptr, inv_theta2, G, eps2);
     }
 
     // Write out the results.

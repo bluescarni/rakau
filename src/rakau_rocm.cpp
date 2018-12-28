@@ -135,7 +135,7 @@ rocm_state<NDim, F, UInt>::~rocm_state()
 template <std::size_t NDim, typename F, typename UInt>
 template <unsigned Q>
 void rocm_state<NDim, F, UInt>::acc_pot(int p_begin, int p_end, const std::array<F *, tree_nvecs_res<Q, NDim>> &out,
-                                        F theta2, F G, F eps2) const
+                                        F inv_theta2, F G, F eps2) const
 {
     assert(p_begin <= p_end);
 
@@ -159,7 +159,7 @@ void rocm_state<NDim, F, UInt>::acc_pot(int p_begin, int p_end, const std::array
         hc::extent<1>(p_end - p_begin).tile(__HSA_WAVEFRONT_SIZE__),
         [
             p_begin, pt = state.m_pav, codes_view = state.m_codes_view, nparts, tree_view = state.m_tree_view,
-            tree_size = state.m_tree_size, rt, theta2, G,
+            tree_size = state.m_tree_size, rt, inv_theta2, G,
             eps2
         ](hc::tiled_index<1> thread_id) [[hc]] {
             // Get the global particle index into the tree data.
@@ -208,8 +208,8 @@ void rocm_state<NDim, F, UInt>::acc_pot(int p_begin, int p_end, const std::array
                 }
                 // Level of the source node.
                 const auto src_level = src_node.level;
-                // Square of the dimension of the source node.
-                const auto src_dim2 = src_node.dim2;
+                // Left-hand side of the BH check.
+                const auto bh_lh = src_node.dim2 * inv_theta2;
 
                 // Compute the shifted particle code. This is the particle code with one extra
                 // top bit and then shifted down according to the level of the source node, so that
@@ -263,7 +263,7 @@ void rocm_state<NDim, F, UInt>::acc_pot(int p_begin, int p_end, const std::array
                     dist_vec[j] = diff;
                 }
                 // Now let's run the BH/ancestor check on all the target particles in the same wavefront.
-                if (hc::__all(s_p_code != src_code && src_dim2 < theta2 * dist2)) {
+                if (hc::__all(s_p_code != src_code && bh_lh < dist2)) {
                     // The source node does not contain the target particle and it satisfies the BH check.
                     // We will then add the (approximated) contribution of the source node
                     // to the final result.
