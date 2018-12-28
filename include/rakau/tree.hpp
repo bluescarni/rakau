@@ -2778,8 +2778,7 @@ private:
                     auto roc_fut
                         = std::async(std::launch::async, [this, particle_split_idx, &out, inv_theta2, G, eps2]() {
                               m_rocm->template acc_pot<Q>(boost::numeric_cast<int>(particle_split_idx),
-                                                          boost::numeric_cast<int>(nparts()), out, F(1) / inv_theta2, G,
-                                                          eps2);
+                                                          boost::numeric_cast<int>(nparts()), out, inv_theta2, G, eps2);
                           });
 
                     // Run the cpu implementation.
