@@ -86,6 +86,14 @@ struct tree_node_t<NDim, F, UInt, mac::bh> : base_tree_node_t<NDim, F, UInt> {
     F props[NDim + 1u], dim2;
 };
 
+// Tree node for the geometric centre BH MAC.
+template <std::size_t NDim, typename F, typename UInt>
+struct tree_node_t<NDim, F, UInt, mac::bh_geom> : base_tree_node_t<NDim, F, UInt> {
+    // Node properties (COM coordinates + mass), node dimension and distance
+    // between COM and geometric centre.
+    F props[NDim + 1u], dim, delta;
+};
+
 // Critical node.
 template <typename F, typename UInt>
 using tree_cnode_t = std::tuple<UInt, tree_size_t<F>, tree_size_t<F>>;

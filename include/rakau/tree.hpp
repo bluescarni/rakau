@@ -327,7 +327,7 @@ inline F get_node_dim(UInt node_level, F box_size)
 // Determine the geometrical centre of a node, given its code
 // and the box size.
 template <typename F, std::size_t NDim, typename UInt>
-inline void node_centre(F (&out)[NDim], UInt node_code, F box_size)
+inline void get_node_centre(F (&out)[NDim], UInt node_code, F box_size)
 {
     // Compute the level of the node.
     const auto node_level = tree_level<NDim>(node_code);
@@ -556,12 +556,6 @@ private:
     using cnode_type = tree_cnode_t<F, UInt>;
     // List of critical nodes.
     using cnode_list_type = std::vector<cnode_type, di_aligned_allocator<cnode_type>>;
-    // Small helper to get the square of the dimension of a node at the tree level node_level.
-    F get_sqr_node_dim(UInt node_level) const
-    {
-        const auto tmp = get_node_dim(node_level, m_box_size);
-        return tmp * tmp;
-    }
     // A small functor to right shift an input UInt by a fixed amount.
     // Used in the tree construction functions.
     struct code_shifter {
@@ -645,8 +639,6 @@ private:
                     // will be filled in later.
                     new_node.code = cur_code;
                     new_node.level = ParentLevel + 1u;
-                    // NOTE: the props are inited to zero thanks to value-init.
-                    new_node.dim2 = get_sqr_node_dim(ParentLevel + 1u);
                     // Compute its properties.
                     compute_node_properties(new_node);
                     // Add the node to the tree.
@@ -738,7 +730,6 @@ private:
                         new_node.end = static_cast<size_type>(std::distance(m_codes.begin(), it_end.base()));
                         new_node.code = cur_code;
                         new_node.level = ParentLevel + 1u;
-                        new_node.dim2 = get_sqr_node_dim(ParentLevel + 1u);
                         compute_node_properties(new_node);
                         new_tree.push_back(std::move(new_node));
                         const auto u_npart
@@ -819,12 +810,6 @@ private:
         // lists of critical nodes, in a similar fashion to the vector of partial trees above.
         tbb::concurrent_vector<cnode_list_type> crit_nodes;
         // Add the root node.
-        const auto root_sqr_node_dim = m_box_size * m_box_size;
-        if (!std::isfinite(root_sqr_node_dim)) {
-            throw std::invalid_argument(
-                "The computation of the square of the dimension of the root node leads to the non-finite value "
-                + std::to_string(root_sqr_node_dim));
-        }
         node_type root_node{};
         // NOTE: node begin is already set to zero via value-init.
         root_node.end = static_cast<size_type>(m_codes.size());
@@ -832,8 +817,6 @@ private:
         // will be filled in later.
         root_node.code = 1;
         // NOTE: the tree level is already set to zero via value-init.
-        // NOTE: props are already inited to zero via value-init.
-        root_node.dim2 = root_sqr_node_dim;
         m_tree.push_back(std::move(root_node));
         // Compute the root node's properties. Do it concurrently with other computations.
         tbb::task_group tg;
@@ -963,8 +946,9 @@ private:
         assert(std::all_of(m_tree.begin(), m_tree.end(),
                            [](const auto &n) { return n.level == tree_level<NDim>(n.code); }));
         // Verify the node dim2.
-        assert(std::all_of(m_tree.begin(), m_tree.end(),
-                           [this](const auto &n) { return n.dim2 == get_sqr_node_dim(n.level); }));
+        assert(std::all_of(m_tree.begin(), m_tree.end(), [this](const auto &n) {
+            return n.dim2 == get_node_dim(n.level, m_box_size) * get_node_dim(n.level, m_box_size);
+        }));
 
         // NOTE: a couple of final checks to make sure we can use size_type to represent both the tree
         // size and the size of the list of critical nodes.
@@ -1038,7 +1022,7 @@ private:
         if (tot_mass == F(0)) {
             // If the total mass of the node is zero, it does not have a com.
             // Use the geometrical centre in its stead.
-            node_centre(com_pos, node.code, m_box_size);
+            get_node_centre(com_pos, node.code, m_box_size);
         } else {
             // Otherwise, divide by the total mass to get the com.
             const auto inv_tot_mass = F(1) / tot_mass;
@@ -1052,6 +1036,14 @@ private:
             node.props[j] = com_pos[j];
         }
         node.props[NDim] = tot_mass;
+
+        const auto node_dim = get_node_dim(node.level, m_box_size);
+
+        if constexpr (MAC == mac::bh) {
+            node.dim2 = node_dim * node_dim;
+        } else if constexpr (MAC == mac::bh_geom) {
+            node.dim = node_dim;
+        }
     }
     // Discretize the coordinates of the particle at index idx. The result will
     // be written into retval.
