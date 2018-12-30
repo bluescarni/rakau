@@ -493,6 +493,8 @@ IGOR_MAKE_NAMED_ARGUMENT(split);
 template <typename F>
 using f_vector = std::vector<F, di_aligned_allocator<F, XSIMD_DEFAULT_ALIGNMENT>>;
 
+enum class mac { bh };
+
 // NOTE: possible improvements:
 // - it is still not yet clear to me what the NUMA picture is here. During tree traversal, the results
 //   and the target node data are stored in thread local caches, so maybe we can try to ensure that
@@ -520,7 +522,7 @@ using f_vector = std::vector<F, di_aligned_allocator<F, XSIMD_DEFAULT_ALIGNMENT>
 // - would be interesting to see if we can do the permutations in-place efficiently. If that worked, it would probably
 //   help simplifying things on the GPU side. See for instance:
 //   https://stackoverflow.com/questions/7365814/in-place-array-reordering
-template <std::size_t NDim, typename F, typename UInt = std::size_t>
+template <std::size_t NDim, typename F, typename UInt, mac Mac>
 class tree
 {
     // Need at least 1 dimension.
@@ -3444,11 +3446,11 @@ private:
 #endif
 };
 
-template <typename F>
-using quadtree = tree<2, F>;
+template <typename F, mac Mac = mac::bh>
+using quadtree = tree<2, F, std::size_t, Mac>;
 
-template <typename F>
-using octree = tree<3, F>;
+template <typename F, mac Mac = mac::bh>
+using octree = tree<3, F, std::size_t, Mac>;
 
 } // namespace rakau
 
