@@ -534,6 +534,8 @@ class tree
     // UInt must be an unsigned integral.
     static_assert(std::is_integral_v<UInt> && std::is_unsigned_v<UInt>,
                   "The type UInt must be a C++ unsigned integral type.");
+    // Check the MAC enum value.
+    static_assert(MAC <= mac::bh_geom, "The selected MAC does not exist.");
     // cbits shortcut.
     static constexpr auto cbits = cbits_v<UInt, NDim>;
     // simd_enabled shortcut.
