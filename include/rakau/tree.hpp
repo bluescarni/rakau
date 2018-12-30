@@ -493,8 +493,6 @@ IGOR_MAKE_NAMED_ARGUMENT(split);
 template <typename F>
 using f_vector = std::vector<F, di_aligned_allocator<F, XSIMD_DEFAULT_ALIGNMENT>>;
 
-enum class mac { bh };
-
 // NOTE: possible improvements:
 // - it is still not yet clear to me what the NUMA picture is here. During tree traversal, the results
 //   and the target node data are stored in thread local caches, so maybe we can try to ensure that
@@ -522,7 +520,7 @@ enum class mac { bh };
 // - would be interesting to see if we can do the permutations in-place efficiently. If that worked, it would probably
 //   help simplifying things on the GPU side. See for instance:
 //   https://stackoverflow.com/questions/7365814/in-place-array-reordering
-template <std::size_t NDim, typename F, typename UInt, mac Mac>
+template <std::size_t NDim, typename F, typename UInt, mac MAC>
 class tree
 {
     // Need at least 1 dimension.
@@ -549,7 +547,7 @@ private:
     // is the same as the actual size type.
     static_assert(std::is_same_v<size_type, typename f_vector<F>::size_type>);
     // The node type.
-    using node_type = tree_node_t<NDim, F, UInt>;
+    using node_type = tree_node_t<NDim, F, UInt, MAC>;
     // The tree type.
     using tree_type = std::vector<node_type, di_aligned_allocator<node_type>>;
     // The critical node descriptor type (nodal code and particle range).
@@ -634,16 +632,19 @@ private:
                     // parent nodal code by NDim and adding the current child node index i.
                     const auto cur_code = static_cast<UInt>((parent_code << NDim) + i);
                     // Create the new node.
-                    node_type new_node{static_cast<size_type>(std::distance(m_codes.begin(), it_start.base())),
-                                       static_cast<size_type>(std::distance(m_codes.begin(), it_end.base())),
-                                       // NOTE: the children count gets inited to zero. It
-                                       // will be filled in later.
-                                       0,
-                                       cur_code,
-                                       ParentLevel + 1u,
-                                       // NOTE: make sure the node props are initialised to zero.
-                                       {},
-                                       get_sqr_node_dim(ParentLevel + 1u)};
+                    // NOTE: here and elsewhere we value-init the node object. This is not necessary,
+                    // as we could def-init and set all the node members below instead. However, GCC complains with a
+                    // warning if we don't do this, so instead we value-init and then set explicitly those members which
+                    // are not zero.
+                    node_type new_node{};
+                    new_node.begin = static_cast<size_type>(std::distance(m_codes.begin(), it_start.base()));
+                    new_node.end = static_cast<size_type>(std::distance(m_codes.begin(), it_end.base()));
+                    // NOTE: the children count gets inited to zero. It
+                    // will be filled in later.
+                    new_node.code = cur_code;
+                    new_node.level = ParentLevel + 1u;
+                    // NOTE: the props are inited to zero thanks to value-init.
+                    new_node.dim2 = get_sqr_node_dim(ParentLevel + 1u);
                     // Compute its properties.
                     compute_node_properties(new_node);
                     // Add the node to the tree.
@@ -730,13 +731,12 @@ private:
                         // NOTE: use push_back(tree_type{}) instead of emplace_back() because
                         // TBB hates clang apparently.
                         auto &new_tree = *trees.push_back(tree_type{});
-                        node_type new_node{static_cast<size_type>(std::distance(m_codes.begin(), it_start.base())),
-                                           static_cast<size_type>(std::distance(m_codes.begin(), it_end.base())),
-                                           0,
-                                           cur_code,
-                                           ParentLevel + 1u,
-                                           {},
-                                           get_sqr_node_dim(ParentLevel + 1u)};
+                        node_type new_node{};
+                        new_node.begin = static_cast<size_type>(std::distance(m_codes.begin(), it_start.base()));
+                        new_node.end = static_cast<size_type>(std::distance(m_codes.begin(), it_end.base()));
+                        new_node.code = cur_code;
+                        new_node.level = ParentLevel + 1u;
+                        new_node.dim2 = get_sqr_node_dim(ParentLevel + 1u);
                         compute_node_properties(new_node);
                         new_tree.push_back(std::move(new_node));
                         const auto u_npart
@@ -823,19 +823,16 @@ private:
                 "The computation of the square of the dimension of the root node leads to the non-finite value "
                 + std::to_string(root_sqr_node_dim));
         }
-        m_tree.push_back(node_type{size_type(0),
-                                   size_type(m_codes.size()),
-                                   // NOTE: the children count gets inited to zero. It
-                                   // will be filled in later.
-                                   0,
-                                   // Root code is 1.
-                                   1,
-                                   0,
-                                   // NOTE: make sure mass and COM coords are initialised in a known state (i.e.,
-                                   // zero for C++ floating-point).
-                                   {},
-                                   root_sqr_node_dim});
-
+        node_type root_node{};
+        // NOTE: node begin is already set to zero via value-init.
+        root_node.end = static_cast<size_type>(m_codes.size());
+        // NOTE: the children count gets inited to zero. It
+        // will be filled in later.
+        root_node.code = 1;
+        // NOTE: the tree level is already set to zero via value-init.
+        // NOTE: props are already inited to zero via value-init.
+        root_node.dim2 = root_sqr_node_dim;
+        m_tree.push_back(std::move(root_node));
         // Compute the root node's properties. Do it concurrently with other computations.
         tbb::task_group tg;
         tg.run([this]() { compute_node_properties(m_tree.back()); });
@@ -3446,11 +3443,11 @@ private:
 #endif
 };
 
-template <typename F, mac Mac = mac::bh>
-using quadtree = tree<2, F, std::size_t, Mac>;
+template <typename F, mac MAC = mac::bh>
+using quadtree = tree<2, F, std::size_t, MAC>;
 
-template <typename F, mac Mac = mac::bh>
-using octree = tree<3, F, std::size_t, Mac>;
+template <typename F, mac MAC = mac::bh>
+using octree = tree<3, F, std::size_t, MAC>;
 
 } // namespace rakau
 

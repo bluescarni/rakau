@@ -38,6 +38,10 @@
 
 namespace rakau
 {
+
+// Multipole acceptance criteria.
+enum class mac { bh, bh_geom };
+
 inline namespace detail
 {
 
@@ -58,19 +62,27 @@ template <typename F>
 using tree_size_t = typename std::vector<F, di_aligned_allocator<F, 0>>::size_type;
 
 // Tree node structure.
-template <std::size_t NDim, typename F, typename UInt>
+// NOTE: the default implementation is empty and it will error
+// out if used.
+template <std::size_t NDim, typename F, typename UInt, mac MAC>
 struct tree_node_t {
+    static_assert(dependent_false_v<F>,
+                  "The specialisation of the tree node type for this set of parameters is not available.");
+};
+
+// Tree node data common to all node implementations.
+template <std::size_t NDim, typename F, typename UInt>
+struct base_tree_node_t {
     // Node begin/end (in the arrays of particle data) and number of children.
-    // NOTE: these will be 64bit uints in most cases.
     tree_size_t<F> begin, end, n_children;
     // Node code and level.
-    // NOTE: these will be 32/64bit uints in most cases. Because there's 2 of these,
-    // they will typically not result in padding.
     UInt code, level;
+};
+
+// Tree node for the BH MAC.
+template <std::size_t NDim, typename F, typename UInt>
+struct tree_node_t<NDim, F, UInt, mac::bh> : base_tree_node_t<NDim, F, UInt> {
     // Node properties (COM coordinates + mass) and square of the node dimension.
-    // NOTE: these will be single/double precision ieee FPs in most cases. Assuming
-    // we have no padding at this point, any extra padding necessary can be placed
-    // here.
     F props[NDim + 1u], dim2;
 };
 
