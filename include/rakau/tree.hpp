@@ -1033,11 +1033,12 @@ private:
         if (tot_mass == F(0)) {
             // If the total mass of the node is zero, it does not have a com.
             // Use the geometrical centre in its stead.
-            if constexpr (MAC == mac::bh_geom) {
+            if constexpr (MAC == mac::bh) {
+                get_node_centre(com_pos, node.code, m_box_size);
+            } else {
+                static_assert(MAC == mac::bh_geom);
                 // Don't recompute it if it is available already.
                 std::copy(std::begin(geo_centre), std::end(geo_centre), std::begin(com_pos));
-            } else {
-                get_node_centre(com_pos, node.code, m_box_size);
             }
         } else {
             // Otherwise, divide by the total mass to get the com.
@@ -1057,7 +1058,8 @@ private:
 
         if constexpr (MAC == mac::bh) {
             node.dim2 = node_dim * node_dim;
-        } else if constexpr (MAC == mac::bh_geom) {
+        } else {
+            static_assert(MAC == mac::bh_geom);
             node.dim = node_dim;
             // Compute the distance between com and geometrical centre.
             auto delta2 = (com_pos[0] - geo_centre[0]) * (com_pos[0] - geo_centre[0]);
