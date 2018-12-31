@@ -945,9 +945,14 @@ private:
         // Verify the node levels.
         assert(std::all_of(m_tree.begin(), m_tree.end(),
                            [](const auto &n) { return n.level == tree_level<NDim>(n.code); }));
-        // Verify the node dim2.
+        // Verify more node properties.
         assert(std::all_of(m_tree.begin(), m_tree.end(), [this](const auto &n) {
-            return n.dim2 == get_node_dim(n.level, m_box_size) * get_node_dim(n.level, m_box_size);
+            if constexpr (MAC == mac::bh) {
+                return n.dim2 == get_node_dim(n.level, m_box_size) * get_node_dim(n.level, m_box_size);
+            } else {
+                static_assert(MAC == mac::bh_geom);
+                return n.dim == get_node_dim(n.level, m_box_size);
+            }
         }));
 
         // NOTE: a couple of final checks to make sure we can use size_type to represent both the tree
