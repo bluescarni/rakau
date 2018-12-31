@@ -1019,10 +1019,21 @@ private:
             }
         }
 
+        // Geometrical centre. Computed only with the bh_geom MAC.
+        [[maybe_unused]] F geo_centre[NDim];
+        if constexpr (MAC == mac::bh_geom) {
+            get_node_centre(geo_centre, node.code, m_box_size);
+        }
+
         if (tot_mass == F(0)) {
             // If the total mass of the node is zero, it does not have a com.
             // Use the geometrical centre in its stead.
-            get_node_centre(com_pos, node.code, m_box_size);
+            if constexpr (MAC == mac::bh_geom) {
+                // Don't recompute it if it is available already.
+                std::copy(std::begin(geo_centre), std::end(geo_centre), std::begin(com_pos));
+            } else {
+                get_node_centre(com_pos, node.code, m_box_size);
+            }
         } else {
             // Otherwise, divide by the total mass to get the com.
             const auto inv_tot_mass = F(1) / tot_mass;
@@ -1043,6 +1054,12 @@ private:
             node.dim2 = node_dim * node_dim;
         } else if constexpr (MAC == mac::bh_geom) {
             node.dim = node_dim;
+            // Compute the distance between com and geometrical centre.
+            auto delta2 = (com_pos[0] - geo_centre[0]) * (com_pos[0] - geo_centre[0]);
+            for (std::size_t j = 1; j < NDim; ++j) {
+                delta2 = fma_wrap(com_pos[j] - geo_centre[j], com_pos[j] - geo_centre[j], delta2);
+            }
+            node.delta = std::sqrt(delta2);
         }
     }
     // Discretize the coordinates of the particle at index idx. The result will
@@ -2314,12 +2331,12 @@ private:
     }
     // Function to check if a source node satisfies the BH criterion and, possibly, to compute the
     // accelerations/potentials due to that source node. src_idx is the index, in the tree structure, of the source
-    // node, inv_theta2 the inv square of the opening angle, eps2 the square of the softening length, tgt_size the
-    // number of particles in the target node, p_ptrs pointers to the coordinates/masses of the particles in the target
-    // node, res_ptrs pointers to the output arrays. The return value is the index of the next source node in the tree
-    // traversal. Q indicates which quantities will be computed (accs, potentials, or both).
+    // node, mac_value the value of the MAC (or some function of it), eps2 the square of the softening length, tgt_size
+    // the number of particles in the target node, p_ptrs pointers to the coordinates/masses of the particles in the
+    // target node, res_ptrs pointers to the output arrays. The return value is the index of the next source node in the
+    // tree traversal. Q indicates which quantities will be computed (accs, potentials, or both).
     template <unsigned Q>
-    size_type tree_acc_pot_bh_check(size_type src_idx, F inv_theta2, F eps2, size_type tgt_size,
+    size_type tree_acc_pot_bh_check(size_type src_idx, F mac_value, F eps2, size_type tgt_size,
                                     const std::array<const F *, NDim + 1u> &p_ptrs,
                                     const std::array<F *, nvecs_res<Q>> &res_ptrs) const
     {
@@ -2353,7 +2370,17 @@ private:
         // Copy locally the number of children of the source node.
         const auto n_children_src = src_node.n_children;
         // Left-hand side of the BH check.
-        const auto bh_lh = src_node.dim2 * inv_theta2;
+        const auto bh_lh = [mac_value, &src_node]() {
+            if constexpr (MAC == mac::bh) {
+                // NOTE: for the BH MAC, mac_value is theta**-2.
+                return src_node.dim2 * mac_value;
+            } else {
+                // NOTE: for the geometric BH MAC, mac_value is theta**-1.
+                static_assert(MAC == mac::bh_geom);
+                const auto tmp = fma_wrap(src_node.dim, mac_value, src_node.delta);
+                return tmp * tmp;
+            }
+        }();
         // The flag for the BH criterion check. Initially set to true,
         // it will be set to false if at least one particle in the
         // target node fails the check.
@@ -2505,12 +2532,12 @@ private:
         // In any case, we keep traversing the tree moving to the next node in depth-first order.
         return static_cast<size_type>(src_idx + 1u);
     }
-    // Tree traversal for the computation of the accelerations/potentials. inv_theta2 is the inverse square of the
-    // opening angle, eps2 the square of the softening length, tgt_size the number of particles in the target node,
+    // Tree traversal for the computation of the accelerations/potentials. mac_value is the value of the MAC, or some
+    // function of it, eps2 the square of the softening length, tgt_size the number of particles in the target node,
     // tgt_code its code, p_ptrs are pointers to the coordinates/masses of the particles in the target node, res_ptrs
     // pointers to the output arrays. Q indicates which quantities will be computed (accs, potentials, or both).
     template <unsigned Q>
-    void tree_acc_pot(F inv_theta2, F eps2, size_type tgt_size, UInt tgt_code,
+    void tree_acc_pot(F mac_value, F eps2, size_type tgt_size, UInt tgt_code,
                       const std::array<const F *, NDim + 1u> &p_ptrs,
                       const std::array<F *, nvecs_res<Q>> &res_ptrs) const
     {
@@ -2554,7 +2581,7 @@ private:
                 // The source node is not an ancestor of the target. We need to run the BH criterion
                 // check. The tree_acc_pot_bh_check() function will return the index of the next node
                 // in the traversal.
-                src_idx = tree_acc_pot_bh_check<Q>(src_idx, inv_theta2, eps2, tgt_size, p_ptrs, res_ptrs);
+                src_idx = tree_acc_pot_bh_check<Q>(src_idx, mac_value, eps2, tgt_size, p_ptrs, res_ptrs);
             }
         }
 
@@ -2562,10 +2589,10 @@ private:
         tree_self_interactions<Q>(eps2, tgt_size, p_ptrs, res_ptrs);
     }
     // Top level function for the computation of the accelerations/potentials. out is the array of output iterators,
-    // inv_theta2 the inverse square of the opening angle, G the grav constant, eps2 the square of the softening length.
-    // Q indicates which quantities will be computed (accs, potentials, or both).
+    // mac_value is the value of the MAC, or some function of it, G the grav constant, eps2 the square of the softening
+    // length. Q indicates which quantities will be computed (accs, potentials, or both).
     template <unsigned Q, typename It>
-    void acc_pot_impl(const std::array<It, nvecs_res<Q>> &out, F inv_theta2, F G, F eps2,
+    void acc_pot_impl(const std::array<It, nvecs_res<Q>> &out, F mac_value, F G, F eps2,
                       const std::vector<double> &split) const
     {
         // Validation of split, common to all codepaths.
@@ -2580,7 +2607,7 @@ private:
         }
 
         using c_size_type = decltype(m_crit_nodes.size());
-        auto cpu_run = [this, &out, inv_theta2, G, eps2](c_size_type c_begin, c_size_type c_end) {
+        auto cpu_run = [this, &out, mac_value, G, eps2](c_size_type c_begin, c_size_type c_end) {
             assert(c_begin <= c_end);
             assert(c_end <= m_crit_nodes.size());
 
@@ -2594,28 +2621,44 @@ private:
             //   - they must not overlap with any other real particle, in order to avoid singularities
             //     when computing self-interactions in the target node, hence they must be outside the box,
             //   - the distance of the padding particles from any point of the box must be large enough so
-            //     that they never fail the BH criterion check, which fails when node_dim >= theta * dist.
-            //     The maximum node_dim is the box size b_size, and thus we must ensure that
-            //     dist > b_size / theta for the padding particles.
+            //     that they never fail the MAC check. The bh check fails when node_dim >= theta * dist,
+            //     the geometric bh check fails when node_dim >= theta * (dist - delta).
+            //     The maximum node_dim is the box size b_size, the maximum possible delta is
+            //     b_size / 2 * sqrt(NDim). For the bh check we then must ensure that dist > b_size / theta
+            //     for the padding particles, for the geometric check we must ensure that
+            //     dist > b_size / theta + b_size / 2 * sqrt(NDim) for the padding particles.
             //
             // The strategy is that we put the padding particles at coordinates (M, M, ...), with M to
             // be determined. The upper right corner of the box, with coordinates (b_size/2, b_size/2, ...)
             // will be the closest point of the box to the padding particles, and the corner-particles distance
             // will be sqrt(NDim * (M - b_size/2)**2), which simplifies to sqrt(NDim) / 2 * (2*M - b_size).
-            // Now we require this distance to be large enough to always satisfy the BH criterion (as written
-            // above), that is, sqrt(NDim) / 2 * (2*M - b_size) > b_size / theta, which yields the requirement
-            // M > b_size / (theta * sqrt(NDim)) + b_size / 2.
-            const auto M = m_box_size / (std::sqrt(F(1) / inv_theta2) * std::sqrt(F(NDim))) + m_box_size / F(2);
-            // NOTE: M is mathematically always >= m_box_size / F(2), which puts it on the top right
-            // corner of the box for theta2 == inf. To make it completely safe with respect to the requirement
-            // of avoiding singularities in the self interaction routine, we double it.
-            const auto pad_coord = M * F(2);
-            if (!std::isfinite(pad_coord)) {
+            // Now we require this distance to be large enough to always satisfy the MAC criteria,
+            // that is, sqrt(NDim) / 2 * (2*M - b_size) > b_size / theta for the bh check, which yields the requirement
+            // M > b_size / (theta * sqrt(NDim)) + b_size / 2, and
+            // sqrt(NDim) / 2 * (2*M - b_size) > b_size / theta + sqrt(NDim) * b_size / 2 for the geometric bh
+            // check, which yields the requirement M > b_size / (theta * sqrt(NDim)) + b_size.
+            const auto pad_coord = [this, mac_value]() {
+                if constexpr (MAC == mac::bh) {
+                    // NOTE: for the bh mac, mac_value is theta**-2.
+                    const auto M = m_box_size / (std::sqrt(F(1) / mac_value) * std::sqrt(F(NDim))) + m_box_size / F(2);
+                    // NOTE: M is mathematically always >= m_box_size / F(2), which puts it on the top right
+                    // corner of the box for theta2 == inf. To make it completely safe with respect to the requirement
+                    // of avoiding singularities in the self interaction routine, we double it.
+                    return M * F(2);
+                } else {
+                    static_assert(MAC == mac::bh_geom);
+                    // NOTE: for the geometric bh mac, mac_value is theta**-1.
+                    const auto M = m_box_size / (F(1) / mac_value * std::sqrt(F(NDim))) + m_box_size;
+                    return M * F(2);
+                }
+            }();
+            // Double check the padding coordinate.
+            if (rakau_unlikely(!std::isfinite(pad_coord))) {
                 throw std::invalid_argument(
                     "The calculation of the SIMD padding coordinate produced the non-finite value "
                     + std::to_string(pad_coord));
             }
-            tbb::parallel_for(tbb::blocked_range(c_begin, c_end), [this, inv_theta2, G, eps2, pad_coord,
+            tbb::parallel_for(tbb::blocked_range(c_begin, c_end), [this, mac_value, G, eps2, pad_coord,
                                                                    &out](const auto &range) {
                 // Get references to the local temporary data.
                 auto &tmp_res = acc_pot_tmp_res<Q>();
@@ -2676,7 +2719,7 @@ private:
                         p_ptrs[j] = tmp_tgt[j].data();
                     }
                     // Do the computation.
-                    tree_acc_pot<Q>(inv_theta2, eps2, tgt_size, tgt_code, p_ptrs, res_ptrs);
+                    tree_acc_pot<Q>(mac_value, eps2, tgt_size, tgt_code, p_ptrs, res_ptrs);
                     // Multiply by G, if needed.
                     if (G != F(1)) {
                         for (std::size_t j = 0; j < nvecs_res<Q>; ++j) {
@@ -2769,9 +2812,9 @@ private:
                     // cpu_run() throws, we will be sure that this thread will end before the exception
                     // is handled.
                     auto roc_fut
-                        = std::async(std::launch::async, [this, particle_split_idx, &out, inv_theta2, G, eps2]() {
+                        = std::async(std::launch::async, [this, particle_split_idx, &out, mac_value, G, eps2]() {
                               m_rocm->template acc_pot<Q>(boost::numeric_cast<int>(particle_split_idx),
-                                                          boost::numeric_cast<int>(nparts()), out, inv_theta2, G, eps2);
+                                                          boost::numeric_cast<int>(nparts()), out, mac_value, G, eps2);
                           });
 
                     // Run the cpu implementation.
@@ -2873,9 +2916,9 @@ private:
 
                     // Run the CUDA computation in async mode.
                     auto cuda_fut
-                        = std::async(std::launch::async, [&out, &split_indices, this, np, inv_theta2, G, eps2]() {
+                        = std::async(std::launch::async, [&out, &split_indices, this, np, mac_value, G, eps2]() {
                               cuda_acc_pot_impl<Q>(out, split_indices, m_tree.data(), m_tree.size(), p_its_u(),
-                                                   m_codes.data(), np, inv_theta2, G, eps2);
+                                                   m_codes.data(), np, mac_value, G, eps2);
                           });
 
                     // Run the cpu implementation.
@@ -2935,23 +2978,32 @@ private:
         }
     }
     // Top level dispatcher for the accs/pots functions. It will run a few checks and then invoke acc_pot_impl().
-    // out is the array of output iterators, theta the opening angle, G the grav const, eps the softening length.
+    // out is the array of output iterators, orig_mac_value the MAC value, G the grav const, eps the softening length.
     // Q indicates which quantities will be computed (accs, potentials, or both).
     template <bool Ordered, unsigned Q, typename It>
-    void acc_pot_dispatch(const std::array<It, nvecs_res<Q>> &out, F theta, F G, F eps,
+    void acc_pot_dispatch(const std::array<It, nvecs_res<Q>> &out, F orig_mac_value, F G, F eps,
                           const std::vector<double> &split) const
     {
         simple_timer st("vector accs/pots computation");
         // Input param check.
-        if (rakau_unlikely(!std::isfinite(theta) || theta <= F(0))) {
-            throw std::domain_error("The theta parameter must be finite and positive, but it is "
-                                    + std::to_string(theta) + " instead");
+        if (rakau_unlikely(!std::isfinite(orig_mac_value) || orig_mac_value <= F(0))) {
+            throw std::domain_error("The MAC value must be finite and positive, but it is "
+                                    + std::to_string(orig_mac_value) + " instead");
         }
-        const auto inv_theta2 = F(1) / (theta * theta);
-        // Check that the computation of inv_theta2 did not produce something weird.
-        if (rakau_unlikely(!std::isfinite(inv_theta2) || inv_theta2 <= F(0))) {
-            throw std::domain_error("The inverse square of the theta parameter must be finite and positive, but it is "
-                                    + std::to_string(inv_theta2) + " instead");
+        const auto mac_value = [orig_mac_value]() {
+            if constexpr (MAC == mac::bh) {
+                // Transform the original value, theta, into theta**-2.
+                return F(1) / (orig_mac_value * orig_mac_value);
+            } else {
+                static_assert(MAC == mac::bh_geom);
+                // Transform the original value, theta, into theta**-1.
+                return F(1) / orig_mac_value;
+            }
+        }();
+        // Check that the computation of mac_value did not produce something weird.
+        if (rakau_unlikely(!std::isfinite(mac_value) || mac_value <= F(0))) {
+            throw std::domain_error("The transformed MAC value be finite and positive, but it is "
+                                    + std::to_string(mac_value) + " instead");
         }
         const auto eps2 = compute_eps2(eps);
         check_G_const(G);
@@ -2966,15 +3018,15 @@ private:
             }
             // NOTE: we are checking in the acc_pot_impl() function that we can index into
             // the permuted iterators without overflows (see the use of boost::numeric_cast()).
-            acc_pot_impl<Q>(out_pits, inv_theta2, G, eps2, split);
+            acc_pot_impl<Q>(out_pits, mac_value, G, eps2, split);
         } else {
-            acc_pot_impl<Q>(out, inv_theta2, G, eps2, split);
+            acc_pot_impl<Q>(out, mac_value, G, eps2, split);
         }
     }
     // Helper overload for an array of vectors. It will prepare the vectors and then
     // call the other overload.
     template <bool Ordered, unsigned Q, typename Allocator>
-    void acc_pot_dispatch(std::array<std::vector<F, Allocator>, nvecs_res<Q>> &out, F theta, F G, F eps,
+    void acc_pot_dispatch(std::array<std::vector<F, Allocator>, nvecs_res<Q>> &out, F mac_value, F G, F eps,
                           const std::vector<double> &split) const
     {
         std::array<F *, nvecs_res<Q>> out_ptrs;
@@ -2982,16 +3034,17 @@ private:
             out[j].resize(boost::numeric_cast<decltype(out[j].size())>(m_parts[0].size()));
             out_ptrs[j] = out[j].data();
         }
-        acc_pot_dispatch<Ordered, Q>(out_ptrs, theta, G, eps, split);
+        acc_pot_dispatch<Ordered, Q>(out_ptrs, mac_value, G, eps, split);
     }
     // Helper overload for a single vector. It will prepare the vector and then
     // call the other overload. This is used for the potential-only computations.
     template <bool Ordered, unsigned Q, typename Allocator>
-    void acc_pot_dispatch(std::vector<F, Allocator> &out, F theta, F G, F eps, const std::vector<double> &split) const
+    void acc_pot_dispatch(std::vector<F, Allocator> &out, F mac_value, F G, F eps,
+                          const std::vector<double> &split) const
     {
         static_assert(Q == 1u);
         out.resize(boost::numeric_cast<decltype(out.size())>(m_parts[0].size()));
-        acc_pot_dispatch<Ordered, Q>(std::array{out.data()}, theta, G, eps, split);
+        acc_pot_dispatch<Ordered, Q>(std::array{out.data()}, mac_value, G, eps, split);
     }
     // Small helper to turn an init list into an array, in the functions for the computation
     // of the accelerations/potentials. Q indicates which quantities will be computed (accs,
@@ -3036,96 +3089,96 @@ private:
 
 public:
     template <typename Allocator, typename... KwArgs>
-    void accs_u(std::array<std::vector<F, Allocator>, NDim> &out, F theta, KwArgs &&... args) const
+    void accs_u(std::array<std::vector<F, Allocator>, NDim> &out, F mac_value, KwArgs &&... args) const
     {
         const auto [G, eps, split] = parse_accpot_kwargs(std::forward<KwArgs>(args)...);
-        acc_pot_dispatch<false, 0>(out, theta, G, eps, split);
+        acc_pot_dispatch<false, 0>(out, mac_value, G, eps, split);
     }
     template <typename It, typename... KwArgs>
-    void accs_u(const std::array<It, NDim> &out, F theta, KwArgs &&... args) const
+    void accs_u(const std::array<It, NDim> &out, F mac_value, KwArgs &&... args) const
     {
         const auto [G, eps, split] = parse_accpot_kwargs(std::forward<KwArgs>(args)...);
-        acc_pot_dispatch<false, 0>(out, theta, G, eps, split);
+        acc_pot_dispatch<false, 0>(out, mac_value, G, eps, split);
     }
     template <typename It, typename... KwArgs>
-    void accs_u(std::initializer_list<It> out, F theta, KwArgs &&... args) const
+    void accs_u(std::initializer_list<It> out, F mac_value, KwArgs &&... args) const
     {
-        accs_u(acc_pot_ilist_to_array<0>(out), theta, std::forward<KwArgs>(args)...);
+        accs_u(acc_pot_ilist_to_array<0>(out), mac_value, std::forward<KwArgs>(args)...);
     }
     template <typename Allocator, typename... KwArgs>
-    void pots_u(std::vector<F, Allocator> &out, F theta, KwArgs &&... args) const
+    void pots_u(std::vector<F, Allocator> &out, F mac_value, KwArgs &&... args) const
     {
         const auto [G, eps, split] = parse_accpot_kwargs(std::forward<KwArgs>(args)...);
-        acc_pot_dispatch<false, 1>(out, theta, G, eps, split);
+        acc_pot_dispatch<false, 1>(out, mac_value, G, eps, split);
     }
     template <typename It, typename... KwArgs>
-    void pots_u(It out, F theta, KwArgs &&... args) const
+    void pots_u(It out, F mac_value, KwArgs &&... args) const
     {
         const auto [G, eps, split] = parse_accpot_kwargs(std::forward<KwArgs>(args)...);
-        acc_pot_dispatch<false, 1>(std::array{out}, theta, G, eps, split);
+        acc_pot_dispatch<false, 1>(std::array{out}, mac_value, G, eps, split);
     }
     template <typename Allocator, typename... KwArgs>
-    void accs_pots_u(std::array<std::vector<F, Allocator>, NDim + 1u> &out, F theta, KwArgs &&... args) const
+    void accs_pots_u(std::array<std::vector<F, Allocator>, NDim + 1u> &out, F mac_value, KwArgs &&... args) const
     {
         const auto [G, eps, split] = parse_accpot_kwargs(std::forward<KwArgs>(args)...);
-        acc_pot_dispatch<false, 2>(out, theta, G, eps, split);
+        acc_pot_dispatch<false, 2>(out, mac_value, G, eps, split);
     }
     template <typename It, typename... KwArgs>
-    void accs_pots_u(const std::array<It, NDim + 1u> &out, F theta, KwArgs &&... args) const
+    void accs_pots_u(const std::array<It, NDim + 1u> &out, F mac_value, KwArgs &&... args) const
     {
         const auto [G, eps, split] = parse_accpot_kwargs(std::forward<KwArgs>(args)...);
-        acc_pot_dispatch<false, 2>(out, theta, G, eps, split);
+        acc_pot_dispatch<false, 2>(out, mac_value, G, eps, split);
     }
     template <typename It, typename... KwArgs>
-    void accs_pots_u(std::initializer_list<It> out, F theta, KwArgs &&... args) const
+    void accs_pots_u(std::initializer_list<It> out, F mac_value, KwArgs &&... args) const
     {
-        accs_pots_u(acc_pot_ilist_to_array<2>(out), theta, std::forward<KwArgs>(args)...);
+        accs_pots_u(acc_pot_ilist_to_array<2>(out), mac_value, std::forward<KwArgs>(args)...);
     }
     template <typename Allocator, typename... KwArgs>
-    void accs_o(std::array<std::vector<F, Allocator>, NDim> &out, F theta, KwArgs &&... args) const
+    void accs_o(std::array<std::vector<F, Allocator>, NDim> &out, F mac_value, KwArgs &&... args) const
     {
         const auto [G, eps, split] = parse_accpot_kwargs(std::forward<KwArgs>(args)...);
-        acc_pot_dispatch<true, 0>(out, theta, G, eps, split);
+        acc_pot_dispatch<true, 0>(out, mac_value, G, eps, split);
     }
     template <typename It, typename... KwArgs>
-    void accs_o(const std::array<It, NDim> &out, F theta, KwArgs &&... args) const
+    void accs_o(const std::array<It, NDim> &out, F mac_value, KwArgs &&... args) const
     {
         const auto [G, eps, split] = parse_accpot_kwargs(std::forward<KwArgs>(args)...);
-        acc_pot_dispatch<true, 0>(out, theta, G, eps, split);
+        acc_pot_dispatch<true, 0>(out, mac_value, G, eps, split);
     }
     template <typename It, typename... KwArgs>
-    void accs_o(std::initializer_list<It> out, F theta, KwArgs &&... args) const
+    void accs_o(std::initializer_list<It> out, F mac_value, KwArgs &&... args) const
     {
-        accs_o(acc_pot_ilist_to_array<0>(out), theta, std::forward<KwArgs>(args)...);
+        accs_o(acc_pot_ilist_to_array<0>(out), mac_value, std::forward<KwArgs>(args)...);
     }
     template <typename Allocator, typename... KwArgs>
-    void pots_o(std::vector<F, Allocator> &out, F theta, KwArgs &&... args) const
+    void pots_o(std::vector<F, Allocator> &out, F mac_value, KwArgs &&... args) const
     {
         const auto [G, eps, split] = parse_accpot_kwargs(std::forward<KwArgs>(args)...);
-        acc_pot_dispatch<true, 1>(out, theta, G, eps, split);
+        acc_pot_dispatch<true, 1>(out, mac_value, G, eps, split);
     }
     template <typename It, typename... KwArgs>
-    void pots_o(It out, F theta, KwArgs &&... args) const
+    void pots_o(It out, F mac_value, KwArgs &&... args) const
     {
         const auto [G, eps, split] = parse_accpot_kwargs(std::forward<KwArgs>(args)...);
-        acc_pot_dispatch<true, 1>(std::array{out}, theta, G, eps, split);
+        acc_pot_dispatch<true, 1>(std::array{out}, mac_value, G, eps, split);
     }
     template <typename Allocator, typename... KwArgs>
-    void accs_pots_o(std::array<std::vector<F, Allocator>, NDim + 1u> &out, F theta, KwArgs &&... args) const
+    void accs_pots_o(std::array<std::vector<F, Allocator>, NDim + 1u> &out, F mac_value, KwArgs &&... args) const
     {
         const auto [G, eps, split] = parse_accpot_kwargs(std::forward<KwArgs>(args)...);
-        acc_pot_dispatch<true, 2>(out, theta, G, eps, split);
+        acc_pot_dispatch<true, 2>(out, mac_value, G, eps, split);
     }
     template <typename It, typename... KwArgs>
-    void accs_pots_o(const std::array<It, NDim + 1u> &out, F theta, KwArgs &&... args) const
+    void accs_pots_o(const std::array<It, NDim + 1u> &out, F mac_value, KwArgs &&... args) const
     {
         const auto [G, eps, split] = parse_accpot_kwargs(std::forward<KwArgs>(args)...);
-        acc_pot_dispatch<true, 2>(out, theta, G, eps, split);
+        acc_pot_dispatch<true, 2>(out, mac_value, G, eps, split);
     }
     template <typename It, typename... KwArgs>
-    void accs_pots_o(std::initializer_list<It> out, F theta, KwArgs &&... args) const
+    void accs_pots_o(std::initializer_list<It> out, F mac_value, KwArgs &&... args) const
     {
-        accs_pots_o(acc_pot_ilist_to_array<2>(out), theta, std::forward<KwArgs>(args)...);
+        accs_pots_o(acc_pot_ilist_to_array<2>(out), mac_value, std::forward<KwArgs>(args)...);
     }
 
 private:
