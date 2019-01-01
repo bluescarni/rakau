@@ -461,24 +461,26 @@ template <typename B, std::size_t NDim>
 inline void batch_batch_grav_accs(std::array<B, NDim> &res, const std::array<B, NDim + 1u> &bs1,
                                   const std::array<B, NDim + 1u> &bs2, const B &eps2_vec)
 {
-    const auto bs_diff = [&bs1, &bs2]() {
-        std::array<B, NDim> ret;
-        for (std::size_t j = 0; j < NDim; ++j) {
-            ret[j] = bs2[j] - bs1[j];
-        }
-        return ret;
-    }();
-    const auto dist2 = batches_softened_norm2(bs_diff, eps2_vec), m2_dist3 = [&bs2, &dist2]() {
-        if constexpr (use_fast_inv_sqrt<B>) {
-            return bs2[NDim] * inv_sqrt_3(dist2);
-        } else {
-            const B dist = xsimd_sqrt(dist2), dist3 = dist * dist2;
-            return bs2[NDim] / dist3;
-        }
-    }();
-    for (std::size_t j = 0; j < NDim; ++j) {
-        res[j] = xsimd_fma(bs_diff[j], m2_dist3, res[j]);
-    }
+    // NOTE: use indices up to NDim - 1 so that we can use the FMA operation
+    // in the computation of the softened distance.
+    index_apply<NDim - 1u>([&](auto... I) {
+        const auto dist2 = (((std::get<I>(bs2) - std::get<I>(bs1)) * (std::get<I>(bs2) - std::get<I>(bs1))) + ...
+                            + xsimd_fma(std::get<NDim - 1u>(bs2) - std::get<NDim - 1u>(bs1),
+                                        std::get<NDim - 1u>(bs2) - std::get<NDim - 1u>(bs1), eps2_vec));
+        const auto m2_dist3 = [&bs2, &dist2]() {
+            if constexpr (use_fast_inv_sqrt<B>) {
+                return bs2[NDim] * inv_sqrt_3(dist2);
+            } else {
+                const B dist = xsimd_sqrt(dist2), dist3 = dist * dist2;
+                return bs2[NDim] / dist3;
+            }
+        }();
+        // NOTE: because we are using NDim - 1 indices (and not NDim), we will have to store the
+        // last value manually.
+        ((std::get<I>(res) = xsimd_fma(std::get<I>(bs2) - std::get<I>(bs1), m2_dist3, std::get<I>(res))), ...);
+        std::get<NDim - 1u>(res)
+            = xsimd_fma(std::get<NDim - 1u>(bs2) - std::get<NDim - 1u>(bs1), m2_dist3, std::get<NDim - 1u>(res));
+    });
 }
 
 // Default values for the max_leaf_n and ncrit tree parameters.
