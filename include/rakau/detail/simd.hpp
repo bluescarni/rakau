@@ -160,17 +160,18 @@ inline auto batches_zero()
 }
 
 // Create an array of batches loading data from the input pointers. The batch type
-// will be the default one for the type T. Aligned specifies whether
-// the pointers point to aligned memory or not. An optional offset will
-// be added to the pointers.
-template <bool Aligned, typename T, std::size_t N>
+// will be B, its scalar type T. Aligned specifies whether the pointers point to
+// aligned memory or not. An optional offset will be added to the pointers.
+template <bool Aligned, typename B, typename T, std::size_t N>
 inline auto batches_load(const std::array<T *, N> &ptrs, std::size_t offset = 0)
 {
+    // Double check that the scalar type of B is T or const T.
+    static_assert(std::is_same_v<std::remove_const_t<T>, typename simd_traits<B>::scalar_type>);
     return index_apply<N>([&ptrs, offset](auto... I) {
         if constexpr (Aligned) {
-            return std::array{xsimd::load_aligned(std::get<I>(ptrs) + offset)...};
+            return std::array{B(std::get<I>(ptrs) + offset, xsimd::aligned_mode{})...};
         } else {
-            return std::array{xsimd::load_unaligned(std::get<I>(ptrs) + offset)...};
+            return std::array{B(std::get<I>(ptrs) + offset, xsimd::unaligned_mode{})...};
         }
     });
 }

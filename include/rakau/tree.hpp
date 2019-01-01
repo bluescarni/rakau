@@ -1904,14 +1904,14 @@ private:
                 // Q == 0, accelerations only.
                 for (size_type i1 = 0; i1 < tgt_size; i1 += batch_size) {
                     // Load the first batch of particles.
-                    const auto bs1 = batches_load<true>(p_ptrs, i1);
+                    const auto bs1 = batches_load<true, batch_type>(p_ptrs, i1);
                     // Init the accumulators for the accelerations on the first batch of particles.
                     auto bs_res1 = batches_zero<batch_type, NDim>();
                     // Now we iterate over the node particles starting 1 position past i1 (to avoid self interactions).
                     // This is the classical n body inner loop.
                     for (size_type i2 = i1 + 1u; i2 < tgt_size; ++i2) {
                         // Load the second batch of particles.
-                        const auto bs2 = batches_load<false>(p_ptrs, i2);
+                        const auto bs2 = batches_load<false, batch_type>(p_ptrs, i2);
                         // Compute the relative positions of 2 wrt 1, and the softened distance square.
                         const auto bs_diff = [&bs1, &bs2]() {
                             std::array<batch_type, NDim> ret;
@@ -2149,10 +2149,10 @@ private:
                 // Q == 0, accelerations only.
                 for (size_type i = 0; i < tgt_size; i += batch_size) {
                     // Load the current batch of target data.
-                    const auto bs1 = batches_load<true>(p_ptrs, i);
+                    const auto bs1 = batches_load<true, batch_type>(p_ptrs, i);
                     // Init the batches for computing the accelerations, loading the
                     // accumulated acceleration for the current batch.
-                    auto bs_res = batches_load<true>(res_ptrs, i);
+                    auto bs_res = batches_load<true, batch_type>(res_ptrs, i);
                     for (size_type j = 0; j < src_size; ++j) {
                         // Load the coords/masses of the current source particle
                         // and splat them into SIMD vectors.
