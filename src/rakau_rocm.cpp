@@ -210,15 +210,15 @@ void rocm_state<NDim, F, UInt, MAC>::acc_pot(int p_begin, int p_end,
                 // Level of the source node.
                 const auto src_level = src_node.level;
                 // Left-hand side of the MAC check.
-                const auto mac_lh = [mac_value, &src_node]() {
+                const auto mac_lh = [mac_value, &src_node, eps2]() {
                     if constexpr (MAC == mac::bh) {
                         // NOTE: for the BH MAC, mac_value is theta**-2.
-                        return src_node.dim2 * mac_value;
+                        return src_node.dim2 * mac_value + eps2;
                     } else {
                         // NOTE: for the geometric BH MAC, mac_value is theta**-1.
                         static_assert(MAC == mac::bh_geom);
                         const auto tmp = src_node.dim * mac_value + src_node.delta;
-                        return tmp * tmp;
+                        return tmp * tmp + eps2;
                     }
                 }();
 
@@ -267,7 +267,7 @@ void rocm_state<NDim, F, UInt, MAC>::acc_pot(int p_begin, int p_end,
                 // Compute the distance between target particle and source COM.
                 // NOTE: if we are in a source node which contains only the target particle,
                 // then dist2 and dist_vec will be zero.
-                F dist2(0);
+                F dist2(eps2);
                 for (std::size_t j = 0; j < NDim; ++j) {
                     const auto diff = props[j] - p_pos[j];
                     dist2 += diff * diff;
@@ -279,8 +279,6 @@ void rocm_state<NDim, F, UInt, MAC>::acc_pot(int p_begin, int p_end,
                     // We will then add the (approximated) contribution of the source node
                     // to the final result.
                     //
-                    // Start by adding the softening.
-                    dist2 += eps2;
                     // Compute the (softened) distance.
                     const auto dist = sqrt(dist2);
                     if constexpr (Q == 0u || Q == 2u) {
