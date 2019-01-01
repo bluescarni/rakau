@@ -209,8 +209,8 @@ void rocm_state<NDim, F, UInt, MAC>::acc_pot(int p_begin, int p_end,
                 }
                 // Level of the source node.
                 const auto src_level = src_node.level;
-                // Left-hand side of the BH check.
-                const auto bh_lh = [mac_value, &src_node]() {
+                // Left-hand side of the MAC check.
+                const auto mac_lh = [mac_value, &src_node]() {
                     if constexpr (MAC == mac::bh) {
                         // NOTE: for the BH MAC, mac_value is theta**-2.
                         return src_node.dim2 * mac_value;
@@ -273,9 +273,9 @@ void rocm_state<NDim, F, UInt, MAC>::acc_pot(int p_begin, int p_end,
                     dist2 += diff * diff;
                     dist_vec[j] = diff;
                 }
-                // Now let's run the BH/ancestor check on all the target particles in the same wavefront.
-                if (hc::__all(s_p_code != src_code && bh_lh < dist2)) {
-                    // The source node does not contain the target particle and it satisfies the BH check.
+                // Now let's run the MAC/ancestor check on all the target particles in the same wavefront.
+                if (hc::__all(s_p_code != src_code && mac_lh < dist2)) {
+                    // The source node does not contain the target particle and it satisfies the MAC.
                     // We will then add the (approximated) contribution of the source node
                     // to the final result.
                     //
@@ -301,7 +301,7 @@ void rocm_state<NDim, F, UInt, MAC>::acc_pot(int p_begin, int p_end,
                     // We can now skip all the children of the source node.
                     src_idx += n_children_src + 1;
                 } else {
-                    // Either the source node contains the target particle, or it fails the BH check.
+                    // Either the source node contains the target particle, or it fails the MAC check.
                     if (!n_children_src) {
                         // We are in a leaf node (possibly containing the target particle).
                         // Compute all the interactions with the target particle.

@@ -134,16 +134,16 @@ struct arr_wrap {
 };
 
 
-// Small helpers to compute the rhs of the bh check. We need this because the members
+// Small helpers to compute the rhs of the MAC check. We need this because the members
 // of the node structure vary depending on the MAC.
 template <std::size_t NDim, typename F, typename UInt, mac MAC, std::enable_if_t<MAC == mac::bh, int> = 0>
-__device__ F compute_bh_lh(const tree_node_t<NDim, F, UInt, MAC> &node, const F &mac_value)
+__device__ F compute_mac_lh(const tree_node_t<NDim, F, UInt, MAC> &node, const F &mac_value)
 {
     return node.dim2 * mac_value;
 }
 
 template <std::size_t NDim, typename F, typename UInt, mac MAC, std::enable_if_t<MAC == mac::bh_geom, int> = 0>
-__device__ F compute_bh_lh(const tree_node_t<NDim, F, UInt, MAC> &node, const F &mac_value)
+__device__ F compute_mac_lh(const tree_node_t<NDim, F, UInt, MAC> &node, const F &mac_value)
 {
     const auto tmp = node.dim * mac_value + node.delta;
     return tmp * tmp;
@@ -200,8 +200,8 @@ __global__ void acc_pot_kernel(arr_wrap<F *, tree_nvecs_res<Q, NDim>> res_ptrs, 
         }
         // Level of the source node.
         const auto src_level = src_node.level;
-        // Left-hand side of the BH check.
-        const auto bh_lh = compute_bh_lh(src_node, mac_value);
+        // Left-hand side of the MAC check.
+        const auto mac_lh = compute_mac_lh(src_node, mac_value);
 
         // Compute the shifted particle code. This is the particle code with one extra
         // top bit and then shifted down according to the level of the source node, so that
@@ -255,9 +255,9 @@ __global__ void acc_pot_kernel(arr_wrap<F *, tree_nvecs_res<Q, NDim>> res_ptrs, 
             dist_vec[j] = diff;
         }
 
-        // Now let's run the BH/ancestor check on all the target particles in the same warp.
-        if (__all_sync(unsigned(-1), s_p_code != src_code && bh_lh < dist2)) {
-            // The source node does not contain the target particle and it satisfies the BH check.
+        // Now let's run the MAC/ancestor check on all the target particles in the same warp.
+        if (__all_sync(unsigned(-1), s_p_code != src_code && mac_lh < dist2)) {
+            // The source node does not contain the target particle and it satisfies the MAC.
             // We will then add the (approximated) contribution of the source node
             // to the final result.
             //
@@ -283,7 +283,7 @@ __global__ void acc_pot_kernel(arr_wrap<F *, tree_nvecs_res<Q, NDim>> res_ptrs, 
             // We can now skip all the children of the source node.
             src_idx += n_children_src + 1;
         } else {
-            // Either the source node contains the target particle, or it fails the BH check.
+            // Either the source node contains the target particle, or it fails the MAC check.
             if (!n_children_src) {
                 // We are in a leaf node (possibly containing the target particle).
                 // Compute all the interactions with the target particle.

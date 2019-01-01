@@ -506,13 +506,12 @@ using f_vector = std::vector<F, di_aligned_allocator<F, XSIMD_DEFAULT_ALIGNMENT>
 // - we should probably also think about replacing the morton encoder with some generic solution. It does not
 //   need to be super high performance, as morton encoding is hardly a bottleneck here. It's more important for it
 //   to be generic (i.e., work on a general number of dimensions), correct and compact.
-// - add more MACs (e.g., the one from bonsai and the one from the gothic paper from Warren et al).
 // - double precision benchmarking/tuning.
 // - tuning for the potential computation (possibly not much improvement to be had there, but it should be investigated
 //   a bit at least).
 // - we currently define critical nodes those nodes with < ncrit particles. Some papers say that it's worth
 //   to check also the node's size, as a crit node whose size is very large will likely result in traversal lists
-//   which are not very similar to each other (which, in turn, means that during tree traversal the BH check
+//   which are not very similar to each other (which, in turn, means that during tree traversal the MAC check
 //   will fail often). It's probably best to start experimenting with such size as a free parameter, check the
 //   performance with various values and then try to understand if there's any heuristic we can deduce from that.
 // - quadrupole moments.
@@ -1725,7 +1724,7 @@ public:
 
 private:
     // Helpers to compute how many vectors we will need to store temporary
-    // data during the BH check.
+    // data during the MAC check.
     // Q == 0 -> accelerations only, NDim + 1 vectors (temporary diffs + 1/dist3)
     // Q == 1 -> potentials only, 1 vector (1/dist)
     // Q == 2 -> accs + pots, NDim + 2u vectors (temporary diffs + 1/dist3 + 1/dist)
@@ -1737,7 +1736,7 @@ private:
     }
     template <unsigned Q>
     static constexpr std::size_t nvecs_tmp = compute_nvecs_tmp<Q>();
-    // Storage for temporary data computed during the BH check (which will be re-used
+    // Storage for temporary data computed during the MAC check (which will be re-used
     // by another function).
     template <unsigned Q>
     static auto &acc_pot_tmp_vecs()
@@ -2220,12 +2219,12 @@ private:
     // Function to compute the accelerations/potentials due to the COM of a source node onto a target node. src_idx is
     // the index, in the tree structure, of the source node, tgt_size the number of particles in the target node,
     // p_ptrs pointers to the target particles' coordinates/masses, tmp_ptrs are pointers to the temporary data filled
-    // in by the tree_acc_pot_bh_check() function (which will be re-used by this function), res_ptrs pointers to the
+    // in by the tree_acc_pot_mac_check() function (which will be re-used by this function), res_ptrs pointers to the
     // output arrays. Q indicates which quantities will be computed (accs, potentials, or both).
     template <unsigned Q>
-    void tree_acc_pot_bh_com(size_type src_idx, size_type tgt_size, const std::array<const F *, NDim + 1u> &p_ptrs,
-                             const std::array<F *, nvecs_tmp<Q>> &tmp_ptrs,
-                             const std::array<F *, nvecs_res<Q>> &res_ptrs) const
+    void tree_acc_pot_src_com(size_type src_idx, size_type tgt_size, const std::array<const F *, NDim + 1u> &p_ptrs,
+                              const std::array<F *, nvecs_tmp<Q>> &tmp_ptrs,
+                              const std::array<F *, nvecs_res<Q>> &res_ptrs) const
     {
         // Load locally the mass of the source node.
         const auto m_src = m_tree[src_idx].props[NDim];
@@ -2237,7 +2236,7 @@ private:
             if constexpr (Q == 0u) {
                 // Q == 0, accelerations only.
                 //
-                // Pointers to the temporary coordinate diffs and 1/dist3 values computed in the BH check.
+                // Pointers to the temporary coordinate diffs and 1/dist3 values computed in the MAC check.
                 const auto [tmp_x, tmp_y, tmp_z, tmp_dist3] = tmp_ptrs;
                 // Pointers to the result arrays.
                 const auto [res_x, res_y, res_z] = res_ptrs;
@@ -2260,7 +2259,7 @@ private:
             } else if constexpr (Q == 1u) {
                 // Q == 1, potentials only.
                 //
-                // Pointer to the temporary 1/dist values computed in the BH check.
+                // Pointer to the temporary 1/dist values computed in the MAC check.
                 const auto tmp_dist = tmp_ptrs[0];
                 // Pointer to the target masses.
                 const auto m_ptr = p_ptrs[3];
@@ -2279,7 +2278,7 @@ private:
             } else {
                 // Q == 2, accelerations and potentials.
                 //
-                // Pointers to the temporary coordinate diffs, 1/dist3 and 1/dist values computed in the BH check.
+                // Pointers to the temporary coordinate diffs, 1/dist3 and 1/dist values computed in the MAC check.
                 const auto [tmp_x, tmp_y, tmp_z, tmp_dist3, tmp_dist] = tmp_ptrs;
                 // Pointer to the target masses.
                 const auto m_ptr = p_ptrs[3];
@@ -2336,19 +2335,19 @@ private:
             }
         }
     }
-    // Function to check if a source node satisfies the BH criterion and, possibly, to compute the
+    // Function to check if a source node satisfies the MAC and, possibly, to compute the
     // accelerations/potentials due to that source node. src_idx is the index, in the tree structure, of the source
     // node, mac_value the value of the MAC (or some function of it), eps2 the square of the softening length, tgt_size
     // the number of particles in the target node, p_ptrs pointers to the coordinates/masses of the particles in the
     // target node, res_ptrs pointers to the output arrays. The return value is the index of the next source node in the
     // tree traversal. Q indicates which quantities will be computed (accs, potentials, or both).
     template <unsigned Q>
-    size_type tree_acc_pot_bh_check(size_type src_idx, F mac_value, F eps2, size_type tgt_size,
-                                    const std::array<const F *, NDim + 1u> &p_ptrs,
-                                    const std::array<F *, nvecs_res<Q>> &res_ptrs) const
+    size_type tree_acc_pot_mac_check(size_type src_idx, F mac_value, F eps2, size_type tgt_size,
+                                     const std::array<const F *, NDim + 1u> &p_ptrs,
+                                     const std::array<F *, nvecs_res<Q>> &res_ptrs) const
     {
-        // Temporary vectors to store the data computed during the BH criterion check.
-        // We will re-use this data later in tree_acc_pot_bh_com().
+        // Temporary vectors to store the data computed during the MAC check.
+        // We will re-use this data later in tree_acc_pot_src_com().
         auto &tmp_vecs = acc_pot_tmp_vecs<Q>();
         static_assert(nvecs_tmp<Q> == std::tuple_size_v<std::remove_reference_t<decltype(tmp_vecs)>>);
         std::array<F *, nvecs_tmp<Q>> tmp_ptrs;
@@ -2376,8 +2375,8 @@ private:
         const auto &src_node = m_tree[src_idx];
         // Copy locally the number of children of the source node.
         const auto n_children_src = src_node.n_children;
-        // Left-hand side of the BH check.
-        const auto bh_lh = [mac_value, &src_node]() {
+        // Left-hand side of the MAC check.
+        const auto mac_lh = [mac_value, &src_node]() {
             if constexpr (MAC == mac::bh) {
                 // NOTE: for the BH MAC, mac_value is theta**-2.
                 return src_node.dim2 * mac_value;
@@ -2391,13 +2390,13 @@ private:
         // The flag for the BH criterion check. Initially set to true,
         // it will be set to false if at least one particle in the
         // target node fails the check.
-        bool bh_flag = true;
+        bool mac_flag = true;
         if constexpr (simd_enabled && NDim == 3u) {
             // The SIMD-accelerated version.
             using batch_type = xsimd::simd_type<F>;
             constexpr auto batch_size = batch_type::size;
             // Splatted vector versions of the scalar variables.
-            const batch_type eps2_vec(eps2), bh_lh_vec(bh_lh), x_com_vec(src_node.props[0]),
+            const batch_type eps2_vec(eps2), mac_lh_vec(mac_lh), x_com_vec(src_node.props[0]),
                 y_com_vec(src_node.props[1]), z_com_vec(src_node.props[2]);
             // Pointers to the coordinates.
             const auto [x_ptr, y_ptr, z_ptr, m_ptr] = p_ptrs;
@@ -2412,10 +2411,10 @@ private:
                                diff_y = y_com_vec - batch_type(y_ptr + i, xsimd::aligned_mode{}),
                                diff_z = z_com_vec - batch_type(z_ptr + i, xsimd::aligned_mode{});
                     auto dist2 = diff_x * diff_x + diff_y * diff_y + diff_z * diff_z;
-                    if (xsimd::any(bh_lh_vec >= dist2)) {
-                        // At least one particle in the current batch fails the BH criterion
-                        // check. Mark the bh_flag as false, then break out.
-                        bh_flag = false;
+                    if (xsimd::any(mac_lh_vec >= dist2)) {
+                        // At least one particle in the current batch fails the MAC
+                        // check. Mark the mac_flag as false, then break out.
+                        mac_flag = false;
                         break;
                     }
                     // Add the softening length.
@@ -2439,10 +2438,10 @@ private:
                                diff_y = y_com_vec - batch_type(y_ptr + i, xsimd::aligned_mode{}),
                                diff_z = z_com_vec - batch_type(z_ptr + i, xsimd::aligned_mode{});
                     auto dist2 = diff_x * diff_x + diff_y * diff_y + diff_z * diff_z;
-                    if (xsimd::any(bh_lh_vec >= dist2)) {
-                        // At least one particle in the current batch fails the BH criterion
-                        // check. Mark the bh_flag as false, then break out.
-                        bh_flag = false;
+                    if (xsimd::any(mac_lh_vec >= dist2)) {
+                        // At least one particle in the current batch fails the MAC
+                        // check. Mark the mac_flag as false, then break out.
+                        mac_flag = false;
                         break;
                     }
                     // Add the softening length.
@@ -2463,10 +2462,10 @@ private:
                                diff_y = y_com_vec - batch_type(y_ptr + i, xsimd::aligned_mode{}),
                                diff_z = z_com_vec - batch_type(z_ptr + i, xsimd::aligned_mode{});
                     auto dist2 = diff_x * diff_x + diff_y * diff_y + diff_z * diff_z;
-                    if (xsimd::any(bh_lh_vec >= dist2)) {
-                        // At least one particle in the current batch fails the BH criterion
-                        // check. Mark the bh_flag as false, then break out.
-                        bh_flag = false;
+                    if (xsimd::any(mac_lh_vec >= dist2)) {
+                        // At least one particle in the current batch fails the MAC
+                        // check. Mark the mac_flag as false, then break out.
+                        mac_flag = false;
                         break;
                     }
                     // Add the softening length.
@@ -2498,11 +2497,11 @@ private:
                     }
                     dist2 = fma_wrap(diff, diff, dist2);
                 }
-                if (bh_lh >= dist2) {
+                if (mac_lh >= dist2) {
                     // At least one of the particles in the target
                     // node is too close to the COM. Set the flag
                     // to false and exit.
-                    bh_flag = false;
+                    mac_flag = false;
                     break;
                 }
                 // Add the softening length and compute the distance.
@@ -2523,14 +2522,14 @@ private:
                 }
             }
         }
-        if (bh_flag) {
-            // The source node satisfies the BH criterion for all the particles of the target node. Add the
+        if (mac_flag) {
+            // The source node satisfies the MAC for all the particles of the target node. Add the
             // interaction due to the com of the source node.
-            tree_acc_pot_bh_com<Q>(src_idx, tgt_size, p_ptrs, tmp_ptrs, res_ptrs);
+            tree_acc_pot_src_com<Q>(src_idx, tgt_size, p_ptrs, tmp_ptrs, res_ptrs);
             // We can now skip all the children of the source node.
             return static_cast<size_type>(src_idx + n_children_src + 1u);
         }
-        // The source node does not satisfy the BH criterion. We check if it is a leaf
+        // The source node does not satisfy the MAC. We check if it is a leaf
         // node, in which case we need to compute all the pairwise interactions.
         if (!n_children_src) {
             // Leaf node.
@@ -2585,10 +2584,10 @@ private:
                 const auto tgt_eq_src_mask = static_cast<size_type>(-(src_code == tgt_code));
                 src_idx += 1u + (n_children_src & tgt_eq_src_mask);
             } else {
-                // The source node is not an ancestor of the target. We need to run the BH criterion
-                // check. The tree_acc_pot_bh_check() function will return the index of the next node
+                // The source node is not an ancestor of the target. We need to run the MAC
+                // check. The tree_acc_pot_mac_check() function will return the index of the next node
                 // in the traversal.
-                src_idx = tree_acc_pot_bh_check<Q>(src_idx, mac_value, eps2, tgt_size, p_ptrs, res_ptrs);
+                src_idx = tree_acc_pot_mac_check<Q>(src_idx, mac_value, eps2, tgt_size, p_ptrs, res_ptrs);
             }
         }
 
