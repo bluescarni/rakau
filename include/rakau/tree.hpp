@@ -946,11 +946,12 @@ private:
                            [](const auto &n) { return n.level == tree_level<NDim>(n.code); }));
         // Verify more node properties.
         assert(std::all_of(m_tree.begin(), m_tree.end(), [this](const auto &n) {
+            const auto node_dim = get_node_dim(n.level, m_box_size);
             if constexpr (MAC == mac::bh) {
-                return n.dim2 == get_node_dim(n.level, m_box_size) * get_node_dim(n.level, m_box_size);
+                return n.dim2 == node_dim * node_dim;
             } else {
                 static_assert(MAC == mac::bh_geom);
-                return n.dim == get_node_dim(n.level, m_box_size);
+                return n.dim == node_dim;
             }
         }));
 
@@ -1047,25 +1048,48 @@ private:
             }
         }
 
-        // Copy over to the node.
+        // Check and copy over to the node the COM/tot_mass.
+        if (rakau_unlikely(
+                std::any_of(std::begin(com_pos), std::end(com_pos), [](const auto &x) { return !std::isfinite(x); }))) {
+            throw std::invalid_argument("The computation of the centre of mass of a node produced a non-finite value");
+        }
         for (std::size_t j = 0; j < NDim; ++j) {
             node.props[j] = com_pos[j];
         }
+        if (rakau_unlikely(!std::isfinite(tot_mass))) {
+            throw std::invalid_argument("The computation of the total mass in a node produced the non-finite value "
+                                        + std::to_string(tot_mass));
+        }
         node.props[NDim] = tot_mass;
 
+        // Compute the node dimension required by the selected MAC,
+        // and copy it into the node structure.
         const auto node_dim = get_node_dim(node.level, m_box_size);
-
         if constexpr (MAC == mac::bh) {
             node.dim2 = node_dim * node_dim;
+            if (rakau_unlikely(!std::isfinite(node.dim2))) {
+                throw std::invalid_argument(
+                    "The computation of the square of the dimension of a node produced the non-finite value "
+                    + std::to_string(node.dim2));
+            }
         } else {
             static_assert(MAC == mac::bh_geom);
             node.dim = node_dim;
+            if (rakau_unlikely(!std::isfinite(node.dim))) {
+                throw std::invalid_argument("The computation of the dimension of a node produced the non-finite value "
+                                            + std::to_string(node.dim));
+            }
             // Compute the distance between com and geometrical centre.
             auto delta2 = (com_pos[0] - geo_centre[0]) * (com_pos[0] - geo_centre[0]);
             for (std::size_t j = 1; j < NDim; ++j) {
                 delta2 = fma_wrap(com_pos[j] - geo_centre[j], com_pos[j] - geo_centre[j], delta2);
             }
             node.delta = std::sqrt(delta2);
+            if (rakau_unlikely(!std::isfinite(node.delta))) {
+                throw std::invalid_argument("The computation of the distance between the centre of mass "
+                                            "and the geometric centre of a node produced the non-finite value "
+                                            + std::to_string(node.delta));
+            }
         }
     }
     // Discretize the coordinates of the particle at index idx. The result will
@@ -3008,7 +3032,7 @@ private:
         }();
         // Check that the computation of mac_value did not produce something weird.
         if (rakau_unlikely(!std::isfinite(mac_value) || mac_value <= F(0))) {
-            throw std::domain_error("The transformed MAC value be finite and positive, but it is "
+            throw std::domain_error("The transformed MAC value must be finite and positive, but it is "
                                     + std::to_string(mac_value) + " instead");
         }
         const auto eps2 = compute_eps2(eps);
