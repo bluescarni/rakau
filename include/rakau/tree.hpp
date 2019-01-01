@@ -2400,15 +2400,15 @@ private:
         // Copy locally the number of children of the source node.
         const auto n_children_src = src_node.n_children;
         // Left-hand side of the MAC check.
-        const auto mac_lh = [mac_value, &src_node]() {
+        const auto mac_lh = [mac_value, &src_node, eps2]() {
             if constexpr (MAC == mac::bh) {
                 // NOTE: for the BH MAC, mac_value is theta**-2.
-                return src_node.dim2 * mac_value;
+                return fma_wrap(src_node.dim2, mac_value, eps2);
             } else {
                 // NOTE: for the geometric BH MAC, mac_value is theta**-1.
                 static_assert(MAC == mac::bh_geom);
                 const auto tmp = fma_wrap(src_node.dim, mac_value, src_node.delta);
-                return tmp * tmp;
+                return fma_wrap(tmp, tmp, eps2);
             }
         }();
         // The flag for the BH criterion check. Initially set to true,
@@ -2434,15 +2434,13 @@ private:
                     const auto diff_x = x_com_vec - batch_type(x_ptr + i, xsimd::aligned_mode{}),
                                diff_y = y_com_vec - batch_type(y_ptr + i, xsimd::aligned_mode{}),
                                diff_z = z_com_vec - batch_type(z_ptr + i, xsimd::aligned_mode{});
-                    auto dist2 = diff_x * diff_x + diff_y * diff_y + diff_z * diff_z;
+                    auto dist2 = diff_x * diff_x + diff_y * diff_y + xsimd_fma(diff_z, diff_z, eps2_vec);
                     if (xsimd::any(mac_lh_vec >= dist2)) {
                         // At least one particle in the current batch fails the MAC
                         // check. Mark the mac_flag as false, then break out.
                         mac_flag = false;
                         break;
                     }
-                    // Add the softening length.
-                    dist2 += eps2_vec;
                     diff_x.store_aligned(tmp_x + i);
                     diff_y.store_aligned(tmp_y + i);
                     diff_z.store_aligned(tmp_z + i);
@@ -2461,15 +2459,13 @@ private:
                     const auto diff_x = x_com_vec - batch_type(x_ptr + i, xsimd::aligned_mode{}),
                                diff_y = y_com_vec - batch_type(y_ptr + i, xsimd::aligned_mode{}),
                                diff_z = z_com_vec - batch_type(z_ptr + i, xsimd::aligned_mode{});
-                    auto dist2 = diff_x * diff_x + diff_y * diff_y + diff_z * diff_z;
+                    auto dist2 = diff_x * diff_x + diff_y * diff_y + xsimd_fma(diff_z, diff_z, eps2_vec);
                     if (xsimd::any(mac_lh_vec >= dist2)) {
                         // At least one particle in the current batch fails the MAC
                         // check. Mark the mac_flag as false, then break out.
                         mac_flag = false;
                         break;
                     }
-                    // Add the softening length.
-                    dist2 += eps2_vec;
                     if constexpr (use_fast_inv_sqrt<batch_type>) {
                         inv_sqrt(dist2).store_aligned(tmp + i);
                     } else {
@@ -2485,15 +2481,13 @@ private:
                     const auto diff_x = x_com_vec - batch_type(x_ptr + i, xsimd::aligned_mode{}),
                                diff_y = y_com_vec - batch_type(y_ptr + i, xsimd::aligned_mode{}),
                                diff_z = z_com_vec - batch_type(z_ptr + i, xsimd::aligned_mode{});
-                    auto dist2 = diff_x * diff_x + diff_y * diff_y + diff_z * diff_z;
+                    auto dist2 = diff_x * diff_x + diff_y * diff_y + xsimd_fma(diff_z, diff_z, eps2_vec);
                     if (xsimd::any(mac_lh_vec >= dist2)) {
                         // At least one particle in the current batch fails the MAC
                         // check. Mark the mac_flag as false, then break out.
                         mac_flag = false;
                         break;
                     }
-                    // Add the softening length.
-                    dist2 += eps2_vec;
                     diff_x.store_aligned(tmp_x + i);
                     diff_y.store_aligned(tmp_y + i);
                     diff_z.store_aligned(tmp_z + i);
@@ -2521,6 +2515,8 @@ private:
                     }
                     dist2 = fma_wrap(diff, diff, dist2);
                 }
+                // Add the softening length.
+                dist2 += eps2;
                 if (mac_lh >= dist2) {
                     // At least one of the particles in the target
                     // node is too close to the COM. Set the flag
@@ -2528,8 +2524,7 @@ private:
                     mac_flag = false;
                     break;
                 }
-                // Add the softening length and compute the distance.
-                dist2 += eps2;
+                // Compute the distance
                 const auto dist = std::sqrt(dist2);
                 if constexpr (Q == 0u || Q == 2u) {
                     // Q == 0 or 2: accelerations are requested, store dist3.
