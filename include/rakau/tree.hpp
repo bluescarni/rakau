@@ -3493,7 +3493,7 @@ private:
     // The list of critical nodes.
     cnode_list_type m_crit_nodes;
 #if defined(RAKAU_WITH_ROCM)
-    std::optional<rocm_state<NDim, F, UInt>> m_rocm;
+    std::optional<rocm_state<NDim, F, UInt, MAC>> m_rocm;
 #endif
 };
 
