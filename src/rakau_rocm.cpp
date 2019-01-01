@@ -85,11 +85,11 @@ inline auto t2a(const Tuple &tup)
 
 // Implementation of the rocm_state machinery. We will store in here views to
 // the internal vectors of a tree.
-template <std::size_t NDim, typename F, typename UInt>
+template <std::size_t NDim, typename F, typename UInt, mac MAC>
 struct rocm_state_impl {
     using pav_t = decltype(ap2tv(std::declval<const std::array<const F *, NDim + 1u> &>(), 0));
     explicit rocm_state_impl(const std::array<const F *, NDim + 1u> &parts, const UInt *codes, int nparts,
-                             const tree_node_t<NDim, F, UInt> *tree, int tree_size)
+                             const tree_node_t<NDim, F, UInt, MAC> *tree, int tree_size)
         : m_pav(ap2tv(parts, nparts)), m_codes_view(nparts, codes), m_nparts(nparts), m_tree_view(tree_size, tree),
           m_tree_size(tree_size)
     {
@@ -109,38 +109,39 @@ struct rocm_state_impl {
     // Number of particles/codes.
     int m_nparts;
     // View into the tree structure.
-    hc::array_view<const tree_node_t<NDim, F, UInt>, 1> m_tree_view;
+    hc::array_view<const tree_node_t<NDim, F, UInt, MAC>, 1> m_tree_view;
     // Number of nodes in the tree.
     int m_tree_size;
 };
 
 // Constructor: forward all the arguments to the constructor of the internal structure (stored as a raw pointer).
-template <std::size_t NDim, typename F, typename UInt>
-rocm_state<NDim, F, UInt>::rocm_state(const std::array<const F *, NDim + 1u> &parts, const UInt *codes, int nparts,
-                                      const tree_node_t<NDim, F, UInt> *tree, int tree_size)
+template <std::size_t NDim, typename F, typename UInt, mac MAC>
+rocm_state<NDim, F, UInt, MAC>::rocm_state(const std::array<const F *, NDim + 1u> &parts, const UInt *codes, int nparts,
+                                           const tree_node_t<NDim, F, UInt, MAC> *tree, int tree_size)
     : m_state(::new rocm_state_impl(parts, codes, nparts, tree, tree_size))
 {
 }
 
 // Destructor: delete the internal structure.
-template <std::size_t NDim, typename F, typename UInt>
-rocm_state<NDim, F, UInt>::~rocm_state()
+template <std::size_t NDim, typename F, typename UInt, mac MAC>
+rocm_state<NDim, F, UInt, MAC>::~rocm_state()
 {
-    ::delete static_cast<rocm_state_impl<NDim, F, UInt> *>(m_state);
+    ::delete static_cast<rocm_state_impl<NDim, F, UInt, MAC> *>(m_state);
 }
 
 // Main function for the computation of the accelerations/potentials. It will fetch
 // the views to the tree from the state structure, create views into the output data
 // and then traverse the tree computing the acceleration for each particle.
-template <std::size_t NDim, typename F, typename UInt>
+template <std::size_t NDim, typename F, typename UInt, mac MAC>
 template <unsigned Q>
-void rocm_state<NDim, F, UInt>::acc_pot(int p_begin, int p_end, const std::array<F *, tree_nvecs_res<Q, NDim>> &out,
-                                        F inv_theta2, F G, F eps2) const
+void rocm_state<NDim, F, UInt, MAC>::acc_pot(int p_begin, int p_end,
+                                             const std::array<F *, tree_nvecs_res<Q, NDim>> &out, F mac_value, F G,
+                                             F eps2) const
 {
     assert(p_begin <= p_end);
 
     // Fetch the state structure.
-    auto &state = *static_cast<const rocm_state_impl<NDim, F, UInt> *>(m_state);
+    auto &state = *static_cast<const rocm_state_impl<NDim, F, UInt, MAC> *>(m_state);
 
     const auto nparts = state.m_nparts;
     assert(p_end <= nparts);
@@ -159,7 +160,7 @@ void rocm_state<NDim, F, UInt>::acc_pot(int p_begin, int p_end, const std::array
         hc::extent<1>(p_end - p_begin).tile(__HSA_WAVEFRONT_SIZE__),
         [
             p_begin, pt = state.m_pav, codes_view = state.m_codes_view, nparts, tree_view = state.m_tree_view,
-            tree_size = state.m_tree_size, rt, inv_theta2, G,
+            tree_size = state.m_tree_size, rt, mac_value, G,
             eps2
         ](hc::tiled_index<1> thread_id) [[hc]] {
             // Get the global particle index into the tree data.
@@ -208,8 +209,18 @@ void rocm_state<NDim, F, UInt>::acc_pot(int p_begin, int p_end, const std::array
                 }
                 // Level of the source node.
                 const auto src_level = src_node.level;
-                // Left-hand side of the BH check.
-                const auto bh_lh = src_node.dim2 * inv_theta2;
+                // Left-hand side of the MAC check.
+                const auto mac_lh = [mac_value, &src_node]() {
+                    if constexpr (MAC == mac::bh) {
+                        // NOTE: for the BH MAC, mac_value is theta**-2.
+                        return src_node.dim2 * mac_value;
+                    } else {
+                        // NOTE: for the geometric BH MAC, mac_value is theta**-1.
+                        static_assert(MAC == mac::bh_geom);
+                        const auto tmp = src_node.dim * mac_value + src_node.delta;
+                        return tmp * tmp;
+                    }
+                }();
 
                 // Compute the shifted particle code. This is the particle code with one extra
                 // top bit and then shifted down according to the level of the source node, so that
@@ -262,9 +273,9 @@ void rocm_state<NDim, F, UInt>::acc_pot(int p_begin, int p_end, const std::array
                     dist2 += diff * diff;
                     dist_vec[j] = diff;
                 }
-                // Now let's run the BH/ancestor check on all the target particles in the same wavefront.
-                if (hc::__all(s_p_code != src_code && bh_lh < dist2)) {
-                    // The source node does not contain the target particle and it satisfies the BH check.
+                // Now let's run the MAC/ancestor check on all the target particles in the same wavefront.
+                if (hc::__all(s_p_code != src_code && mac_lh < dist2)) {
+                    // The source node does not contain the target particle and it satisfies the MAC.
                     // We will then add the (approximated) contribution of the source node
                     // to the final result.
                     //
@@ -290,7 +301,7 @@ void rocm_state<NDim, F, UInt>::acc_pot(int p_begin, int p_end, const std::array
                     // We can now skip all the children of the source node.
                     src_idx += n_children_src + 1;
                 } else {
-                    // Either the source node contains the target particle, or it fails the BH check.
+                    // Either the source node contains the target particle, or it fails the MAC check.
                     if (!n_children_src) {
                         // We are in a leaf node (possibly containing the target particle).
                         // Compute all the interactions with the target particle.
@@ -365,28 +376,33 @@ void rocm_state<NDim, F, UInt>::acc_pot(int p_begin, int p_end, const std::array
 // Computation of accelerations, potentials or both.
 #define RAKAU_ROCM_INST_Q_SEQUENCE (0)(1)(2)
 
-// Macro for the instantiation of the member function. NDim, F, UInt and Q will be passed in
+// Enable all MACs.
+#define RAKAU_ROCM_INST_MACS_SEQUENCE (mac::bh)(mac::bh_geom)
+
+// Macro for the instantiation of the member function. NDim, F, UInt, Q and MAC will be passed in
 // as a sequence named Args (in that order).
 #define RAKAU_ROCM_EXPLICIT_INST_MEMFUN(r, Args)                                                                       \
-    template void rocm_state<BOOST_PP_SEQ_ELEM(0, Args), BOOST_PP_SEQ_ELEM(1, Args), BOOST_PP_SEQ_ELEM(2, Args)>::     \
-        acc_pot<BOOST_PP_SEQ_ELEM(3, Args)>(                                                                           \
-            int, int,                                                                                                  \
-            const std::array<BOOST_PP_SEQ_ELEM(1, Args) *,                                                             \
-                             tree_nvecs_res<BOOST_PP_SEQ_ELEM(3, Args), BOOST_PP_SEQ_ELEM(0, Args)>> &,                \
-            BOOST_PP_SEQ_ELEM(1, Args), BOOST_PP_SEQ_ELEM(1, Args), BOOST_PP_SEQ_ELEM(1, Args)) const;
+    template void rocm_state<BOOST_PP_SEQ_ELEM(0, Args), BOOST_PP_SEQ_ELEM(1, Args), BOOST_PP_SEQ_ELEM(2, Args),       \
+                             BOOST_PP_SEQ_ELEM(4, Args)>::acc_pot<BOOST_PP_SEQ_ELEM(3,                                 \
+                                                                                    Args)>(                            \
+        int, int,                                                                                                      \
+        const std::array<BOOST_PP_SEQ_ELEM(1, Args) *,                                                                 \
+                         tree_nvecs_res<BOOST_PP_SEQ_ELEM(3, Args), BOOST_PP_SEQ_ELEM(0, Args)>> &,                    \
+        BOOST_PP_SEQ_ELEM(1, Args), BOOST_PP_SEQ_ELEM(1, Args), BOOST_PP_SEQ_ELEM(1, Args)) const;
 
 // Do the actual instantiation via a cartesian product over the sequences.
 // clang-format off
-BOOST_PP_SEQ_FOR_EACH_PRODUCT(RAKAU_ROCM_EXPLICIT_INST_MEMFUN, (RAKAU_ROCM_INST_DIM_SEQUENCE)(RAKAU_ROCM_INST_FP_SEQUENCE)(RAKAU_ROCM_INST_UINT_SEQUENCE)(RAKAU_ROCM_INST_Q_SEQUENCE));
+BOOST_PP_SEQ_FOR_EACH_PRODUCT(RAKAU_ROCM_EXPLICIT_INST_MEMFUN, (RAKAU_ROCM_INST_DIM_SEQUENCE)(RAKAU_ROCM_INST_FP_SEQUENCE)(RAKAU_ROCM_INST_UINT_SEQUENCE)(RAKAU_ROCM_INST_Q_SEQUENCE)(RAKAU_ROCM_INST_MACS_SEQUENCE));
 // clang-format on
 
 // Macro for the instantiation of the state class. Same idea as above.
 #define RAKAU_ROCM_EXPLICIT_INST_STATE(r, Args)                                                                        \
-    template class rocm_state<BOOST_PP_SEQ_ELEM(0, Args), BOOST_PP_SEQ_ELEM(1, Args), BOOST_PP_SEQ_ELEM(2, Args)>;
+    template class rocm_state<BOOST_PP_SEQ_ELEM(0, Args), BOOST_PP_SEQ_ELEM(1, Args), BOOST_PP_SEQ_ELEM(2, Args),      \
+                              BOOST_PP_SEQ_ELEM(3, Args)>;
 
 // Instantiation.
 // clang-format off
-BOOST_PP_SEQ_FOR_EACH_PRODUCT(RAKAU_ROCM_EXPLICIT_INST_STATE, (RAKAU_ROCM_INST_DIM_SEQUENCE)(RAKAU_ROCM_INST_FP_SEQUENCE)(RAKAU_ROCM_INST_UINT_SEQUENCE));
+BOOST_PP_SEQ_FOR_EACH_PRODUCT(RAKAU_ROCM_EXPLICIT_INST_STATE, (RAKAU_ROCM_INST_DIM_SEQUENCE)(RAKAU_ROCM_INST_FP_SEQUENCE)(RAKAU_ROCM_INST_UINT_SEQUENCE)(RAKAU_ROCM_INST_MACS_SEQUENCE));
 // clang-format on
 
 } // namespace detail

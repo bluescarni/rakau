@@ -23,12 +23,12 @@ unsigned rocm_min_size() __attribute__((visibility("default")));
 
 bool rocm_has_accelerator() __attribute__((visibility("default")));
 
-template <std::size_t NDim, typename F, typename UInt>
+template <std::size_t NDim, typename F, typename UInt, mac MAC>
 class __attribute__((visibility("default"))) rocm_state
 {
 public:
-    explicit rocm_state(const std::array<const F *, NDim + 1u> &, const UInt *, int, const tree_node_t<NDim, F, UInt> *,
-                        int);
+    explicit rocm_state(const std::array<const F *, NDim + 1u> &, const UInt *, int,
+                        const tree_node_t<NDim, F, UInt, MAC> *, int);
 
     // NOTE: make sure we don't end up accidentally copying/moving
     // objects of this class.

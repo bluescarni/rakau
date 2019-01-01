@@ -327,7 +327,7 @@ inline F get_node_dim(UInt node_level, F box_size)
 // Determine the geometrical centre of a node, given its code
 // and the box size.
 template <typename F, std::size_t NDim, typename UInt>
-inline void node_centre(F (&out)[NDim], UInt node_code, F box_size)
+inline void get_node_centre(F (&out)[NDim], UInt node_code, F box_size)
 {
     // Compute the level of the node.
     const auto node_level = tree_level<NDim>(node_code);
@@ -506,13 +506,12 @@ using f_vector = std::vector<F, di_aligned_allocator<F, XSIMD_DEFAULT_ALIGNMENT>
 // - we should probably also think about replacing the morton encoder with some generic solution. It does not
 //   need to be super high performance, as morton encoding is hardly a bottleneck here. It's more important for it
 //   to be generic (i.e., work on a general number of dimensions), correct and compact.
-// - add more MACs (e.g., the one from bonsai and the one from the gothic paper from Warren et al).
 // - double precision benchmarking/tuning.
 // - tuning for the potential computation (possibly not much improvement to be had there, but it should be investigated
 //   a bit at least).
 // - we currently define critical nodes those nodes with < ncrit particles. Some papers say that it's worth
 //   to check also the node's size, as a crit node whose size is very large will likely result in traversal lists
-//   which are not very similar to each other (which, in turn, means that during tree traversal the BH check
+//   which are not very similar to each other (which, in turn, means that during tree traversal the MAC check
 //   will fail often). It's probably best to start experimenting with such size as a free parameter, check the
 //   performance with various values and then try to understand if there's any heuristic we can deduce from that.
 // - quadrupole moments.
@@ -520,7 +519,7 @@ using f_vector = std::vector<F, di_aligned_allocator<F, XSIMD_DEFAULT_ALIGNMENT>
 // - would be interesting to see if we can do the permutations in-place efficiently. If that worked, it would probably
 //   help simplifying things on the GPU side. See for instance:
 //   https://stackoverflow.com/questions/7365814/in-place-array-reordering
-template <std::size_t NDim, typename F, typename UInt = std::size_t>
+template <std::size_t NDim, typename F, typename UInt, mac MAC>
 class tree
 {
     // Need at least 1 dimension.
@@ -534,6 +533,8 @@ class tree
     // UInt must be an unsigned integral.
     static_assert(std::is_integral_v<UInt> && std::is_unsigned_v<UInt>,
                   "The type UInt must be a C++ unsigned integral type.");
+    // Check the MAC enum value.
+    static_assert(MAC >= mac::bh && MAC <= mac::bh_geom, "The selected MAC does not exist.");
     // cbits shortcut.
     static constexpr auto cbits = cbits_v<UInt, NDim>;
     // simd_enabled shortcut.
@@ -547,19 +548,13 @@ private:
     // is the same as the actual size type.
     static_assert(std::is_same_v<size_type, typename f_vector<F>::size_type>);
     // The node type.
-    using node_type = tree_node_t<NDim, F, UInt>;
+    using node_type = tree_node_t<NDim, F, UInt, MAC>;
     // The tree type.
     using tree_type = std::vector<node_type, di_aligned_allocator<node_type>>;
     // The critical node descriptor type (nodal code and particle range).
     using cnode_type = tree_cnode_t<F, UInt>;
     // List of critical nodes.
     using cnode_list_type = std::vector<cnode_type, di_aligned_allocator<cnode_type>>;
-    // Small helper to get the square of the dimension of a node at the tree level node_level.
-    F get_sqr_node_dim(UInt node_level) const
-    {
-        const auto tmp = get_node_dim(node_level, m_box_size);
-        return tmp * tmp;
-    }
     // A small functor to right shift an input UInt by a fixed amount.
     // Used in the tree construction functions.
     struct code_shifter {
@@ -632,16 +627,17 @@ private:
                     // parent nodal code by NDim and adding the current child node index i.
                     const auto cur_code = static_cast<UInt>((parent_code << NDim) + i);
                     // Create the new node.
-                    node_type new_node{static_cast<size_type>(std::distance(m_codes.begin(), it_start.base())),
-                                       static_cast<size_type>(std::distance(m_codes.begin(), it_end.base())),
-                                       // NOTE: the children count gets inited to zero. It
-                                       // will be filled in later.
-                                       0,
-                                       cur_code,
-                                       ParentLevel + 1u,
-                                       // NOTE: make sure the node props are initialised to zero.
-                                       {},
-                                       get_sqr_node_dim(ParentLevel + 1u)};
+                    // NOTE: here and elsewhere we value-init the node object. This is not necessary,
+                    // as we could def-init and set all the node members below instead. However, GCC complains with a
+                    // warning if we don't do this, so instead we value-init and then set explicitly those members which
+                    // are not zero.
+                    node_type new_node{};
+                    new_node.begin = static_cast<size_type>(std::distance(m_codes.begin(), it_start.base()));
+                    new_node.end = static_cast<size_type>(std::distance(m_codes.begin(), it_end.base()));
+                    // NOTE: the children count gets inited to zero. It
+                    // will be filled in later.
+                    new_node.code = cur_code;
+                    new_node.level = ParentLevel + 1u;
                     // Compute its properties.
                     compute_node_properties(new_node);
                     // Add the node to the tree.
@@ -728,13 +724,11 @@ private:
                         // NOTE: use push_back(tree_type{}) instead of emplace_back() because
                         // TBB hates clang apparently.
                         auto &new_tree = *trees.push_back(tree_type{});
-                        node_type new_node{static_cast<size_type>(std::distance(m_codes.begin(), it_start.base())),
-                                           static_cast<size_type>(std::distance(m_codes.begin(), it_end.base())),
-                                           0,
-                                           cur_code,
-                                           ParentLevel + 1u,
-                                           {},
-                                           get_sqr_node_dim(ParentLevel + 1u)};
+                        node_type new_node{};
+                        new_node.begin = static_cast<size_type>(std::distance(m_codes.begin(), it_start.base()));
+                        new_node.end = static_cast<size_type>(std::distance(m_codes.begin(), it_end.base()));
+                        new_node.code = cur_code;
+                        new_node.level = ParentLevel + 1u;
                         compute_node_properties(new_node);
                         new_tree.push_back(std::move(new_node));
                         const auto u_npart
@@ -815,25 +809,14 @@ private:
         // lists of critical nodes, in a similar fashion to the vector of partial trees above.
         tbb::concurrent_vector<cnode_list_type> crit_nodes;
         // Add the root node.
-        const auto root_sqr_node_dim = m_box_size * m_box_size;
-        if (!std::isfinite(root_sqr_node_dim)) {
-            throw std::invalid_argument(
-                "The computation of the square of the dimension of the root node leads to the non-finite value "
-                + std::to_string(root_sqr_node_dim));
-        }
-        m_tree.push_back(node_type{size_type(0),
-                                   size_type(m_codes.size()),
-                                   // NOTE: the children count gets inited to zero. It
-                                   // will be filled in later.
-                                   0,
-                                   // Root code is 1.
-                                   1,
-                                   0,
-                                   // NOTE: make sure mass and COM coords are initialised in a known state (i.e.,
-                                   // zero for C++ floating-point).
-                                   {},
-                                   root_sqr_node_dim});
-
+        node_type root_node{};
+        // NOTE: node begin is already set to zero via value-init.
+        root_node.end = static_cast<size_type>(m_codes.size());
+        // NOTE: the children count gets inited to zero. It
+        // will be filled in later.
+        root_node.code = 1;
+        // NOTE: the tree level is already set to zero via value-init.
+        m_tree.push_back(std::move(root_node));
         // Compute the root node's properties. Do it concurrently with other computations.
         tbb::task_group tg;
         tg.run([this]() { compute_node_properties(m_tree.back()); });
@@ -961,9 +944,16 @@ private:
         // Verify the node levels.
         assert(std::all_of(m_tree.begin(), m_tree.end(),
                            [](const auto &n) { return n.level == tree_level<NDim>(n.code); }));
-        // Verify the node dim2.
-        assert(std::all_of(m_tree.begin(), m_tree.end(),
-                           [this](const auto &n) { return n.dim2 == get_sqr_node_dim(n.level); }));
+        // Verify more node properties.
+        assert(std::all_of(m_tree.begin(), m_tree.end(), [this](const auto &n) {
+            const auto node_dim = get_node_dim(n.level, m_box_size);
+            if constexpr (MAC == mac::bh) {
+                return n.dim2 == node_dim * node_dim;
+            } else {
+                static_assert(MAC == mac::bh_geom);
+                return n.dim == node_dim;
+            }
+        }));
 
         // NOTE: a couple of final checks to make sure we can use size_type to represent both the tree
         // size and the size of the list of critical nodes.
@@ -1034,10 +1024,22 @@ private:
             }
         }
 
+        // Geometrical centre. Computed only with the bh_geom MAC.
+        [[maybe_unused]] F geo_centre[NDim];
+        if constexpr (MAC == mac::bh_geom) {
+            get_node_centre(geo_centre, node.code, m_box_size);
+        }
+
         if (tot_mass == F(0)) {
             // If the total mass of the node is zero, it does not have a com.
             // Use the geometrical centre in its stead.
-            node_centre(com_pos, node.code, m_box_size);
+            if constexpr (MAC == mac::bh) {
+                get_node_centre(com_pos, node.code, m_box_size);
+            } else {
+                static_assert(MAC == mac::bh_geom);
+                // Don't recompute it if it is available already.
+                std::copy(std::begin(geo_centre), std::end(geo_centre), std::begin(com_pos));
+            }
         } else {
             // Otherwise, divide by the total mass to get the com.
             const auto inv_tot_mass = F(1) / tot_mass;
@@ -1046,11 +1048,49 @@ private:
             }
         }
 
-        // Copy over to the node.
+        // Check and copy over to the node the COM/tot_mass.
+        if (rakau_unlikely(
+                std::any_of(std::begin(com_pos), std::end(com_pos), [](const auto &x) { return !std::isfinite(x); }))) {
+            throw std::invalid_argument("The computation of the centre of mass of a node produced a non-finite value");
+        }
         for (std::size_t j = 0; j < NDim; ++j) {
             node.props[j] = com_pos[j];
         }
+        if (rakau_unlikely(!std::isfinite(tot_mass))) {
+            throw std::invalid_argument("The computation of the total mass in a node produced the non-finite value "
+                                        + std::to_string(tot_mass));
+        }
         node.props[NDim] = tot_mass;
+
+        // Compute the node dimension required by the selected MAC,
+        // and copy it into the node structure.
+        const auto node_dim = get_node_dim(node.level, m_box_size);
+        if constexpr (MAC == mac::bh) {
+            node.dim2 = node_dim * node_dim;
+            if (rakau_unlikely(!std::isfinite(node.dim2))) {
+                throw std::invalid_argument(
+                    "The computation of the square of the dimension of a node produced the non-finite value "
+                    + std::to_string(node.dim2));
+            }
+        } else {
+            static_assert(MAC == mac::bh_geom);
+            node.dim = node_dim;
+            if (rakau_unlikely(!std::isfinite(node.dim))) {
+                throw std::invalid_argument("The computation of the dimension of a node produced the non-finite value "
+                                            + std::to_string(node.dim));
+            }
+            // Compute the distance between com and geometrical centre.
+            auto delta2 = (com_pos[0] - geo_centre[0]) * (com_pos[0] - geo_centre[0]);
+            for (std::size_t j = 1; j < NDim; ++j) {
+                delta2 = fma_wrap(com_pos[j] - geo_centre[j], com_pos[j] - geo_centre[j], delta2);
+            }
+            node.delta = std::sqrt(delta2);
+            if (rakau_unlikely(!std::isfinite(node.delta))) {
+                throw std::invalid_argument("The computation of the distance between the centre of mass "
+                                            "and the geometric centre of a node produced the non-finite value "
+                                            + std::to_string(node.delta));
+            }
+        }
     }
     // Discretize the coordinates of the particle at index idx. The result will
     // be written into retval.
@@ -1708,7 +1748,7 @@ public:
 
 private:
     // Helpers to compute how many vectors we will need to store temporary
-    // data during the BH check.
+    // data during the MAC check.
     // Q == 0 -> accelerations only, NDim + 1 vectors (temporary diffs + 1/dist3)
     // Q == 1 -> potentials only, 1 vector (1/dist)
     // Q == 2 -> accs + pots, NDim + 2u vectors (temporary diffs + 1/dist3 + 1/dist)
@@ -1720,7 +1760,7 @@ private:
     }
     template <unsigned Q>
     static constexpr std::size_t nvecs_tmp = compute_nvecs_tmp<Q>();
-    // Storage for temporary data computed during the BH check (which will be re-used
+    // Storage for temporary data computed during the MAC check (which will be re-used
     // by another function).
     template <unsigned Q>
     static auto &acc_pot_tmp_vecs()
@@ -2203,12 +2243,12 @@ private:
     // Function to compute the accelerations/potentials due to the COM of a source node onto a target node. src_idx is
     // the index, in the tree structure, of the source node, tgt_size the number of particles in the target node,
     // p_ptrs pointers to the target particles' coordinates/masses, tmp_ptrs are pointers to the temporary data filled
-    // in by the tree_acc_pot_bh_check() function (which will be re-used by this function), res_ptrs pointers to the
+    // in by the tree_acc_pot_mac_check() function (which will be re-used by this function), res_ptrs pointers to the
     // output arrays. Q indicates which quantities will be computed (accs, potentials, or both).
     template <unsigned Q>
-    void tree_acc_pot_bh_com(size_type src_idx, size_type tgt_size, const std::array<const F *, NDim + 1u> &p_ptrs,
-                             const std::array<F *, nvecs_tmp<Q>> &tmp_ptrs,
-                             const std::array<F *, nvecs_res<Q>> &res_ptrs) const
+    void tree_acc_pot_src_com(size_type src_idx, size_type tgt_size, const std::array<const F *, NDim + 1u> &p_ptrs,
+                              const std::array<F *, nvecs_tmp<Q>> &tmp_ptrs,
+                              const std::array<F *, nvecs_res<Q>> &res_ptrs) const
     {
         // Load locally the mass of the source node.
         const auto m_src = m_tree[src_idx].props[NDim];
@@ -2220,7 +2260,7 @@ private:
             if constexpr (Q == 0u) {
                 // Q == 0, accelerations only.
                 //
-                // Pointers to the temporary coordinate diffs and 1/dist3 values computed in the BH check.
+                // Pointers to the temporary coordinate diffs and 1/dist3 values computed in the MAC check.
                 const auto [tmp_x, tmp_y, tmp_z, tmp_dist3] = tmp_ptrs;
                 // Pointers to the result arrays.
                 const auto [res_x, res_y, res_z] = res_ptrs;
@@ -2243,7 +2283,7 @@ private:
             } else if constexpr (Q == 1u) {
                 // Q == 1, potentials only.
                 //
-                // Pointer to the temporary 1/dist values computed in the BH check.
+                // Pointer to the temporary 1/dist values computed in the MAC check.
                 const auto tmp_dist = tmp_ptrs[0];
                 // Pointer to the target masses.
                 const auto m_ptr = p_ptrs[3];
@@ -2262,7 +2302,7 @@ private:
             } else {
                 // Q == 2, accelerations and potentials.
                 //
-                // Pointers to the temporary coordinate diffs, 1/dist3 and 1/dist values computed in the BH check.
+                // Pointers to the temporary coordinate diffs, 1/dist3 and 1/dist values computed in the MAC check.
                 const auto [tmp_x, tmp_y, tmp_z, tmp_dist3, tmp_dist] = tmp_ptrs;
                 // Pointer to the target masses.
                 const auto m_ptr = p_ptrs[3];
@@ -2319,19 +2359,19 @@ private:
             }
         }
     }
-    // Function to check if a source node satisfies the BH criterion and, possibly, to compute the
+    // Function to check if a source node satisfies the MAC and, possibly, to compute the
     // accelerations/potentials due to that source node. src_idx is the index, in the tree structure, of the source
-    // node, inv_theta2 the inv square of the opening angle, eps2 the square of the softening length, tgt_size the
-    // number of particles in the target node, p_ptrs pointers to the coordinates/masses of the particles in the target
-    // node, res_ptrs pointers to the output arrays. The return value is the index of the next source node in the tree
-    // traversal. Q indicates which quantities will be computed (accs, potentials, or both).
+    // node, mac_value the value of the MAC (or some function of it), eps2 the square of the softening length, tgt_size
+    // the number of particles in the target node, p_ptrs pointers to the coordinates/masses of the particles in the
+    // target node, res_ptrs pointers to the output arrays. The return value is the index of the next source node in the
+    // tree traversal. Q indicates which quantities will be computed (accs, potentials, or both).
     template <unsigned Q>
-    size_type tree_acc_pot_bh_check(size_type src_idx, F inv_theta2, F eps2, size_type tgt_size,
-                                    const std::array<const F *, NDim + 1u> &p_ptrs,
-                                    const std::array<F *, nvecs_res<Q>> &res_ptrs) const
+    size_type tree_acc_pot_mac_check(size_type src_idx, F mac_value, F eps2, size_type tgt_size,
+                                     const std::array<const F *, NDim + 1u> &p_ptrs,
+                                     const std::array<F *, nvecs_res<Q>> &res_ptrs) const
     {
-        // Temporary vectors to store the data computed during the BH criterion check.
-        // We will re-use this data later in tree_acc_pot_bh_com().
+        // Temporary vectors to store the data computed during the MAC check.
+        // We will re-use this data later in tree_acc_pot_src_com().
         auto &tmp_vecs = acc_pot_tmp_vecs<Q>();
         static_assert(nvecs_tmp<Q> == std::tuple_size_v<std::remove_reference_t<decltype(tmp_vecs)>>);
         std::array<F *, nvecs_tmp<Q>> tmp_ptrs;
@@ -2359,18 +2399,28 @@ private:
         const auto &src_node = m_tree[src_idx];
         // Copy locally the number of children of the source node.
         const auto n_children_src = src_node.n_children;
-        // Left-hand side of the BH check.
-        const auto bh_lh = src_node.dim2 * inv_theta2;
+        // Left-hand side of the MAC check.
+        const auto mac_lh = [mac_value, &src_node]() {
+            if constexpr (MAC == mac::bh) {
+                // NOTE: for the BH MAC, mac_value is theta**-2.
+                return src_node.dim2 * mac_value;
+            } else {
+                // NOTE: for the geometric BH MAC, mac_value is theta**-1.
+                static_assert(MAC == mac::bh_geom);
+                const auto tmp = fma_wrap(src_node.dim, mac_value, src_node.delta);
+                return tmp * tmp;
+            }
+        }();
         // The flag for the BH criterion check. Initially set to true,
         // it will be set to false if at least one particle in the
         // target node fails the check.
-        bool bh_flag = true;
+        bool mac_flag = true;
         if constexpr (simd_enabled && NDim == 3u) {
             // The SIMD-accelerated version.
             using batch_type = xsimd::simd_type<F>;
             constexpr auto batch_size = batch_type::size;
             // Splatted vector versions of the scalar variables.
-            const batch_type eps2_vec(eps2), bh_lh_vec(bh_lh), x_com_vec(src_node.props[0]),
+            const batch_type eps2_vec(eps2), mac_lh_vec(mac_lh), x_com_vec(src_node.props[0]),
                 y_com_vec(src_node.props[1]), z_com_vec(src_node.props[2]);
             // Pointers to the coordinates.
             const auto [x_ptr, y_ptr, z_ptr, m_ptr] = p_ptrs;
@@ -2385,10 +2435,10 @@ private:
                                diff_y = y_com_vec - batch_type(y_ptr + i, xsimd::aligned_mode{}),
                                diff_z = z_com_vec - batch_type(z_ptr + i, xsimd::aligned_mode{});
                     auto dist2 = diff_x * diff_x + diff_y * diff_y + diff_z * diff_z;
-                    if (xsimd::any(bh_lh_vec >= dist2)) {
-                        // At least one particle in the current batch fails the BH criterion
-                        // check. Mark the bh_flag as false, then break out.
-                        bh_flag = false;
+                    if (xsimd::any(mac_lh_vec >= dist2)) {
+                        // At least one particle in the current batch fails the MAC
+                        // check. Mark the mac_flag as false, then break out.
+                        mac_flag = false;
                         break;
                     }
                     // Add the softening length.
@@ -2412,10 +2462,10 @@ private:
                                diff_y = y_com_vec - batch_type(y_ptr + i, xsimd::aligned_mode{}),
                                diff_z = z_com_vec - batch_type(z_ptr + i, xsimd::aligned_mode{});
                     auto dist2 = diff_x * diff_x + diff_y * diff_y + diff_z * diff_z;
-                    if (xsimd::any(bh_lh_vec >= dist2)) {
-                        // At least one particle in the current batch fails the BH criterion
-                        // check. Mark the bh_flag as false, then break out.
-                        bh_flag = false;
+                    if (xsimd::any(mac_lh_vec >= dist2)) {
+                        // At least one particle in the current batch fails the MAC
+                        // check. Mark the mac_flag as false, then break out.
+                        mac_flag = false;
                         break;
                     }
                     // Add the softening length.
@@ -2436,10 +2486,10 @@ private:
                                diff_y = y_com_vec - batch_type(y_ptr + i, xsimd::aligned_mode{}),
                                diff_z = z_com_vec - batch_type(z_ptr + i, xsimd::aligned_mode{});
                     auto dist2 = diff_x * diff_x + diff_y * diff_y + diff_z * diff_z;
-                    if (xsimd::any(bh_lh_vec >= dist2)) {
-                        // At least one particle in the current batch fails the BH criterion
-                        // check. Mark the bh_flag as false, then break out.
-                        bh_flag = false;
+                    if (xsimd::any(mac_lh_vec >= dist2)) {
+                        // At least one particle in the current batch fails the MAC
+                        // check. Mark the mac_flag as false, then break out.
+                        mac_flag = false;
                         break;
                     }
                     // Add the softening length.
@@ -2471,11 +2521,11 @@ private:
                     }
                     dist2 = fma_wrap(diff, diff, dist2);
                 }
-                if (bh_lh >= dist2) {
+                if (mac_lh >= dist2) {
                     // At least one of the particles in the target
                     // node is too close to the COM. Set the flag
                     // to false and exit.
-                    bh_flag = false;
+                    mac_flag = false;
                     break;
                 }
                 // Add the softening length and compute the distance.
@@ -2496,14 +2546,14 @@ private:
                 }
             }
         }
-        if (bh_flag) {
-            // The source node satisfies the BH criterion for all the particles of the target node. Add the
+        if (mac_flag) {
+            // The source node satisfies the MAC for all the particles of the target node. Add the
             // interaction due to the com of the source node.
-            tree_acc_pot_bh_com<Q>(src_idx, tgt_size, p_ptrs, tmp_ptrs, res_ptrs);
+            tree_acc_pot_src_com<Q>(src_idx, tgt_size, p_ptrs, tmp_ptrs, res_ptrs);
             // We can now skip all the children of the source node.
             return static_cast<size_type>(src_idx + n_children_src + 1u);
         }
-        // The source node does not satisfy the BH criterion. We check if it is a leaf
+        // The source node does not satisfy the MAC. We check if it is a leaf
         // node, in which case we need to compute all the pairwise interactions.
         if (!n_children_src) {
             // Leaf node.
@@ -2512,12 +2562,12 @@ private:
         // In any case, we keep traversing the tree moving to the next node in depth-first order.
         return static_cast<size_type>(src_idx + 1u);
     }
-    // Tree traversal for the computation of the accelerations/potentials. inv_theta2 is the inverse square of the
-    // opening angle, eps2 the square of the softening length, tgt_size the number of particles in the target node,
+    // Tree traversal for the computation of the accelerations/potentials. mac_value is the value of the MAC, or some
+    // function of it, eps2 the square of the softening length, tgt_size the number of particles in the target node,
     // tgt_code its code, p_ptrs are pointers to the coordinates/masses of the particles in the target node, res_ptrs
     // pointers to the output arrays. Q indicates which quantities will be computed (accs, potentials, or both).
     template <unsigned Q>
-    void tree_acc_pot(F inv_theta2, F eps2, size_type tgt_size, UInt tgt_code,
+    void tree_acc_pot(F mac_value, F eps2, size_type tgt_size, UInt tgt_code,
                       const std::array<const F *, NDim + 1u> &p_ptrs,
                       const std::array<F *, nvecs_res<Q>> &res_ptrs) const
     {
@@ -2558,10 +2608,10 @@ private:
                 const auto tgt_eq_src_mask = static_cast<size_type>(-(src_code == tgt_code));
                 src_idx += 1u + (n_children_src & tgt_eq_src_mask);
             } else {
-                // The source node is not an ancestor of the target. We need to run the BH criterion
-                // check. The tree_acc_pot_bh_check() function will return the index of the next node
+                // The source node is not an ancestor of the target. We need to run the MAC
+                // check. The tree_acc_pot_mac_check() function will return the index of the next node
                 // in the traversal.
-                src_idx = tree_acc_pot_bh_check<Q>(src_idx, inv_theta2, eps2, tgt_size, p_ptrs, res_ptrs);
+                src_idx = tree_acc_pot_mac_check<Q>(src_idx, mac_value, eps2, tgt_size, p_ptrs, res_ptrs);
             }
         }
 
@@ -2569,10 +2619,10 @@ private:
         tree_self_interactions<Q>(eps2, tgt_size, p_ptrs, res_ptrs);
     }
     // Top level function for the computation of the accelerations/potentials. out is the array of output iterators,
-    // inv_theta2 the inverse square of the opening angle, G the grav constant, eps2 the square of the softening length.
-    // Q indicates which quantities will be computed (accs, potentials, or both).
+    // mac_value is the value of the MAC, or some function of it, G the grav constant, eps2 the square of the softening
+    // length. Q indicates which quantities will be computed (accs, potentials, or both).
     template <unsigned Q, typename It>
-    void acc_pot_impl(const std::array<It, nvecs_res<Q>> &out, F inv_theta2, F G, F eps2,
+    void acc_pot_impl(const std::array<It, nvecs_res<Q>> &out, F mac_value, F G, F eps2,
                       const std::vector<double> &split) const
     {
         // Validation of split, common to all codepaths.
@@ -2587,7 +2637,7 @@ private:
         }
 
         using c_size_type = decltype(m_crit_nodes.size());
-        auto cpu_run = [this, &out, inv_theta2, G, eps2](c_size_type c_begin, c_size_type c_end) {
+        auto cpu_run = [this, &out, mac_value, G, eps2](c_size_type c_begin, c_size_type c_end) {
             assert(c_begin <= c_end);
             assert(c_end <= m_crit_nodes.size());
 
@@ -2601,28 +2651,44 @@ private:
             //   - they must not overlap with any other real particle, in order to avoid singularities
             //     when computing self-interactions in the target node, hence they must be outside the box,
             //   - the distance of the padding particles from any point of the box must be large enough so
-            //     that they never fail the BH criterion check, which fails when node_dim >= theta * dist.
-            //     The maximum node_dim is the box size b_size, and thus we must ensure that
-            //     dist > b_size / theta for the padding particles.
+            //     that they never fail the MAC check. The bh check fails when node_dim >= theta * dist,
+            //     the geometric bh check fails when node_dim >= theta * (dist - delta).
+            //     The maximum node_dim is the box size b_size, the maximum possible delta is
+            //     b_size / 2 * sqrt(NDim). For the bh check we then must ensure that dist > b_size / theta
+            //     for the padding particles, for the geometric check we must ensure that
+            //     dist > b_size / theta + b_size / 2 * sqrt(NDim) for the padding particles.
             //
             // The strategy is that we put the padding particles at coordinates (M, M, ...), with M to
             // be determined. The upper right corner of the box, with coordinates (b_size/2, b_size/2, ...)
             // will be the closest point of the box to the padding particles, and the corner-particles distance
             // will be sqrt(NDim * (M - b_size/2)**2), which simplifies to sqrt(NDim) / 2 * (2*M - b_size).
-            // Now we require this distance to be large enough to always satisfy the BH criterion (as written
-            // above), that is, sqrt(NDim) / 2 * (2*M - b_size) > b_size / theta, which yields the requirement
-            // M > b_size / (theta * sqrt(NDim)) + b_size / 2.
-            const auto M = m_box_size / (std::sqrt(F(1) / inv_theta2) * std::sqrt(F(NDim))) + m_box_size / F(2);
-            // NOTE: M is mathematically always >= m_box_size / F(2), which puts it on the top right
-            // corner of the box for theta2 == inf. To make it completely safe with respect to the requirement
-            // of avoiding singularities in the self interaction routine, we double it.
-            const auto pad_coord = M * F(2);
-            if (!std::isfinite(pad_coord)) {
+            // Now we require this distance to be large enough to always satisfy the MAC criteria,
+            // that is, sqrt(NDim) / 2 * (2*M - b_size) > b_size / theta for the bh check, which yields the requirement
+            // M > b_size / (theta * sqrt(NDim)) + b_size / 2, and
+            // sqrt(NDim) / 2 * (2*M - b_size) > b_size / theta + sqrt(NDim) * b_size / 2 for the geometric bh
+            // check, which yields the requirement M > b_size / (theta * sqrt(NDim)) + b_size.
+            const auto pad_coord = [this, mac_value]() {
+                if constexpr (MAC == mac::bh) {
+                    // NOTE: for the bh mac, mac_value is theta**-2.
+                    const auto M = m_box_size / (std::sqrt(F(1) / mac_value) * std::sqrt(F(NDim))) + m_box_size / F(2);
+                    // NOTE: M is mathematically always >= m_box_size / F(2), which puts it on the top right
+                    // corner of the box for theta2 == inf. To make it completely safe with respect to the requirement
+                    // of avoiding singularities in the self interaction routine, we double it.
+                    return M * F(2);
+                } else {
+                    static_assert(MAC == mac::bh_geom);
+                    // NOTE: for the geometric bh mac, mac_value is theta**-1.
+                    const auto M = m_box_size / (F(1) / mac_value * std::sqrt(F(NDim))) + m_box_size;
+                    return M * F(2);
+                }
+            }();
+            // Double check the padding coordinate.
+            if (rakau_unlikely(!std::isfinite(pad_coord))) {
                 throw std::invalid_argument(
                     "The calculation of the SIMD padding coordinate produced the non-finite value "
                     + std::to_string(pad_coord));
             }
-            tbb::parallel_for(tbb::blocked_range(c_begin, c_end), [this, inv_theta2, G, eps2, pad_coord,
+            tbb::parallel_for(tbb::blocked_range(c_begin, c_end), [this, mac_value, G, eps2, pad_coord,
                                                                    &out](const auto &range) {
                 // Get references to the local temporary data.
                 auto &tmp_res = acc_pot_tmp_res<Q>();
@@ -2683,7 +2749,7 @@ private:
                         p_ptrs[j] = tmp_tgt[j].data();
                     }
                     // Do the computation.
-                    tree_acc_pot<Q>(inv_theta2, eps2, tgt_size, tgt_code, p_ptrs, res_ptrs);
+                    tree_acc_pot<Q>(mac_value, eps2, tgt_size, tgt_code, p_ptrs, res_ptrs);
                     // Multiply by G, if needed.
                     if (G != F(1)) {
                         for (std::size_t j = 0; j < nvecs_res<Q>; ++j) {
@@ -2776,9 +2842,9 @@ private:
                     // cpu_run() throws, we will be sure that this thread will end before the exception
                     // is handled.
                     auto roc_fut
-                        = std::async(std::launch::async, [this, particle_split_idx, &out, inv_theta2, G, eps2]() {
+                        = std::async(std::launch::async, [this, particle_split_idx, &out, mac_value, G, eps2]() {
                               m_rocm->template acc_pot<Q>(boost::numeric_cast<int>(particle_split_idx),
-                                                          boost::numeric_cast<int>(nparts()), out, inv_theta2, G, eps2);
+                                                          boost::numeric_cast<int>(nparts()), out, mac_value, G, eps2);
                           });
 
                     // Run the cpu implementation.
@@ -2880,9 +2946,9 @@ private:
 
                     // Run the CUDA computation in async mode.
                     auto cuda_fut
-                        = std::async(std::launch::async, [&out, &split_indices, this, np, inv_theta2, G, eps2]() {
+                        = std::async(std::launch::async, [&out, &split_indices, this, np, mac_value, G, eps2]() {
                               cuda_acc_pot_impl<Q>(out, split_indices, m_tree.data(), m_tree.size(), p_its_u(),
-                                                   m_codes.data(), np, inv_theta2, G, eps2);
+                                                   m_codes.data(), np, mac_value, G, eps2);
                           });
 
                     // Run the cpu implementation.
@@ -2942,23 +3008,32 @@ private:
         }
     }
     // Top level dispatcher for the accs/pots functions. It will run a few checks and then invoke acc_pot_impl().
-    // out is the array of output iterators, theta the opening angle, G the grav const, eps the softening length.
+    // out is the array of output iterators, orig_mac_value the MAC value, G the grav const, eps the softening length.
     // Q indicates which quantities will be computed (accs, potentials, or both).
     template <bool Ordered, unsigned Q, typename It>
-    void acc_pot_dispatch(const std::array<It, nvecs_res<Q>> &out, F theta, F G, F eps,
+    void acc_pot_dispatch(const std::array<It, nvecs_res<Q>> &out, F orig_mac_value, F G, F eps,
                           const std::vector<double> &split) const
     {
         simple_timer st("vector accs/pots computation");
         // Input param check.
-        if (rakau_unlikely(!std::isfinite(theta) || theta <= F(0))) {
-            throw std::domain_error("The theta parameter must be finite and positive, but it is "
-                                    + std::to_string(theta) + " instead");
+        if (rakau_unlikely(!std::isfinite(orig_mac_value) || orig_mac_value <= F(0))) {
+            throw std::domain_error("The MAC value must be finite and positive, but it is "
+                                    + std::to_string(orig_mac_value) + " instead");
         }
-        const auto inv_theta2 = F(1) / (theta * theta);
-        // Check that the computation of inv_theta2 did not produce something weird.
-        if (rakau_unlikely(!std::isfinite(inv_theta2) || inv_theta2 <= F(0))) {
-            throw std::domain_error("The inverse square of the theta parameter must be finite and positive, but it is "
-                                    + std::to_string(inv_theta2) + " instead");
+        const auto mac_value = [orig_mac_value]() {
+            if constexpr (MAC == mac::bh) {
+                // Transform the original value, theta, into theta**-2.
+                return F(1) / (orig_mac_value * orig_mac_value);
+            } else {
+                static_assert(MAC == mac::bh_geom);
+                // Transform the original value, theta, into theta**-1.
+                return F(1) / orig_mac_value;
+            }
+        }();
+        // Check that the computation of mac_value did not produce something weird.
+        if (rakau_unlikely(!std::isfinite(mac_value) || mac_value <= F(0))) {
+            throw std::domain_error("The transformed MAC value must be finite and positive, but it is "
+                                    + std::to_string(mac_value) + " instead");
         }
         const auto eps2 = compute_eps2(eps);
         check_G_const(G);
@@ -2973,15 +3048,15 @@ private:
             }
             // NOTE: we are checking in the acc_pot_impl() function that we can index into
             // the permuted iterators without overflows (see the use of boost::numeric_cast()).
-            acc_pot_impl<Q>(out_pits, inv_theta2, G, eps2, split);
+            acc_pot_impl<Q>(out_pits, mac_value, G, eps2, split);
         } else {
-            acc_pot_impl<Q>(out, inv_theta2, G, eps2, split);
+            acc_pot_impl<Q>(out, mac_value, G, eps2, split);
         }
     }
     // Helper overload for an array of vectors. It will prepare the vectors and then
     // call the other overload.
     template <bool Ordered, unsigned Q, typename Allocator>
-    void acc_pot_dispatch(std::array<std::vector<F, Allocator>, nvecs_res<Q>> &out, F theta, F G, F eps,
+    void acc_pot_dispatch(std::array<std::vector<F, Allocator>, nvecs_res<Q>> &out, F mac_value, F G, F eps,
                           const std::vector<double> &split) const
     {
         std::array<F *, nvecs_res<Q>> out_ptrs;
@@ -2989,16 +3064,17 @@ private:
             out[j].resize(boost::numeric_cast<decltype(out[j].size())>(m_parts[0].size()));
             out_ptrs[j] = out[j].data();
         }
-        acc_pot_dispatch<Ordered, Q>(out_ptrs, theta, G, eps, split);
+        acc_pot_dispatch<Ordered, Q>(out_ptrs, mac_value, G, eps, split);
     }
     // Helper overload for a single vector. It will prepare the vector and then
     // call the other overload. This is used for the potential-only computations.
     template <bool Ordered, unsigned Q, typename Allocator>
-    void acc_pot_dispatch(std::vector<F, Allocator> &out, F theta, F G, F eps, const std::vector<double> &split) const
+    void acc_pot_dispatch(std::vector<F, Allocator> &out, F mac_value, F G, F eps,
+                          const std::vector<double> &split) const
     {
         static_assert(Q == 1u);
         out.resize(boost::numeric_cast<decltype(out.size())>(m_parts[0].size()));
-        acc_pot_dispatch<Ordered, Q>(std::array{out.data()}, theta, G, eps, split);
+        acc_pot_dispatch<Ordered, Q>(std::array{out.data()}, mac_value, G, eps, split);
     }
     // Small helper to turn an init list into an array, in the functions for the computation
     // of the accelerations/potentials. Q indicates which quantities will be computed (accs,
@@ -3043,96 +3119,96 @@ private:
 
 public:
     template <typename Allocator, typename... KwArgs>
-    void accs_u(std::array<std::vector<F, Allocator>, NDim> &out, F theta, KwArgs &&... args) const
+    void accs_u(std::array<std::vector<F, Allocator>, NDim> &out, F mac_value, KwArgs &&... args) const
     {
         const auto [G, eps, split] = parse_accpot_kwargs(std::forward<KwArgs>(args)...);
-        acc_pot_dispatch<false, 0>(out, theta, G, eps, split);
+        acc_pot_dispatch<false, 0>(out, mac_value, G, eps, split);
     }
     template <typename It, typename... KwArgs>
-    void accs_u(const std::array<It, NDim> &out, F theta, KwArgs &&... args) const
+    void accs_u(const std::array<It, NDim> &out, F mac_value, KwArgs &&... args) const
     {
         const auto [G, eps, split] = parse_accpot_kwargs(std::forward<KwArgs>(args)...);
-        acc_pot_dispatch<false, 0>(out, theta, G, eps, split);
+        acc_pot_dispatch<false, 0>(out, mac_value, G, eps, split);
     }
     template <typename It, typename... KwArgs>
-    void accs_u(std::initializer_list<It> out, F theta, KwArgs &&... args) const
+    void accs_u(std::initializer_list<It> out, F mac_value, KwArgs &&... args) const
     {
-        accs_u(acc_pot_ilist_to_array<0>(out), theta, std::forward<KwArgs>(args)...);
+        accs_u(acc_pot_ilist_to_array<0>(out), mac_value, std::forward<KwArgs>(args)...);
     }
     template <typename Allocator, typename... KwArgs>
-    void pots_u(std::vector<F, Allocator> &out, F theta, KwArgs &&... args) const
+    void pots_u(std::vector<F, Allocator> &out, F mac_value, KwArgs &&... args) const
     {
         const auto [G, eps, split] = parse_accpot_kwargs(std::forward<KwArgs>(args)...);
-        acc_pot_dispatch<false, 1>(out, theta, G, eps, split);
+        acc_pot_dispatch<false, 1>(out, mac_value, G, eps, split);
     }
     template <typename It, typename... KwArgs>
-    void pots_u(It out, F theta, KwArgs &&... args) const
+    void pots_u(It out, F mac_value, KwArgs &&... args) const
     {
         const auto [G, eps, split] = parse_accpot_kwargs(std::forward<KwArgs>(args)...);
-        acc_pot_dispatch<false, 1>(std::array{out}, theta, G, eps, split);
+        acc_pot_dispatch<false, 1>(std::array{out}, mac_value, G, eps, split);
     }
     template <typename Allocator, typename... KwArgs>
-    void accs_pots_u(std::array<std::vector<F, Allocator>, NDim + 1u> &out, F theta, KwArgs &&... args) const
+    void accs_pots_u(std::array<std::vector<F, Allocator>, NDim + 1u> &out, F mac_value, KwArgs &&... args) const
     {
         const auto [G, eps, split] = parse_accpot_kwargs(std::forward<KwArgs>(args)...);
-        acc_pot_dispatch<false, 2>(out, theta, G, eps, split);
+        acc_pot_dispatch<false, 2>(out, mac_value, G, eps, split);
     }
     template <typename It, typename... KwArgs>
-    void accs_pots_u(const std::array<It, NDim + 1u> &out, F theta, KwArgs &&... args) const
+    void accs_pots_u(const std::array<It, NDim + 1u> &out, F mac_value, KwArgs &&... args) const
     {
         const auto [G, eps, split] = parse_accpot_kwargs(std::forward<KwArgs>(args)...);
-        acc_pot_dispatch<false, 2>(out, theta, G, eps, split);
+        acc_pot_dispatch<false, 2>(out, mac_value, G, eps, split);
     }
     template <typename It, typename... KwArgs>
-    void accs_pots_u(std::initializer_list<It> out, F theta, KwArgs &&... args) const
+    void accs_pots_u(std::initializer_list<It> out, F mac_value, KwArgs &&... args) const
     {
-        accs_pots_u(acc_pot_ilist_to_array<2>(out), theta, std::forward<KwArgs>(args)...);
+        accs_pots_u(acc_pot_ilist_to_array<2>(out), mac_value, std::forward<KwArgs>(args)...);
     }
     template <typename Allocator, typename... KwArgs>
-    void accs_o(std::array<std::vector<F, Allocator>, NDim> &out, F theta, KwArgs &&... args) const
+    void accs_o(std::array<std::vector<F, Allocator>, NDim> &out, F mac_value, KwArgs &&... args) const
     {
         const auto [G, eps, split] = parse_accpot_kwargs(std::forward<KwArgs>(args)...);
-        acc_pot_dispatch<true, 0>(out, theta, G, eps, split);
+        acc_pot_dispatch<true, 0>(out, mac_value, G, eps, split);
     }
     template <typename It, typename... KwArgs>
-    void accs_o(const std::array<It, NDim> &out, F theta, KwArgs &&... args) const
+    void accs_o(const std::array<It, NDim> &out, F mac_value, KwArgs &&... args) const
     {
         const auto [G, eps, split] = parse_accpot_kwargs(std::forward<KwArgs>(args)...);
-        acc_pot_dispatch<true, 0>(out, theta, G, eps, split);
+        acc_pot_dispatch<true, 0>(out, mac_value, G, eps, split);
     }
     template <typename It, typename... KwArgs>
-    void accs_o(std::initializer_list<It> out, F theta, KwArgs &&... args) const
+    void accs_o(std::initializer_list<It> out, F mac_value, KwArgs &&... args) const
     {
-        accs_o(acc_pot_ilist_to_array<0>(out), theta, std::forward<KwArgs>(args)...);
+        accs_o(acc_pot_ilist_to_array<0>(out), mac_value, std::forward<KwArgs>(args)...);
     }
     template <typename Allocator, typename... KwArgs>
-    void pots_o(std::vector<F, Allocator> &out, F theta, KwArgs &&... args) const
+    void pots_o(std::vector<F, Allocator> &out, F mac_value, KwArgs &&... args) const
     {
         const auto [G, eps, split] = parse_accpot_kwargs(std::forward<KwArgs>(args)...);
-        acc_pot_dispatch<true, 1>(out, theta, G, eps, split);
+        acc_pot_dispatch<true, 1>(out, mac_value, G, eps, split);
     }
     template <typename It, typename... KwArgs>
-    void pots_o(It out, F theta, KwArgs &&... args) const
+    void pots_o(It out, F mac_value, KwArgs &&... args) const
     {
         const auto [G, eps, split] = parse_accpot_kwargs(std::forward<KwArgs>(args)...);
-        acc_pot_dispatch<true, 1>(std::array{out}, theta, G, eps, split);
+        acc_pot_dispatch<true, 1>(std::array{out}, mac_value, G, eps, split);
     }
     template <typename Allocator, typename... KwArgs>
-    void accs_pots_o(std::array<std::vector<F, Allocator>, NDim + 1u> &out, F theta, KwArgs &&... args) const
+    void accs_pots_o(std::array<std::vector<F, Allocator>, NDim + 1u> &out, F mac_value, KwArgs &&... args) const
     {
         const auto [G, eps, split] = parse_accpot_kwargs(std::forward<KwArgs>(args)...);
-        acc_pot_dispatch<true, 2>(out, theta, G, eps, split);
+        acc_pot_dispatch<true, 2>(out, mac_value, G, eps, split);
     }
     template <typename It, typename... KwArgs>
-    void accs_pots_o(const std::array<It, NDim + 1u> &out, F theta, KwArgs &&... args) const
+    void accs_pots_o(const std::array<It, NDim + 1u> &out, F mac_value, KwArgs &&... args) const
     {
         const auto [G, eps, split] = parse_accpot_kwargs(std::forward<KwArgs>(args)...);
-        acc_pot_dispatch<true, 2>(out, theta, G, eps, split);
+        acc_pot_dispatch<true, 2>(out, mac_value, G, eps, split);
     }
     template <typename It, typename... KwArgs>
-    void accs_pots_o(std::initializer_list<It> out, F theta, KwArgs &&... args) const
+    void accs_pots_o(std::initializer_list<It> out, F mac_value, KwArgs &&... args) const
     {
-        accs_pots_o(acc_pot_ilist_to_array<2>(out), theta, std::forward<KwArgs>(args)...);
+        accs_pots_o(acc_pot_ilist_to_array<2>(out), mac_value, std::forward<KwArgs>(args)...);
     }
 
 private:
@@ -3440,15 +3516,15 @@ private:
     // The list of critical nodes.
     cnode_list_type m_crit_nodes;
 #if defined(RAKAU_WITH_ROCM)
-    std::optional<rocm_state<NDim, F, UInt>> m_rocm;
+    std::optional<rocm_state<NDim, F, UInt, MAC>> m_rocm;
 #endif
 };
 
-template <typename F>
-using quadtree = tree<2, F>;
+template <typename F, mac MAC = mac::bh>
+using quadtree = tree<2, F, std::size_t, MAC>;
 
-template <typename F>
-using octree = tree<3, F>;
+template <typename F, mac MAC = mac::bh>
+using octree = tree<3, F, std::size_t, MAC>;
 
 } // namespace rakau
 

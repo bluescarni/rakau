@@ -6,6 +6,7 @@
 #include <memory>
 #include <new>
 #include <stdexcept>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -132,11 +133,28 @@ struct arr_wrap {
     T value[N];
 };
 
+
+// Small helpers to compute the rhs of the MAC check. We need this because the members
+// of the node structure vary depending on the MAC.
+template <std::size_t NDim, typename F, typename UInt, mac MAC, std::enable_if_t<MAC == mac::bh, int> = 0>
+__device__ F compute_mac_lh(const tree_node_t<NDim, F, UInt, MAC> &node, const F &mac_value)
+{
+    return node.dim2 * mac_value;
+}
+
+template <std::size_t NDim, typename F, typename UInt, mac MAC, std::enable_if_t<MAC == mac::bh_geom, int> = 0>
+__device__ F compute_mac_lh(const tree_node_t<NDim, F, UInt, MAC> &node, const F &mac_value)
+{
+    const auto tmp = node.dim * mac_value + node.delta;
+    return tmp * tmp;
+}
+
 // Kernel for the computation of accelerations/potentials.
-template <unsigned Q, std::size_t NDim, typename F, typename UInt>
+template <unsigned Q, std::size_t NDim, typename F, typename UInt, mac MAC>
 __global__ void acc_pot_kernel(arr_wrap<F *, tree_nvecs_res<Q, NDim>> res_ptrs, int p_begin, int p_end,
-                               const tree_node_t<NDim, F, UInt> *tree_ptr, int tree_size,
-                               arr_wrap<const F *, NDim + 1u> parts_ptrs, const UInt *codes_ptr, F inv_theta2, F G, F eps2)
+                               const tree_node_t<NDim, F, UInt, MAC> *tree_ptr, int tree_size,
+                               arr_wrap<const F *, NDim + 1u> parts_ptrs, const UInt *codes_ptr, F mac_value, F G,
+                               F eps2)
 {
     // Get the local and global particle indices.
     const auto loc_idx = blockIdx.x * blockDim.x + threadIdx.x;
@@ -182,8 +200,8 @@ __global__ void acc_pot_kernel(arr_wrap<F *, tree_nvecs_res<Q, NDim>> res_ptrs, 
         }
         // Level of the source node.
         const auto src_level = src_node.level;
-        // Left-hand side of the BH check.
-        const auto bh_lh = src_node.dim2 * inv_theta2;
+        // Left-hand side of the MAC check.
+        const auto mac_lh = compute_mac_lh(src_node, mac_value);
 
         // Compute the shifted particle code. This is the particle code with one extra
         // top bit and then shifted down according to the level of the source node, so that
@@ -237,9 +255,9 @@ __global__ void acc_pot_kernel(arr_wrap<F *, tree_nvecs_res<Q, NDim>> res_ptrs, 
             dist_vec[j] = diff;
         }
 
-        // Now let's run the BH/ancestor check on all the target particles in the same warp.
-        if (__all_sync(unsigned(-1), s_p_code != src_code && bh_lh < dist2)) {
-            // The source node does not contain the target particle and it satisfies the BH check.
+        // Now let's run the MAC/ancestor check on all the target particles in the same warp.
+        if (__all_sync(unsigned(-1), s_p_code != src_code && mac_lh < dist2)) {
+            // The source node does not contain the target particle and it satisfies the MAC.
             // We will then add the (approximated) contribution of the source node
             // to the final result.
             //
@@ -265,7 +283,7 @@ __global__ void acc_pot_kernel(arr_wrap<F *, tree_nvecs_res<Q, NDim>> res_ptrs, 
             // We can now skip all the children of the source node.
             src_idx += n_children_src + 1;
         } else {
-            // Either the source node contains the target particle, or it fails the BH check.
+            // Either the source node contains the target particle, or it fails the MAC check.
             if (!n_children_src) {
                 // We are in a leaf node (possibly containing the target particle).
                 // Compute all the interactions with the target particle.
@@ -328,11 +346,11 @@ struct scoped_guard {
     const T &m_f;
 };
 
-template <unsigned Q, std::size_t NDim, typename F, typename UInt>
+template <unsigned Q, std::size_t NDim, typename F, typename UInt, mac MAC>
 void cuda_acc_pot_impl(const std::array<F *, tree_nvecs_res<Q, NDim>> &out,
-                       const std::vector<tree_size_t<F>> &split_indices, const tree_node_t<NDim, F, UInt> *tree,
+                       const std::vector<tree_size_t<F>> &split_indices, const tree_node_t<NDim, F, UInt, MAC> *tree,
                        tree_size_t<F> tree_size, const std::array<const F *, NDim + 1u> &p_parts, const UInt *codes,
-                       tree_size_t<F> nparts, F inv_theta2, F G, F eps2)
+                       tree_size_t<F> nparts, F mac_value, F G, F eps2)
 {
     assert(split_indices.size() && split_indices.size() - 1u <= cuda_device_count());
 
@@ -347,9 +365,10 @@ void cuda_acc_pot_impl(const std::array<F *, tree_nvecs_res<Q, NDim>> &out,
                 = ::cudaHostRegister(const_cast<void *>((const void *)ptr), sizeof(F) * nparts, cudaHostRegisterDefault)
                   == ::cudaSuccess;
         }
-        pin_flags[i++] = ::cudaHostRegister(const_cast<void *>((const void *)tree),
-                                            sizeof(tree_node_t<NDim, F, UInt>) * tree_size, cudaHostRegisterDefault)
-                         == ::cudaSuccess;
+        pin_flags[i++]
+            = ::cudaHostRegister(const_cast<void *>((const void *)tree),
+                                 sizeof(tree_node_t<NDim, F, UInt, MAC>) * tree_size, cudaHostRegisterDefault)
+              == ::cudaSuccess;
         pin_flags[i++] = ::cudaHostRegister(const_cast<void *>((const void *)codes), sizeof(UInt) * nparts,
                                             cudaHostRegisterDefault)
                          == ::cudaSuccess;
@@ -414,12 +433,12 @@ void cuda_acc_pot_impl(const std::array<F *, tree_nvecs_res<Q, NDim>> &out,
     }
 
     // Copy over the tree data.
-    scoped_cu_array<true, tree_node_t<NDim, F, UInt>> tree_arr(boost::numeric_cast<std::size_t>(tree_size));
-    cuda_memcpy(tree_arr.get(), tree, sizeof(tree_node_t<NDim, F, UInt>) * tree_size, ::cudaMemcpyDefault);
+    scoped_cu_array<true, tree_node_t<NDim, F, UInt, MAC>> tree_arr(boost::numeric_cast<std::size_t>(tree_size));
+    cuda_memcpy(tree_arr.get(), tree, sizeof(tree_node_t<NDim, F, UInt, MAC>) * tree_size, ::cudaMemcpyDefault);
     const auto *tree_ptr = tree_arr.get();
     for (auto i = 0u; i < ngpus; ++i) {
         // This will be read-only memory.
-        cuda_mem_advise(tree_ptr, sizeof(tree_node_t<NDim, F, UInt>) * tree_size, ::cudaMemAdviseSetReadMostly,
+        cuda_mem_advise(tree_ptr, sizeof(tree_node_t<NDim, F, UInt, MAC>) * tree_size, ::cudaMemAdviseSetReadMostly,
                         static_cast<int>(i));
     }
 
@@ -497,7 +516,7 @@ void cuda_acc_pot_impl(const std::array<F *, tree_nvecs_res<Q, NDim>> &out,
         }
         acc_pot_kernel<Q, NDim, F, UInt><<<(loc_nparts + 31u) / 32u, 32u, 0, streams[i]>>>(
             res_ptrs[i], boost::numeric_cast<int>(split_indices[i]), boost::numeric_cast<int>(split_indices[i + 1u]),
-            tree_ptr, boost::numeric_cast<int>(tree_size), parts_ptrs, codes_ptr, inv_theta2, G, eps2);
+            tree_ptr, boost::numeric_cast<int>(tree_size), parts_ptrs, codes_ptr, mac_value, G, eps2);
     }
 
     // Write out the results.
@@ -526,15 +545,20 @@ void cuda_acc_pot_impl(const std::array<F *, tree_nvecs_res<Q, NDim>> &out,
 // Computation of accelerations, potentials or both.
 #define RAKAU_CUDA_INST_Q_SEQUENCE (0)(1)(2)
 
-// Macro for the instantiation of the main function. NDim, F, UInt and Q will be passed in
+// Enable all MACs.
+#define RAKAU_CUDA_INST_MACS_SEQUENCE (mac::bh)(mac::bh_geom)
+
+// Macro for the instantiation of the main function. NDim, F, UInt, Q and MAC will be passed in
 // as a sequence named Args (in that order).
 #define RAKAU_CUDA_EXPLICIT_INST_FUN(r, Args)                                                                          \
-    template void cuda_acc_pot_impl<BOOST_PP_SEQ_ELEM(3, Args), BOOST_PP_SEQ_ELEM(0, Args),                            \
-                                    BOOST_PP_SEQ_ELEM(1, Args), BOOST_PP_SEQ_ELEM(2, Args)>(                           \
+    template void                                                                                                      \
+    cuda_acc_pot_impl<BOOST_PP_SEQ_ELEM(3, Args), BOOST_PP_SEQ_ELEM(0, Args), BOOST_PP_SEQ_ELEM(1, Args),              \
+                      BOOST_PP_SEQ_ELEM(2, Args), BOOST_PP_SEQ_ELEM(4, Args)>(                                         \
         const std::array<BOOST_PP_SEQ_ELEM(1, Args) *,                                                                 \
                          tree_nvecs_res<BOOST_PP_SEQ_ELEM(3, Args), BOOST_PP_SEQ_ELEM(0, Args)>> &,                    \
         const std::vector<tree_size_t<BOOST_PP_SEQ_ELEM(1, Args)>> &,                                                  \
-        const tree_node_t<BOOST_PP_SEQ_ELEM(0, Args), BOOST_PP_SEQ_ELEM(1, Args), BOOST_PP_SEQ_ELEM(2, Args)> *,       \
+        const tree_node_t<BOOST_PP_SEQ_ELEM(0, Args), BOOST_PP_SEQ_ELEM(1, Args), BOOST_PP_SEQ_ELEM(2, Args),          \
+                          BOOST_PP_SEQ_ELEM(4, Args)> *,                                                               \
         tree_size_t<BOOST_PP_SEQ_ELEM(1, Args)>,                                                                       \
         const std::array<const BOOST_PP_SEQ_ELEM(1, Args) *, BOOST_PP_SEQ_ELEM(0, Args) + 1u> &,                       \
         const BOOST_PP_SEQ_ELEM(2, Args) *, tree_size_t<BOOST_PP_SEQ_ELEM(1, Args)>, BOOST_PP_SEQ_ELEM(1, Args),       \
@@ -542,7 +566,7 @@ void cuda_acc_pot_impl(const std::array<F *, tree_nvecs_res<Q, NDim>> &out,
 
 // Do the actual instantiation via a cartesian product over the sequences.
 // clang-format off
-BOOST_PP_SEQ_FOR_EACH_PRODUCT(RAKAU_CUDA_EXPLICIT_INST_FUN, (RAKAU_CUDA_INST_DIM_SEQUENCE)(RAKAU_CUDA_INST_FP_SEQUENCE)(RAKAU_CUDA_INST_UINT_SEQUENCE)(RAKAU_CUDA_INST_Q_SEQUENCE));
+BOOST_PP_SEQ_FOR_EACH_PRODUCT(RAKAU_CUDA_EXPLICIT_INST_FUN, (RAKAU_CUDA_INST_DIM_SEQUENCE)(RAKAU_CUDA_INST_FP_SEQUENCE)(RAKAU_CUDA_INST_UINT_SEQUENCE)(RAKAU_CUDA_INST_Q_SEQUENCE)(RAKAU_CUDA_INST_MACS_SEQUENCE));
 // clang-format on
 
 } // namespace detail
