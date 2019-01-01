@@ -10,6 +10,7 @@
 #include <iostream>
 #include <optional>
 #include <tuple>
+#include <type_traits>
 #include <vector>
 
 #include <tbb/task_scheduler_init.h>
@@ -35,18 +36,27 @@ int main(int argc, char **argv)
     auto runner = [&popts](auto x) {
         using fp_type = decltype(x);
 
-        const auto [nparts, idx, max_leaf_n, ncrit, _1, bsize, a, theta, parinit, split, _2] = popts;
+        const auto [nparts, idx, max_leaf_n, ncrit, _1, bsize, a, mac_value, parinit, split, _2, mac_type] = popts;
 
         auto parts = get_plummer_sphere(nparts, static_cast<fp_type>(a), static_cast<fp_type>(bsize), parinit);
 
-        tree<3, fp_type> t({parts.data() + nparts, parts.data() + 2 * nparts, parts.data() + 3 * nparts, parts.data()},
-                           nparts, kwargs::max_leaf_n = max_leaf_n, kwargs::ncrit = ncrit);
-        std::cout << t << '\n';
-        std::vector<fp_type> pots;
-        t.pots_u(pots, theta, kwargs::split = split);
-        std::cout << pots[t.inv_perm()[idx]] << '\n';
-        auto epot = t.exact_pot_u(t.inv_perm()[idx]);
-        std::cout << epot << '\n';
+        auto inner = [&](auto m) {
+            octree<fp_type, decltype(m)::value> t(
+                {parts.data() + nparts, parts.data() + 2 * nparts, parts.data() + 3 * nparts, parts.data()}, nparts,
+                kwargs::max_leaf_n = max_leaf_n, kwargs::ncrit = ncrit);
+            std::cout << t << '\n';
+            std::vector<fp_type> pots;
+            t.pots_u(pots, mac_value, kwargs::split = split);
+            std::cout << pots[t.inv_perm()[idx]] << '\n';
+            auto epot = t.exact_pot_u(t.inv_perm()[idx]);
+            std::cout << epot << '\n';
+        };
+
+        if (mac_type == "bh") {
+            inner(std::integral_constant<mac, mac::bh>{});
+        } else {
+            inner(std::integral_constant<mac, mac::bh_geom>{});
+        }
     };
 
     if (std::get<10>(popts) == "float") {
