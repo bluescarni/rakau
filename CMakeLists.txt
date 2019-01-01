@@ -139,8 +139,10 @@ if(RAKAU_WITH_ROCM)
   set_target_properties(rakau PROPERTIES LINK_FLAGS "-hc ${RAKAU_ROCM_EXTRA_FLAGS}")
 
   # Visibility settings.
-  set_target_properties(rakau PROPERTIES CXX_VISIBILITY_PRESET hidden)
-  set_target_properties(rakau PROPERTIES VISIBILITY_INLINES_HIDDEN TRUE)
+  # NOTE: disable these for the time being, as they do not seem to work
+  # properly. To be revisited in later hcc versions.
+  # set_target_properties(rakau PROPERTIES CXX_VISIBILITY_PRESET hidden)
+  # set_target_properties(rakau PROPERTIES VISIBILITY_INLINES_HIDDEN TRUE)
 
   # Assemble the flags.
   target_compile_options(rakau PRIVATE "$<$<CONFIG:DEBUG>:${RAKAU_CXX_FLAGS_DEBUG}>" "$<$<CONFIG:RELEASE>:${RAKAU_CXX_FLAGS_RELEASE}>"

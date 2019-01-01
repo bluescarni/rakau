@@ -39,17 +39,17 @@ the computation is done in single precision.
 
 | Hardware                           | Type                 | Compiler     | Runtime |
 | :--------------------------------- | :------------------- | :----------- | ------: |
-| 2 x Intel Xeon Gold 6148 (AVX-512) | CPU (40 cores + SMT) | GCC 8        |   83 ms |
-| 2 x Intel Xeon E5-2698 (AVX2)      | CPU (40 cores)       | GCC 7        |  136 ms |
-| AMD Ryzen 1700 (AVX2)              | CPU (8 cores + SMT)  | GCC 8        |  592 ms |
-| AMD Ryzen 1700 (AVX2)              | CPU (8 cores + SMT)  | HCC 1.9      |  700 ms |
+| 2 x Intel Xeon Gold 6148 | CPU (AVX-512, 40 cores + SMT) | GCC 8        |   82 ms |
+| 2 x Intel Xeon E5-2698      | CPU (AVX2, 40 cores)       | GCC 7        |  133 ms |
+| AMD Ryzen 1700              | CPU (AVX2, 8 cores + SMT)  | GCC 8        |  580 ms |
+| AMD Ryzen 1700              | CPU (AVX2, 8 cores + SMT)  | HCC 1.9      |  688 ms |
 | AMD Radeon RX 570                  | GPU (Polaris)        | HCC 1.9      |  256 ms |
-| Ryzen 1700 + RX 570                | CPU+GPU              | HCC 1.9      |  196 ms |
+| Ryzen 1700 + RX 570                | CPU+GPU              | HCC 1.9      |  195 ms |
 | Nvidia GeForce GTX 1080 Ti         | GPU (Pascal)         | NVCC         |  140 ms |
 | Nvidia V100                        | GPU (Volta)          | NVCC         |   95 ms |
-| Intel Core i7-3610QM (AVX)         | CPU (4 cores + SMT)  | GCC 8        | 1530 ms |
-| Nvidia GeForce GT 650M             | GPU (Kepler)         | NVCC         | 3135 ms |
-| i7-3610QM + GT 650M                | CPU+GPU              | GCC 8 + NVCC | 1130 ms |
+| Intel Core i7-3610QM         | CPU (AVX, 4 cores + SMT)  | GCC 8        | 1510 ms |
+| Nvidia GeForce GT 650M             | GPU (Kepler)         | NVCC         | 2818 ms |
+| i7-3610QM + GT 650M                | CPU+GPU              | GCC 8 + NVCC | 1080 ms |
 
 Features
 --------
