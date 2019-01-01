@@ -37,11 +37,11 @@ int main(int argc, char **argv)
     auto runner = [&popts](auto x) {
         using fp_type = decltype(x);
 
-        const auto [nparts, idx, max_leaf_n, ncrit, _1, bsize, a, mac_value, parinit, split, _2, mac_type] = popts;
-
-        auto parts = get_plummer_sphere(nparts, static_cast<fp_type>(a), static_cast<fp_type>(bsize), parinit);
-
         auto inner = [&](auto m) {
+            const auto [nparts, idx, max_leaf_n, ncrit, _1, bsize, a, mac_value, parinit, split, _2, _3] = popts;
+
+            auto parts = get_plummer_sphere(nparts, static_cast<fp_type>(a), static_cast<fp_type>(bsize), parinit);
+
             octree<fp_type, decltype(m)::value> t(
                 {parts.data() + nparts, parts.data() + 2 * nparts, parts.data() + 3 * nparts, parts.data()}, nparts,
                 kwargs::max_leaf_n = max_leaf_n, kwargs::ncrit = ncrit);
@@ -54,7 +54,7 @@ int main(int argc, char **argv)
             std::cout << eacc[0] << ", " << eacc[1] << ", " << eacc[2] << '\n';
         };
 
-        if (mac_type == "bh") {
+        if (std::get<11>(popts) == "bh") {
             inner(std::integral_constant<mac, mac::bh>{});
         } else {
             inner(std::integral_constant<mac, mac::bh_geom>{});
