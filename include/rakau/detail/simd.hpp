@@ -28,6 +28,10 @@ namespace rakau
 inline namespace detail
 {
 
+// Small helper to get the scalar type from a batch type B.
+template <typename B>
+using xsimd_scalar_t = typename xsimd::revert_simd_traits<B>::type;
+
 // Global atomic counters for certain simd operations.
 // NOTE: ATOMIC_VAR_INIT can be used with variables with static storage duration,
 // and inline variables do have static storage duration.
@@ -215,10 +219,9 @@ inline auto batches_softened_norm2(const std::array<B, N> &a, const B &eps2)
 template <typename B>
 inline constexpr bool has_fast_inv_sqrt =
 #if XSIMD_X86_INSTR_SET >= XSIMD_X86_AVX_VERSION
-    (std::is_same_v<typename xsimd::simd_batch_traits<B>::value_type, float> && xsimd::simd_batch_traits<B>::size == 8u)
+    (std::is_same_v<xsimd_scalar_t<B>, float> && B::size == 8u)
 #if XSIMD_X86_INSTR_SET >= XSIMD_X86_AVX512_VERSION
-    || (std::is_same_v<typename xsimd::simd_batch_traits<B>::value_type,
-                       float> && xsimd::simd_batch_traits<B>::size == 16u)
+    || (std::is_same_v<xsimd_scalar_t<B>, float> && B::size == 16u)
 #endif
 #else
     false
@@ -226,14 +229,12 @@ inline constexpr bool has_fast_inv_sqrt =
     ;
 
 // Small helper to establish if simd is available for the type F.
-// NOTE: I am not sure this is 100% guaranteed to work, as it relies on the
-// behaviour of simd_batch_traits and I am not sure that's part of the public API.
 template <typename F, typename = void>
 struct has_simd_impl : std::false_type {
 };
 
 template <typename F>
-struct has_simd_impl<F, std::enable_if_t<(xsimd::simd_batch_traits<xsimd::simd_type<F>>::size > 1u)>> : std::true_type {
+struct has_simd_impl<F, std::enable_if_t<(xsimd::simd_type<F>::size > 1u)>> : std::true_type {
 };
 
 template <typename F>
