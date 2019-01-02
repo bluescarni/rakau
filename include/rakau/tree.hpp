@@ -2445,8 +2445,10 @@ private:
             using batch_type = xsimd::simd_type<F>;
             constexpr auto batch_size = batch_type::size;
             // Splatted vector versions of the scalar variables.
-            const batch_type eps2_vec(eps2), mac_lh_vec(mac_lh), x_com_vec(src_node.props[0]),
-                y_com_vec(src_node.props[1]), z_com_vec(src_node.props[2]);
+            const batch_type eps2_vec(eps2), mac_lh_vec(mac_lh);
+            const auto com_vec
+                = index_apply<NDim>([&src_node](auto... I) { return std::array{batch_type(src_node.props[I()])...}; });
+            const auto &[x_com_vec, y_com_vec, z_com_vec] = com_vec;
             // Pointers to the coordinates.
             const auto [x_ptr, y_ptr, z_ptr, m_ptr] = p_ptrs;
             (void)m_ptr;
