@@ -2287,26 +2287,23 @@ private:
             const batch_type m_src_vec(m_src);
             if constexpr (Q == 0u) {
                 // Q == 0, accelerations only.
-                //
-                // Pointers to the temporary coordinate diffs and 1/dist3 values computed in the MAC check.
-                const auto [tmp_x, tmp_y, tmp_z, tmp_dist3] = tmp_ptrs;
-                // Pointers to the result arrays.
-                const auto [res_x, res_y, res_z] = res_ptrs;
                 for (size_type i = 0; i < tgt_size; i += batch_size) {
-                    // Compute m_src/dist**3 and load the differences.
-                    const auto m_src_dist3_vec = use_fast_inv_sqrt<batch_type>
-                                                     ? m_src_vec * batch_type(tmp_dist3 + i, xsimd::aligned_mode{})
-                                                     : m_src_vec / batch_type(tmp_dist3 + i, xsimd::aligned_mode{}),
-                               xdiff = batch_type(tmp_x + i, xsimd::aligned_mode{}),
-                               ydiff = batch_type(tmp_y + i, xsimd::aligned_mode{}),
-                               zdiff = batch_type(tmp_z + i, xsimd::aligned_mode{});
-                    // Compute and accumulate the accelerations.
-                    xsimd_fma(xdiff, m_src_dist3_vec, batch_type(res_x + i, xsimd::aligned_mode{}))
-                        .store_aligned(res_x + i);
-                    xsimd_fma(ydiff, m_src_dist3_vec, batch_type(res_y + i, xsimd::aligned_mode{}))
-                        .store_aligned(res_y + i);
-                    xsimd_fma(zdiff, m_src_dist3_vec, batch_type(res_z + i, xsimd::aligned_mode{}))
-                        .store_aligned(res_z + i);
+                    index_apply<NDim>([&](auto... I) {
+                        // Compute m_src/dist**3.
+                        const auto m_src_dist3_vec = [&]() {
+                            if constexpr (use_fast_inv_sqrt<batch_type>) {
+                                return m_src_vec * batch_type(std::get<NDim>(tmp_ptrs) + i, xsimd::aligned_mode{});
+                            } else {
+                                return m_src_vec / batch_type(std::get<NDim>(tmp_ptrs) + i, xsimd::aligned_mode{});
+                            }
+                        }();
+                        // Compute and accumulate the accelerations. The differences will be loaded
+                        // from the temp data.
+                        (xsimd_fma(batch_type(std::get<I>(tmp_ptrs) + i, xsimd::aligned_mode{}), m_src_dist3_vec,
+                                   batch_type(std::get<I>(res_ptrs) + i, xsimd::aligned_mode{}))
+                             .store_aligned(std::get<I>(res_ptrs) + i),
+                         ...);
+                    });
                 }
             } else if constexpr (Q == 1u) {
                 // Q == 1, potentials only.
