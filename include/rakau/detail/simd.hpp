@@ -127,17 +127,6 @@ inline xsimd::batch<float, 8> inv_sqrt_3(xsimd::batch<float, 8> x)
 
 #endif
 
-// Minimal traits class for xsimd batches.
-template <typename T>
-struct simd_traits {
-};
-
-template <typename T, std::size_t N>
-struct simd_traits<xsimd::batch<T, N>> {
-    using scalar_type = T;
-    static constexpr auto size = N;
-};
-
 // Machinery for the implementation of the functions below. This
 // is a way of using index_sequence with variadic lambdas. See:
 // http://aherrmann.github.io/programming/2016/02/28/unpacking-tuples-in-cpp14/
@@ -157,10 +146,7 @@ inline auto index_apply(const F &f)
 template <typename B, std::size_t N>
 inline auto batches_zero()
 {
-    return index_apply<N>([](auto... I) {
-        using scalar_t = typename simd_traits<B>::scalar_type;
-        return std::array{(void(I), B(scalar_t(0)))...};
-    });
+    return index_apply<N>([](auto... I) { return std::array{(void(I), B(xsimd_scalar_t<B>(0)))...}; });
 }
 
 // Create an array of batches loading data from the input pointers. The batch type
@@ -170,7 +156,7 @@ template <bool Aligned, typename B, typename T, std::size_t N>
 inline auto batches_load(const std::array<T *, N> &ptrs, std::size_t offset = 0)
 {
     // Double check that the scalar type of B is T or const T.
-    static_assert(std::is_same_v<std::remove_const_t<T>, typename simd_traits<B>::scalar_type>);
+    static_assert(std::is_same_v<std::remove_const_t<T>, xsimd_scalar_t<B>>);
     return index_apply<N>([&ptrs, offset](auto... I) {
         if constexpr (Aligned) {
             return std::array{B(std::get<I>(ptrs) + offset, xsimd::aligned_mode{})...};
