@@ -48,7 +48,7 @@ TEST_CASE("acceleration accuracy unordered")
             std::array<std::vector<fp_type>, 3> accs;
             std::vector<fp_type> diffs;
             const auto thetas = {fp_type(0.2), fp_type(0.4), fp_type(0.6), fp_type(0.8)};
-            constexpr auto nparts = 10000ul;
+            constexpr auto nparts = 5000ul;
             constexpr fp_type bsize = 100;
             diffs.resize(nparts);
             const auto parts = get_uniform_particles<3>(nparts, bsize, rng);
