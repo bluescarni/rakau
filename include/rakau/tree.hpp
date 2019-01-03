@@ -2792,12 +2792,12 @@ private:
         // Validation of split specific to ROCm.
         //
         // Only CPU + 1 accelerator is supported at this time.
-        if (split.size() > 2u) {
+        if (rakau_unlikely(split.size() > 2u)) {
             throw std::invalid_argument(
                 "Cannot split the computation of accelerations/potentials between more than 2 devices");
         }
         // Cannot offload to the accelerator if none is available.
-        if (!m_rocm && split.size() == 2u) {
+        if (rakau_unlikely(!m_rocm && split.size() == 2u)) {
             throw std::invalid_argument(
                 "Cannot split the computation of accelerations/potentials: no accelerator has been detected");
         }
