@@ -1799,7 +1799,7 @@ private:
                                     B yvec2, B zvec2, B mvec2, B eps2_vec)
     {
         const B diff_x = xvec2 - xvec1, diff_y = yvec2 - yvec1, diff_z = zvec2 - zvec1,
-                dist2 = diff_x * diff_x + diff_y * diff_y + xsimd_fma(diff_z, diff_z, eps2_vec);
+                dist2 = xsimd_fma(diff_y, diff_y, diff_x * diff_x) + xsimd_fma(diff_z, diff_z, eps2_vec);
         B m2_dist3;
         if constexpr (use_fast_inv_sqrt<B>) {
             m2_dist3 = mvec2 * inv_sqrt_3(dist2);
@@ -1897,7 +1897,8 @@ private:
                         // of avoiding doing extra needless computations.
                         // Compute the relative positions of 2 wrt 1, and the distance square.
                         const auto diff_x = xvec2 - xvec1, diff_y = yvec2 - yvec1, diff_z = zvec2 - zvec1,
-                                   dist2 = diff_x * diff_x + diff_y * diff_y + xsimd_fma(diff_z, diff_z, eps2_vec);
+                                   dist2
+                                   = xsimd_fma(diff_y, diff_y, diff_x * diff_x) + xsimd_fma(diff_z, diff_z, eps2_vec);
                         // Compute m1/dist3 and m2/dist3.
                         batch_type m1_dist3, m2_dist3;
                         if constexpr (use_fast_inv_sqrt<batch_type>) {
@@ -2452,7 +2453,7 @@ private:
                     const auto diff_x = x_com_vec - batch_type(x_ptr + i, xsimd::aligned_mode{}),
                                diff_y = y_com_vec - batch_type(y_ptr + i, xsimd::aligned_mode{}),
                                diff_z = z_com_vec - batch_type(z_ptr + i, xsimd::aligned_mode{});
-                    auto dist2 = diff_x * diff_x + diff_y * diff_y + xsimd_fma(diff_z, diff_z, eps2_vec);
+                    auto dist2 = xsimd_fma(diff_y, diff_y, diff_x * diff_x) + xsimd_fma(diff_z, diff_z, eps2_vec);
                     if (xsimd::any(mac_lh_vec >= dist2)) {
                         // At least one particle in the current batch fails the MAC
                         // check. Mark the mac_flag as false, then break out.
