@@ -59,13 +59,13 @@ Current:
 * single and double precision<sup>1</sup>,
 * 2D and 3D<sup>2</sup>,
 * computation of accelerations and/or potentials,
+* support for multiple MACs (multipole acceptance criteria),
 * highly configurable tree structure,
 * ergonomic API based on modern C++ idioms.
 
 Planned:
 
 * higher multipole moments,
-* wider selection of MACs (multipole acceptance criteria),
 * support for integration schemes based on hierarchical timesteps,
 * better support for multi-GPU setups<sup>3</sup>,
 * Python interface.
