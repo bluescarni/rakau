@@ -1001,13 +1001,13 @@ private:
 
             for (; i < vec_size; i += batch_size) {
                 // Load the mass.
-                const auto mass_vec = xsimd::load_unaligned(m_ptr + i);
+                const auto mass_vec = batch_type(m_ptr + i, xsimd::unaligned_mode{});
 
                 // Update the accumulators.
                 tot_mass_vec += mass_vec;
-                com_pos_x_vec = xsimd_fma(mass_vec, xsimd::load_unaligned(x_ptr + i), com_pos_x_vec);
-                com_pos_y_vec = xsimd_fma(mass_vec, xsimd::load_unaligned(y_ptr + i), com_pos_y_vec);
-                com_pos_z_vec = xsimd_fma(mass_vec, xsimd::load_unaligned(z_ptr + i), com_pos_z_vec);
+                com_pos_x_vec = xsimd_fma(mass_vec, batch_type(x_ptr + i, xsimd::unaligned_mode{}), com_pos_x_vec);
+                com_pos_y_vec = xsimd_fma(mass_vec, batch_type(y_ptr + i, xsimd::unaligned_mode{}), com_pos_y_vec);
+                com_pos_z_vec = xsimd_fma(mass_vec, batch_type(z_ptr + i, xsimd::unaligned_mode{}), com_pos_z_vec);
             }
 
             // Flatten the vectors into the scalar accumulators.
@@ -1879,16 +1879,20 @@ private:
                 const auto [res_x, res_y, res_z] = res_ptrs;
                 for (size_type i1 = 0; i1 < tgt_size; i1 += batch_size) {
                     // Load the first batch of particles.
-                    const auto xvec1 = xsimd::load_aligned(x_ptr + i1), yvec1 = xsimd::load_aligned(y_ptr + i1),
-                               zvec1 = xsimd::load_aligned(z_ptr + i1), mvec1 = xsimd::load_aligned(m_ptr + i1);
+                    const auto xvec1 = batch_type(x_ptr + i1, xsimd::aligned_mode{}),
+                               yvec1 = batch_type(y_ptr + i1, xsimd::aligned_mode{}),
+                               zvec1 = batch_type(z_ptr + i1, xsimd::aligned_mode{}),
+                               mvec1 = batch_type(m_ptr + i1, xsimd::aligned_mode{});
                     // Init the accumulators for the accelerations on the first batch of particles.
                     batch_type res_x_vec1(F(0)), res_y_vec1(F(0)), res_z_vec1(F(0));
                     // Now we iterate over the node particles starting 1 position past i1 (to avoid self interactions).
                     // This is the classical n body inner loop.
                     for (size_type i2 = i1 + 1u; i2 < tgt_size; ++i2) {
                         // Load the second batch of particles.
-                        const auto xvec2 = xsimd::load_unaligned(x_ptr + i2), yvec2 = xsimd::load_unaligned(y_ptr + i2),
-                                   zvec2 = xsimd::load_unaligned(z_ptr + i2), mvec2 = xsimd::load_unaligned(m_ptr + i2);
+                        const auto xvec2 = batch_type(x_ptr + i2, xsimd::unaligned_mode{}),
+                                   yvec2 = batch_type(y_ptr + i2, xsimd::unaligned_mode{}),
+                                   zvec2 = batch_type(z_ptr + i2, xsimd::unaligned_mode{}),
+                                   mvec2 = batch_type(m_ptr + i2, xsimd::unaligned_mode{});
                         // NOTE: now we are going to do a slight repetition of batch_batch_3d_accs(), with the goal
                         // of avoiding doing extra needless computations.
                         // Compute the relative positions of 2 wrt 1, and the distance square.
@@ -1914,14 +1918,17 @@ private:
                         res_y_vec1 = xsimd_fma(diff_y, m2_dist3, res_y_vec1);
                         res_z_vec1 = xsimd_fma(diff_z, m2_dist3, res_z_vec1);
                         // Add *directly into the result buffer* the acceleration on 2 due to 1.
-                        xsimd_fnma(diff_x, m1_dist3, xsimd::load_unaligned(res_x + i2)).store_unaligned(res_x + i2);
-                        xsimd_fnma(diff_y, m1_dist3, xsimd::load_unaligned(res_y + i2)).store_unaligned(res_y + i2);
-                        xsimd_fnma(diff_z, m1_dist3, xsimd::load_unaligned(res_z + i2)).store_unaligned(res_z + i2);
+                        xsimd_fnma(diff_x, m1_dist3, batch_type(res_x + i2, xsimd::unaligned_mode{}))
+                            .store_unaligned(res_x + i2);
+                        xsimd_fnma(diff_y, m1_dist3, batch_type(res_y + i2, xsimd::unaligned_mode{}))
+                            .store_unaligned(res_y + i2);
+                        xsimd_fnma(diff_z, m1_dist3, batch_type(res_z + i2, xsimd::unaligned_mode{}))
+                            .store_unaligned(res_z + i2);
                     }
                     // Add the accumulated acceleration on 1 to the values already in the result buffer.
-                    (xsimd::load_aligned(res_x + i1) + res_x_vec1).store_aligned(res_x + i1);
-                    (xsimd::load_aligned(res_y + i1) + res_y_vec1).store_aligned(res_y + i1);
-                    (xsimd::load_aligned(res_z + i1) + res_z_vec1).store_aligned(res_z + i1);
+                    (batch_type(res_x + i1, xsimd::aligned_mode{}) + res_x_vec1).store_aligned(res_x + i1);
+                    (batch_type(res_y + i1, xsimd::aligned_mode{}) + res_y_vec1).store_aligned(res_y + i1);
+                    (batch_type(res_z + i1, xsimd::aligned_mode{}) + res_z_vec1).store_aligned(res_z + i1);
                 }
             } else if constexpr (Q == 1u) {
                 // Q == 1, potentials only.
@@ -1930,16 +1937,20 @@ private:
                 const auto res = res_ptrs[0];
                 for (size_type i1 = 0; i1 < tgt_size; i1 += batch_size) {
                     // Load the first batch of particles.
-                    const auto xvec1 = xsimd::load_aligned(x_ptr + i1), yvec1 = xsimd::load_aligned(y_ptr + i1),
-                               zvec1 = xsimd::load_aligned(z_ptr + i1), mvec1 = xsimd::load_aligned(m_ptr + i1);
+                    const auto xvec1 = batch_type(x_ptr + i1, xsimd::aligned_mode{}),
+                               yvec1 = batch_type(y_ptr + i1, xsimd::aligned_mode{}),
+                               zvec1 = batch_type(z_ptr + i1, xsimd::aligned_mode{}),
+                               mvec1 = batch_type(m_ptr + i1, xsimd::aligned_mode{});
                     // Init the accumulator for the potential on the first batch of particles.
                     batch_type res_vec(F(0));
                     // Now we iterate over the node particles starting 1 position past i1 (to avoid self interactions).
                     // This is the classical n body inner loop.
                     for (size_type i2 = i1 + 1u; i2 < tgt_size; ++i2) {
                         // Load the second batch of particles.
-                        const auto xvec2 = xsimd::load_unaligned(x_ptr + i2), yvec2 = xsimd::load_unaligned(y_ptr + i2),
-                                   zvec2 = xsimd::load_unaligned(z_ptr + i2), mvec2 = xsimd::load_unaligned(m_ptr + i2);
+                        const auto xvec2 = batch_type(x_ptr + i2, xsimd::unaligned_mode{}),
+                                   yvec2 = batch_type(y_ptr + i2, xsimd::unaligned_mode{}),
+                                   zvec2 = batch_type(z_ptr + i2, xsimd::unaligned_mode{}),
+                                   mvec2 = batch_type(m_ptr + i2, xsimd::unaligned_mode{});
                         // NOTE: now we are going to do a slight repetition of batch_batch_3d_pots(), with the goal
                         // of avoiding doing extra needless computations.
                         // Compute the relative positions of 2 wrt 1, and the distance square.
@@ -1957,12 +1968,12 @@ private:
                         // Subtract it from the acccumulator for 1.
                         res_vec -= mut_pot;
                         // Subtract *directly from the result buffer* the mutual negated potential for 2.
-                        (xsimd::load_unaligned(res + i2) - mut_pot).store_unaligned(res + i2);
+                        (batch_type(res + i2, xsimd::unaligned_mode{}) - mut_pot).store_unaligned(res + i2);
                     }
                     // Add the accumulated potentials on 1 from the values already in the result buffer.
                     // NOTE: we are doing an add here because we already built res_vec with repeated
                     // subtractions, thus generating a negative value.
-                    (xsimd::load_aligned(res + i1) + res_vec).store_aligned(res + i1);
+                    (batch_type(res + i1, xsimd::aligned_mode{}) + res_vec).store_aligned(res + i1);
                 }
             } else {
                 // Q == 2, accelerations and potentials.
@@ -1971,16 +1982,20 @@ private:
                 const auto [res_x, res_y, res_z, res_pot] = res_ptrs;
                 for (size_type i1 = 0; i1 < tgt_size; i1 += batch_size) {
                     // Load the first batch of particles.
-                    const auto xvec1 = xsimd::load_aligned(x_ptr + i1), yvec1 = xsimd::load_aligned(y_ptr + i1),
-                               zvec1 = xsimd::load_aligned(z_ptr + i1), mvec1 = xsimd::load_aligned(m_ptr + i1);
+                    const auto xvec1 = batch_type(x_ptr + i1, xsimd::aligned_mode{}),
+                               yvec1 = batch_type(y_ptr + i1, xsimd::aligned_mode{}),
+                               zvec1 = batch_type(z_ptr + i1, xsimd::aligned_mode{}),
+                               mvec1 = batch_type(m_ptr + i1, xsimd::aligned_mode{});
                     // Init the accumulators for the accelerations/potentials on the first batch of particles.
                     batch_type res_x_vec1(F(0)), res_y_vec1(F(0)), res_z_vec1(F(0)), res_pot_vec(F(0));
                     // Now we iterate over the node particles starting 1 position past i1 (to avoid self interactions).
                     // This is the classical n body inner loop.
                     for (size_type i2 = i1 + 1u; i2 < tgt_size; ++i2) {
                         // Load the second batch of particles.
-                        const auto xvec2 = xsimd::load_unaligned(x_ptr + i2), yvec2 = xsimd::load_unaligned(y_ptr + i2),
-                                   zvec2 = xsimd::load_unaligned(z_ptr + i2), mvec2 = xsimd::load_unaligned(m_ptr + i2);
+                        const auto xvec2 = batch_type(x_ptr + i2, xsimd::unaligned_mode{}),
+                                   yvec2 = batch_type(y_ptr + i2, xsimd::unaligned_mode{}),
+                                   zvec2 = batch_type(z_ptr + i2, xsimd::unaligned_mode{}),
+                                   mvec2 = batch_type(m_ptr + i2, xsimd::unaligned_mode{});
                         // NOTE: now we are going to do a slight repetition of batch_batch_3d_accs_pots(), with the goal
                         // of avoiding doing extra needless computations.
                         // Compute the relative positions of 2 wrt 1, and the distance square.
@@ -2013,17 +2028,20 @@ private:
                         res_pot_vec -= mut_pot;
                         // Add *directly into the result buffer* the acceleration on 2 due to 1,
                         // and subtract the negated potential.
-                        xsimd_fnma(diff_x, m1_dist3, xsimd::load_unaligned(res_x + i2)).store_unaligned(res_x + i2);
-                        xsimd_fnma(diff_y, m1_dist3, xsimd::load_unaligned(res_y + i2)).store_unaligned(res_y + i2);
-                        xsimd_fnma(diff_z, m1_dist3, xsimd::load_unaligned(res_z + i2)).store_unaligned(res_z + i2);
-                        (xsimd::load_unaligned(res_pot + i2) - mut_pot).store_unaligned(res_pot + i2);
+                        xsimd_fnma(diff_x, m1_dist3, batch_type(res_x + i2, xsimd::unaligned_mode{}))
+                            .store_unaligned(res_x + i2);
+                        xsimd_fnma(diff_y, m1_dist3, batch_type(res_y + i2, xsimd::unaligned_mode{}))
+                            .store_unaligned(res_y + i2);
+                        xsimd_fnma(diff_z, m1_dist3, batch_type(res_z + i2, xsimd::unaligned_mode{}))
+                            .store_unaligned(res_z + i2);
+                        (batch_type(res_pot + i2, xsimd::unaligned_mode{}) - mut_pot).store_unaligned(res_pot + i2);
                     }
                     // Add the accumulated accelerations/potentials on 1 to the values already in the result buffer.
-                    (xsimd::load_aligned(res_x + i1) + res_x_vec1).store_aligned(res_x + i1);
-                    (xsimd::load_aligned(res_y + i1) + res_y_vec1).store_aligned(res_y + i1);
-                    (xsimd::load_aligned(res_z + i1) + res_z_vec1).store_aligned(res_z + i1);
+                    (batch_type(res_x + i1, xsimd::aligned_mode{}) + res_x_vec1).store_aligned(res_x + i1);
+                    (batch_type(res_y + i1, xsimd::aligned_mode{}) + res_y_vec1).store_aligned(res_y + i1);
+                    (batch_type(res_z + i1, xsimd::aligned_mode{}) + res_z_vec1).store_aligned(res_z + i1);
                     // NOTE: the accumulated potential is added because it was constructed as a negative quantity.
-                    (xsimd::load_aligned(res_pot + i1) + res_pot_vec).store_aligned(res_pot + i1);
+                    (batch_type(res_pot + i1, xsimd::aligned_mode{}) + res_pot_vec).store_aligned(res_pot + i1);
                 }
             }
         } else {
@@ -2759,7 +2777,7 @@ private:
                                 constexpr auto batch_size = batch_type::size;
                                 const batch_type Gvec(G);
                                 for (size_type k = 0; k < tgt_size; k += batch_size) {
-                                    (xsimd::load_aligned(r_ptr + k) * Gvec).store_aligned(r_ptr + k);
+                                    (batch_type(r_ptr + k, xsimd::aligned_mode{}) * Gvec).store_aligned(r_ptr + k);
                                 }
                             } else {
                                 for (size_type k = 0; k < tgt_size; ++k) {
