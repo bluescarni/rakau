@@ -21,12 +21,12 @@ option(RAKAU_ENABLE_RSQRT "Enable the use of rsqrt intrinsics." ON)
 option(RAKAU_WITH_ROCM "Enable support for ROCm." OFF)
 option(RAKAU_WITH_CUDA "Enable support for CUDA." OFF)
 
+# YACMA compiler setup.
+include(YACMACompilerLinkerSettings)
+
 if(NOT RAKAU_ENABLE_RSQRT)
   set(RAKAU_DISABLE_RSQRT "#define RAKAU_DISABLE_RSQRT")
 endif()
-
-include(YACMACompilerLinkerSettings)
-include(CheckCXXCompilerFlag)
 
 if(RAKAU_WITH_CUDA AND RAKAU_WITH_ROCM)
   message(FATAL_ERROR "ROCm and CUDA support cannot be activated together.")
