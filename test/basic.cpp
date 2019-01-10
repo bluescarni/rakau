@@ -55,7 +55,11 @@ TEST_CASE("ctors")
             // Generate some particles in 3D.
             auto parts = get_uniform_particles<3>(N, bsize, rng);
             // Ctor from array of iterators, box size given, default ncrit/max_leaf_n.
-            tree_t t1{std::array{parts.begin() + N, parts.begin() + 2u * N, parts.begin() + 3u * N, parts.begin()}, N,
+            tree_t t1{x_coords = parts.begin() + N,
+                      y_coords = parts.begin() + 2u * N,
+                      z_coords = parts.begin() + 3u * N,
+                      masses = parts.begin(),
+                      nparts = N,
                       box_size = bsize};
             REQUIRE(t1.box_size() == bsize);
             REQUIRE(!t1.box_size_deduced());
@@ -64,17 +68,25 @@ TEST_CASE("ctors")
             REQUIRE(t1.perm() == t1.last_perm());
             REQUIRE(t1.inv_perm().size() == N);
             // Non-default ncrit/max_leaf_n.
-            tree_t t2{std::array{parts.begin() + N, parts.begin() + 2u * N, parts.begin() + 3u * N, parts.begin()}, N,
-                      max_leaf_n = 4, ncrit = 5, box_size = bsize};
+            tree_t t2{x_coords = parts.begin() + N,
+                      y_coords = parts.begin() + 2u * N,
+                      z_coords = parts.begin() + 3u * N,
+                      masses = parts.begin(),
+                      nparts = N,
+                      max_leaf_n = 4,
+                      ncrit = 5,
+                      box_size = bsize};
             REQUIRE(t2.box_size() == bsize);
             REQUIRE(!t2.box_size_deduced());
             REQUIRE(t2.max_leaf_n() == 4u);
             REQUIRE(t2.ncrit() == 5u);
             REQUIRE(t2.perm() == t2.last_perm());
             REQUIRE(t2.inv_perm().size() == N);
-            // Same, with ctors from init lists.
-            tree_t t1a{{parts.begin() + N, parts.begin() + 2u * N, parts.begin() + 3u * N, parts.begin()},
-                       N,
+            tree_t t1a{x_coords = parts.begin() + N,
+                       y_coords = parts.begin() + 2u * N,
+                       z_coords = parts.begin() + 3u * N,
+                       masses = parts.begin(),
+                       nparts = N,
                        box_size = bsize};
             REQUIRE(t1a.box_size() == bsize);
             REQUIRE(!t1a.box_size_deduced());
@@ -82,8 +94,11 @@ TEST_CASE("ctors")
             REQUIRE(t1a.ncrit() == default_ncrit);
             REQUIRE(t1a.perm() == t1a.last_perm());
             REQUIRE(t1a.inv_perm().size() == N);
-            tree_t t2a{{parts.begin() + N, parts.begin() + 2u * N, parts.begin() + 3u * N, parts.begin()},
-                       N,
+            tree_t t2a{x_coords = parts.begin() + N,
+                       y_coords = parts.begin() + 2u * N,
+                       z_coords = parts.begin() + 3u * N,
+                       masses = parts.begin(),
+                       nparts = N,
                        box_size = bsize,
                        max_leaf_n = 4,
                        ncrit = 5};
@@ -100,13 +115,14 @@ TEST_CASE("ctors")
                 std::uniform_real_distribution<fp_type> urd(-fp_type(1), fp_type(1));
                 std::generate(vec.begin(), vec.end(), [&urd]() { return urd(rng); });
             }
-            tree_t tvec1{arr_vec};
+            tree_t tvec1{x_coords = arr_vec[0], y_coords = arr_vec[1], z_coords = arr_vec[2], masses = arr_vec[3]};
             REQUIRE(tvec1.nparts() == N);
             REQUIRE(std::equal(arr_vec[0].begin(), arr_vec[0].end(), tvec1.p_its_o()[0]));
             REQUIRE(std::equal(arr_vec[1].begin(), arr_vec[1].end(), tvec1.p_its_o()[1]));
             REQUIRE(std::equal(arr_vec[2].begin(), arr_vec[2].end(), tvec1.p_its_o()[2]));
             REQUIRE(std::equal(arr_vec[3].begin(), arr_vec[3].end(), tvec1.p_its_o()[3]));
-            tree_t tvec2{arr_vec, box_size = 100};
+            tree_t tvec2{x_coords = arr_vec[0], y_coords = arr_vec[1], z_coords = arr_vec[2], masses = arr_vec[3],
+                         box_size = 100};
             REQUIRE(tvec2.nparts() == N);
             REQUIRE(tvec2.box_size() == fp_type(100));
             REQUIRE(std::equal(arr_vec[0].begin(), arr_vec[0].end(), tvec2.p_its_o()[0]));
@@ -114,38 +130,36 @@ TEST_CASE("ctors")
             REQUIRE(std::equal(arr_vec[2].begin(), arr_vec[2].end(), tvec2.p_its_o()[2]));
             REQUIRE(std::equal(arr_vec[3].begin(), arr_vec[3].end(), tvec2.p_its_o()[3]));
             arr_vec[2].clear();
-            REQUIRE_THROWS_WITH(
-                (tree_t{arr_vec, box_size = 3, max_leaf_n = 4, ncrit = 5}),
-                Contains("Inconsistent sizes detected in the construction of a tree from an array "
-                         "of vectors: the first vector has a size of "
-                         + std::to_string(N)
-                         + ", while the vector at index 2 has a size of 0 (all the vectors in the input "
-                           "array must have the same size)"));
+            REQUIRE_THROWS_WITH((tree_t{x_coords = arr_vec[0], y_coords = arr_vec[1], z_coords = arr_vec[2],
+                                        masses = arr_vec[3], box_size = 3, max_leaf_n = 4, ncrit = 5}),
+                                Contains("The input ranges for the particle coordinates have inconsistent sizes"));
             // Ctors with deduced box size.
             fp_type xcoords[] = {-10, 1, 2, 10}, ycoords[] = {-10, 1, 2, 10}, zcoords[] = {-10, 1, 2, 10},
-                    masses[] = {1, 1, 1, 1};
-            tree_t t3{std::array{xcoords, ycoords, zcoords, masses}, 4};
+                    pmasses[] = {1, 1, 1, 1};
+            tree_t t3{x_coords = xcoords, y_coords = ycoords, z_coords = zcoords, masses = pmasses};
             REQUIRE(t3.box_size() == fp_type(21));
             REQUIRE(t3.box_size_deduced());
             REQUIRE(t3.max_leaf_n() == default_max_leaf_n);
             REQUIRE(t3.ncrit() == default_ncrit);
             REQUIRE(t3.perm() == t3.last_perm());
             REQUIRE(t3.inv_perm().size() == 4u);
-            tree_t t4{std::array{xcoords, ycoords, zcoords, masses}, 4, max_leaf_n = 4, ncrit = 5};
+            tree_t t4{x_coords = xcoords, y_coords = ycoords, z_coords = zcoords,
+                      masses = pmasses,   max_leaf_n = 4,     ncrit = 5};
             REQUIRE(t4.box_size() == fp_type(21));
             REQUIRE(t4.box_size_deduced());
             REQUIRE(t4.max_leaf_n() == 4u);
             REQUIRE(t4.ncrit() == 5u);
             REQUIRE(t4.perm() == t4.last_perm());
             REQUIRE(t4.inv_perm().size() == 4u);
-            tree_t t3a{{xcoords, ycoords, zcoords, masses}, 4};
+            tree_t t3a{x_coords = xcoords, y_coords = ycoords, z_coords = zcoords, masses = pmasses};
             REQUIRE(t3a.box_size() == fp_type(21));
             REQUIRE(t3a.box_size_deduced());
             REQUIRE(t3a.max_leaf_n() == default_max_leaf_n);
             REQUIRE(t3a.ncrit() == default_ncrit);
             REQUIRE(t3a.perm() == t3a.last_perm());
             REQUIRE(t3a.inv_perm().size() == 4u);
-            tree_t t4a{{xcoords, ycoords, zcoords, masses}, 4, max_leaf_n = 4, ncrit = 5};
+            tree_t t4a{x_coords = xcoords, y_coords = ycoords, z_coords = zcoords,
+                       masses = pmasses,   max_leaf_n = 4,     ncrit = 5};
             REQUIRE(t4a.box_size() == fp_type(21));
             REQUIRE(t4a.box_size_deduced());
             REQUIRE(t4a.max_leaf_n() == 4u);
@@ -154,37 +168,31 @@ TEST_CASE("ctors")
             REQUIRE(t4a.inv_perm().size() == 4u);
             // Provide explicit box size of zero, which generates an infinity
             // when trying to discretise.
-            REQUIRE_THROWS_WITH(
-                (tree_t{{xcoords, ycoords, zcoords, masses}, 4, box_size = 0., max_leaf_n = 4, ncrit = 5}),
-                Contains("While trying to discretise the input coordinate"));
+            REQUIRE_THROWS_WITH((tree_t{x_coords = xcoords, y_coords = ycoords, z_coords = zcoords, masses = pmasses,
+                                        box_size = 0., max_leaf_n = 4, ncrit = 5}),
+                                Contains("While trying to discretise the input coordinate"));
             // Box size too small.
-            REQUIRE_THROWS_WITH(
-                (tree_t{{xcoords, ycoords, zcoords, masses}, 4, box_size = 3, max_leaf_n = 4, ncrit = 5}),
-                Contains("produced the floating-point value"));
+            REQUIRE_THROWS_WITH((tree_t{x_coords = xcoords, y_coords = ycoords, z_coords = zcoords, masses = pmasses,
+                                        box_size = 3, max_leaf_n = 4, ncrit = 5}),
+                                Contains("produced the floating-point value"));
             // Box size negative.
-            REQUIRE_THROWS_WITH(
-                (tree_t{{xcoords, ycoords, zcoords, masses}, 4, box_size = -3, max_leaf_n = 4, ncrit = 5}),
-                Contains("The box size must be a finite non-negative value, but it is"));
+            REQUIRE_THROWS_WITH((tree_t{x_coords = xcoords, y_coords = ycoords, z_coords = zcoords, masses = pmasses,
+                                        box_size = -3, max_leaf_n = 4, ncrit = 5}),
+                                Contains("The box size must be a finite non-negative value, but it is"));
             if (std::numeric_limits<fp_type>::has_infinity) {
                 // Box size not finite.
-                REQUIRE_THROWS_WITH((tree_t{{xcoords, ycoords, zcoords, masses},
-                                            4,
-                                            box_size = std::numeric_limits<fp_type>::infinity(),
-                                            max_leaf_n = 4,
-                                            ncrit = 5}),
-                                    Contains("The box size must be a finite non-negative value, but it is"));
+                REQUIRE_THROWS_WITH(
+                    (tree_t{x_coords = xcoords, y_coords = ycoords, z_coords = zcoords, masses = pmasses,
+                            box_size = std::numeric_limits<fp_type>::infinity(), max_leaf_n = 4, ncrit = 5}),
+                    Contains("The box size must be a finite non-negative value, but it is"));
             }
             // Wrong max_leaf_n/ncrit.
-            REQUIRE_THROWS_WITH((tree_t{{xcoords, ycoords, zcoords, masses}, 4, max_leaf_n = 0, ncrit = 5}),
+            REQUIRE_THROWS_WITH((tree_t{x_coords = xcoords, y_coords = ycoords, z_coords = zcoords, masses = pmasses,
+                                        max_leaf_n = 0, ncrit = 5}),
                                 Contains("The maximum number of particles per leaf must be nonzero"));
-            REQUIRE_THROWS_WITH((tree_t{{xcoords, ycoords, zcoords, masses}, 4, max_leaf_n = 4, ncrit = 0}),
+            REQUIRE_THROWS_WITH((tree_t{x_coords = xcoords, y_coords = ycoords, z_coords = zcoords, masses = pmasses,
+                                        max_leaf_n = 4, ncrit = 0}),
                                 Contains("The critical number of particles for the vectorised computation of the"));
-            // Wrong number of elements in init list.
-            REQUIRE_THROWS_WITH(
-                (tree_t{{xcoords, ycoords}, 4, max_leaf_n = 4, ncrit = 5}),
-                Contains("An initializer list containing 2 iterators was used in the construction of a "
-                         "3-dimensional tree, but a list with 4 iterators is required instead (3 iterators "
-                         "for the coordinates, 1 for the masses)"));
             // Copy ctor.
             tree_t t4a_copy(t4a);
             REQUIRE(t4a_copy.box_size() == fp_type(21));
@@ -245,25 +253,34 @@ TEST_CASE("ctors")
             const std::array idata_0{f_vector<fp_type>{1, 2, 3, 4}, f_vector<fp_type>{-1, -2, -3, 4},
                                      f_vector<fp_type>{1, -2, 3, -4}, f_vector<fp_type>{1, 1, 1, 1}};
             auto idata_1 = idata_0;
-            tree_t tm_00{std::array<f_vector<fp_type>, 4>{}};
+            tree_t tm_00{x_coords = f_vector<fp_type>{}, y_coords = f_vector<fp_type>{}, z_coords = f_vector<fp_type>{},
+                         masses = f_vector<fp_type>{}};
             REQUIRE(tm_00.nparts() == 0u);
-            tree_t tm_01{std::array<f_vector<fp_type>, 4>{}, kwargs::box_size = 10};
+            tree_t tm_01{x_coords = f_vector<fp_type>{}, y_coords = f_vector<fp_type>{}, z_coords = f_vector<fp_type>{},
+                         masses = f_vector<fp_type>{}, box_size = 10};
             REQUIRE(tm_01.nparts() == 0u);
             REQUIRE(tm_01.box_size() == 10);
-            tree_t tm_02{std::array<f_vector<fp_type>, 4>{}, kwargs::box_size = 11, kwargs::ncrit = 1,
-                         kwargs::max_leaf_n = 12};
+            tree_t tm_02{x_coords = f_vector<fp_type>{},
+                         y_coords = f_vector<fp_type>{},
+                         z_coords = f_vector<fp_type>{},
+                         masses = f_vector<fp_type>{},
+                         box_size = 11,
+                         ncrit = 1,
+                         max_leaf_n = 12};
             REQUIRE(tm_02.nparts() == 0u);
             REQUIRE(tm_02.box_size() == 11);
             REQUIRE(tm_02.ncrit() == 1);
             REQUIRE(tm_02.max_leaf_n() == 12);
-            tree_t tm_03{std::move(idata_1)};
+            tree_t tm_03{x_coords = std::move(idata_1[0]), y_coords = std::move(idata_1[1]),
+                         z_coords = std::move(idata_1[2]), masses = std::move(idata_1[3])};
             REQUIRE(tm_03.nparts() == 4u);
             auto tm_pits = tm_03.p_its_o();
             for (std::size_t j = 0; j < 4u; ++j) {
                 REQUIRE(std::equal(tm_pits[j], tm_pits[j] + 4, idata_0[j].begin()));
             }
             idata_1 = idata_0;
-            tree_t tm_04{std::move(idata_1), kwargs::box_size = 10};
+            tree_t tm_04{x_coords = std::move(idata_1[0]), y_coords = std::move(idata_1[1]),
+                         z_coords = std::move(idata_1[2]), masses = std::move(idata_1[3]), box_size = 10};
             REQUIRE(tm_04.nparts() == 4u);
             REQUIRE(tm_04.box_size() == 10);
             tm_pits = tm_04.p_its_o();
@@ -271,7 +288,13 @@ TEST_CASE("ctors")
                 REQUIRE(std::equal(tm_pits[j], tm_pits[j] + 4, idata_0[j].begin()));
             }
             idata_1 = idata_0;
-            tree_t tm_05{std::move(idata_1), kwargs::box_size = 10, kwargs::ncrit = 1, kwargs::max_leaf_n = 12};
+            tree_t tm_05{x_coords = std::move(idata_1[0]),
+                         y_coords = std::move(idata_1[1]),
+                         z_coords = std::move(idata_1[2]),
+                         masses = std::move(idata_1[3]),
+                         box_size = 10,
+                         ncrit = 1,
+                         max_leaf_n = 12};
             REQUIRE(tm_05.nparts() == 4u);
             REQUIRE(tm_05.box_size() == 10);
             REQUIRE(tm_05.ncrit() == 1);

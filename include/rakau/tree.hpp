@@ -106,9 +106,74 @@ namespace rakau
 inline namespace detail
 {
 
+// Handy alias.
+template <typename T>
+using uncvref_t = std::remove_cv_t<std::remove_reference_t<T>>;
+
+// Implementation of the detection idiom.
+
+// http://en.cppreference.com/w/cpp/experimental/is_detected
+template <class Default, class AlwaysVoid, template <class...> class Op, class... Args>
+struct detector {
+    using value_t = std::false_type;
+    using type = Default;
+};
+
+template <class Default, template <class...> class Op, class... Args>
+struct detector<Default, std::void_t<Op<Args...>>, Op, Args...> {
+    using value_t = std::true_type;
+    using type = Op<Args...>;
+};
+
+// http://en.cppreference.com/w/cpp/experimental/nonesuch
+struct nonesuch {
+    nonesuch() = delete;
+    ~nonesuch() = delete;
+    nonesuch(nonesuch const &) = delete;
+    void operator=(nonesuch const &) = delete;
+};
+
+template <template <class...> class Op, class... Args>
+using is_detected = typename detector<nonesuch, void, Op, Args...>::value_t;
+
+template <template <class...> class Op, class... Args>
+using detected_t = typename detector<nonesuch, void, Op, Args...>::type;
+
+// Detection of ranges.
+namespace begin_using_adl
+{
+
+using std::begin;
+
+template <typename T>
+using type = decltype(begin(std::declval<T>()));
+} // namespace begin_using_adl
+
+namespace end_using_adl
+{
+
+using std::end;
+
+template <typename T>
+using type = decltype(end(std::declval<T>()));
+} // namespace end_using_adl
+
+template <typename T>
+using range_begin_t = detected_t<begin_using_adl::type, T>;
+
+template <typename T>
+using range_end_t = detected_t<end_using_adl::type, T>;
+
+template <typename T>
+using is_range = std::conjunction<is_detected<begin_using_adl::type, T>, is_detected<end_using_adl::type, T>,
+                                  std::is_same<range_begin_t<T>, range_end_t<T>>>;
+
+template <typename T>
+inline constexpr bool is_range_v = is_range<T>::value;
+
 // Small helper to ignore unused variables.
 template <typename... Args>
-inline void ignore(const Args &...)
+constexpr void ignore(const Args &...) noexcept
 {
 }
 
@@ -471,6 +536,23 @@ inline constexpr unsigned default_ncrit =
 #endif
     ;
 
+// Machinery to use index_sequence with variadic lambdas. See:
+// http://aherrmann.github.io/programming/2016/02/28/unpacking-tuples-in-cpp14/
+template <typename F, std::size_t... I>
+constexpr auto
+index_apply_impl(const F &f,
+                 const std::index_sequence<I...> &) noexcept(noexcept(f(std::integral_constant<std::size_t, I>{}...)))
+    -> decltype(f(std::integral_constant<std::size_t, I>{}...))
+{
+    return f(std::integral_constant<std::size_t, I>{}...);
+}
+
+template <std::size_t N, typename F>
+constexpr auto index_apply(const F &f) noexcept(noexcept(index_apply_impl(f, std::make_index_sequence<N>{})))
+    -> decltype(index_apply_impl(f, std::make_index_sequence<N>{}))
+{
+    return index_apply_impl(f, std::make_index_sequence<N>{});
+}
 } // namespace detail
 
 namespace kwargs
@@ -480,6 +562,20 @@ namespace kwargs
 IGOR_MAKE_NAMED_ARGUMENT(box_size);
 IGOR_MAKE_NAMED_ARGUMENT(max_leaf_n);
 IGOR_MAKE_NAMED_ARGUMENT(ncrit);
+
+template <std::size_t>
+struct coords_tag {
+};
+
+template <std::size_t N>
+inline constexpr auto coords = igor::named_argument<coords_tag<N>>{};
+
+inline constexpr auto x_coords = coords<0>;
+inline constexpr auto y_coords = coords<1>;
+inline constexpr auto z_coords = coords<2>;
+
+IGOR_MAKE_NAMED_ARGUMENT(masses);
+IGOR_MAKE_NAMED_ARGUMENT(nparts);
 
 // kwargs for acc/pot computation.
 IGOR_MAKE_NAMED_ARGUMENT(G);
@@ -684,7 +780,7 @@ private:
         } else {
             // NOTE: if we end up here, it means we walked through all the recursion levels
             // and we cannot go any deeper.
-            return 0;
+            return 0u;
         }
     }
     // Parallel tree construction. It will iterate in parallel over the children of a node with nodal code
@@ -782,7 +878,7 @@ private:
             });
             return retval.load();
         } else {
-            return 0;
+            return 0u;
         }
     }
     void build_tree()
@@ -1248,18 +1344,13 @@ private:
         }
 
         if constexpr (move_data) {
+#if !defined(NDEBUG)
+            const auto p_data_size = p_data[0].size();
+#endif
             // We can move in the input data.
-            const auto v_size = p_data[0].size();
             for (std::size_t j = 0; j < NDim + 1u; ++j) {
-                if (rakau_unlikely(p_data[j].size() != v_size)) {
-                    // Ensure all input vectors have the same size.
-                    throw std::invalid_argument(
-                        "Inconsistent sizes detected in the construction of a tree from an array "
-                        "of vectors: the first vector has a size of "
-                        + std::to_string(v_size) + ", while the vector at index " + std::to_string(j)
-                        + " has a size of " + std::to_string(p_data[j].size())
-                        + " (all the vectors in the input array must have the same size)");
-                }
+                // NOTE: we checked this before entering this function.
+                assert(p_data[j].size() == p_data_size);
                 m_parts[j] = std::move(p_data[j]);
             }
         } else {
@@ -1412,118 +1503,190 @@ public:
     }
 
 private:
-    // Helper to parse the named arguments in a ctor.
+    // Machinery for conditionally enabling the generic ctor.
+    //
+    // General case, disable the ctor.
     template <typename... KwArgs>
-    static auto parse_ctor_kwargs(KwArgs &&... args)
+    struct generic_tree_ctor_enabler : std::false_type {
+    };
+    // 1-argument generic ctor is enabled only if the only argument is not
+    // a tree (after removal of cvref). Do this to avoid competing with the
+    // copy/move ctors.
+    template <typename T>
+    struct generic_tree_ctor_enabler<T> : std::negation<std::is_same<tree, uncvref_t<T>>> {
+    };
+    // At least 2 arguments: always enable.
+    template <typename T, typename U, typename... Args>
+    struct generic_tree_ctor_enabler<T, U, Args...> : std::true_type {
+    };
+    template <typename... KwArgs>
+    using generic_ctor_enabler = std::enable_if_t<generic_tree_ctor_enabler<KwArgs &&...>::value, int>;
+
+public:
+    template <typename... KwArgs, generic_ctor_enabler<KwArgs &&...> = 0>
+    explicit tree(KwArgs &&... args)
     {
         // Parse the kwargs.
         igor::parser p{args...};
 
-        // Make sure we have only named arguments in args.
-        static_assert(!p.has_unnamed_arguments(), "Only named arguments can be passed in the parameter pack.");
+        if constexpr (p.has_unnamed_arguments()) {
+            static_assert(dependent_false_v<F>,
+                          "All the arguments for the generic constructor must be keyword arguments.");
+        } else if constexpr (!index_apply<NDim>([&p](auto... I) { return p.has_all(kwargs::coords<I()>...); })
+                             || !p.has(kwargs::masses)) {
+            static_assert(
+                dependent_false_v<F>,
+                "The generic tree constructor needs particle coordinates for every dimension, and particle masses.");
+        } else {
+            // Handle the box size.
+            const auto [box_size, box_size_deduced] = [&p]() {
+                if constexpr (p.has(kwargs::box_size)) {
+                    return std::tuple{boost::numeric_cast<F>(p(kwargs::box_size)), false};
+                } else {
+                    return std::tuple{F(0), true};
+                }
+            }();
 
-        // Handle the box size.
-        F box_size(0);
-        bool box_size_deduced = true;
-        if constexpr (p.has(kwargs::box_size)) {
-            box_size = boost::numeric_cast<F>(p(kwargs::box_size));
-            box_size_deduced = false;
-        }
+            // Handle max_leaf_n and ncrit.
+            const auto max_leaf_n = [&p]() {
+                if constexpr (p.has(kwargs::max_leaf_n)) {
+                    return boost::numeric_cast<size_type>(p(kwargs::max_leaf_n));
+                } else {
+                    return default_max_leaf_n;
+                }
+            }();
+            const auto ncrit = [&p]() {
+                if constexpr (p.has(kwargs::ncrit)) {
+                    return boost::numeric_cast<size_type>(p(kwargs::ncrit));
+                } else {
+                    return default_ncrit;
+                }
+            }();
 
-        // Handle max_leaf_n and ncrit.
-        size_type max_leaf_n = default_max_leaf_n, ncrit = default_ncrit;
-        if constexpr (p.has(kwargs::max_leaf_n)) {
-            max_leaf_n = boost::numeric_cast<size_type>(p(kwargs::max_leaf_n));
-        }
-        if constexpr (p.has(kwargs::ncrit)) {
-            ncrit = boost::numeric_cast<size_type>(p(kwargs::ncrit));
-        }
+            // Fetch the type of the particle data for the first dimension.
+            using p_data_t = decltype(p(kwargs::coords<0>));
+            using p_data_strip_t = uncvref_t<p_data_t>;
+            using p_data_cref_t = const p_data_strip_t &;
 
-        return std::tuple{box_size, box_size_deduced, max_leaf_n, ncrit};
-    }
-
-public:
-    // Constructor from array of iterators.
-    template <typename It, typename... KwArgs>
-    explicit tree(const std::array<It, NDim + 1u> &cm_it, const size_type &N, KwArgs &&... args)
-    {
-        // Parse the named arguments.
-        const auto [box_size, box_size_deduced, max_leaf_n, ncrit] = parse_ctor_kwargs(std::forward<KwArgs>(args)...);
-
-        // Do the actual construction.
-        construct_impl(box_size, box_size_deduced, cm_it, N, max_leaf_n, ncrit);
-
-        // NOTE: perhaps we can fold this into construct_impl() eventually.
-        rocm_init_state();
-    }
-
-private:
-    template <typename It>
-    static auto ctor_ilist_to_array(std::initializer_list<It> ilist)
-    {
-        if (rakau_unlikely(ilist.size() != NDim + 1u)) {
-            throw std::invalid_argument("An initializer list containing " + std::to_string(ilist.size())
-                                        + " iterators was used in the construction of a " + std::to_string(NDim)
-                                        + "-dimensional tree, but a list with " + std::to_string(NDim + 1u)
-                                        + " iterators is required instead (" + std::to_string(NDim)
-                                        + " iterators for the coordinates, 1 for the masses)");
-        }
-        std::array<It, NDim + 1u> retval;
-        std::copy(ilist.begin(), ilist.end(), retval.begin());
-        return retval;
-    }
-
-public:
-    // Convenience overload with init list instead of array.
-    template <typename It, typename... KwArgs>
-    explicit tree(std::initializer_list<It> cm_it, const size_type &N, KwArgs &&... args)
-        : tree(ctor_ilist_to_array(cm_it), N, std::forward<KwArgs>(args)...)
-    {
-    }
-
-private:
-    template <typename Allocator>
-    static auto ctor_vecs_to_its(const std::array<std::vector<F, Allocator>, NDim + 1u> &coords)
-    {
-        std::array<decltype(coords[0].data()), NDim + 1u> retval;
-
-        const auto s = coords[0].size();
-        retval[0] = coords[0].data();
-        for (std::size_t j = 1; j < NDim + 1u; ++j) {
-            if (rakau_unlikely(coords[j].size() != s)) {
-                throw std::invalid_argument("Inconsistent sizes detected in the construction of a tree from an array "
-                                            "of vectors: the first vector has a size of "
-                                            + std::to_string(s) + ", while the vector at index " + std::to_string(j)
-                                            + " has a size of " + std::to_string(coords[j].size())
-                                            + " (all the vectors in the input array must have the same size)");
+            // Check that all particle data has the same type, apart from cvref qualifications.
+            if constexpr (index_apply<NDim - 1u>([](auto... I) {
+                              return (std::is_same_v<p_data_strip_t,
+                                                     uncvref_t<decltype(p(kwargs::coords<I() + 1u>))>> && ...);
+                          })) {
+                static_assert(std::is_same_v<p_data_strip_t, uncvref_t<decltype(p(kwargs::masses))>>,
+                              "The type of the particle masses data is not consistent with the type of the particle "
+                              "coordinates data.");
+            } else {
+                static_assert(dependent_false_v<F>,
+                              "All particle data in the generic tree constructor must be passed in as the same type.");
             }
-            retval[j] = coords[j].data();
+
+            // If the particle data is a range, then we cannot have an nparts kwarg. Otherwise, we *must* have one.
+            // NOTE: we cast everything to the const ref version of p_data_t when working with ranges. The conversion
+            // is always possible and it allows us to work with input types with different cvref qualifications.
+            if constexpr (is_range_v<p_data_cref_t>) {
+                static_assert(!p.has(kwargs::nparts), "If the particle coordinates are provided as ranges, the "
+                                                      "'nparts' keyword argument must not be provided.");
+            } else {
+                static_assert(p.has(kwargs::nparts), "If the particle coordinates are provided as iterators, the "
+                                                     "'nparts' keyword argument must also be provided.");
+            }
+
+            // Detect the special case in which we can move data.
+            constexpr bool move_data = index_apply<NDim>(
+                [](auto... I) { return (std::is_same_v<decltype(p(kwargs::coords<I()>)), f_vector<F> &&> && ...); });
+
+            // A couple of helpers to fetch the begin/end of ranges. They accomplish the task
+            // of automatically casting the input range to const ref, and do the usual ADL + using
+            // standard customisation point dance.
+            auto cref_begin = [](const auto &x) {
+                using std::begin;
+                return begin(x);
+            };
+
+            auto cref_end = [](const auto &x) {
+                using std::end;
+                return end(x);
+            };
+
+            // Determine the number of particles.
+            const size_type N = [&p, cref_begin, cref_end]() {
+                if constexpr (is_range_v<p_data_cref_t>) {
+                    // If the particle data is represented by ranges, we will deduce
+                    // the number of particles from the size of the ranges.
+                    const auto candidate = boost::numeric_cast<size_type>(
+                        std::distance(cref_begin(p(kwargs::coords<0>)), cref_end(p(kwargs::coords<0>))));
+                    // Ensure all input ranges are of the same size.
+                    if (rakau_unlikely(index_apply<NDim - 1u>([candidate, &p, cref_begin, cref_end](auto... I) {
+                            return (
+                                (boost::numeric_cast<size_type>(std::distance(cref_begin(p(kwargs::coords<I() + 1u>)),
+                                                                              cref_end(p(kwargs::coords<I() + 1u>))))
+                                 != candidate)
+                                || ...);
+                        }))) {
+                        throw std::invalid_argument(
+                            "The input ranges for the particle coordinates have inconsistent sizes");
+                    }
+                    const auto masses_size = boost::numeric_cast<size_type>(
+                        std::distance(cref_begin(p(kwargs::masses)), cref_end(p(kwargs::masses))));
+                    if (rakau_unlikely(masses_size != candidate)) {
+                        throw std::invalid_argument("The size of the input range for the particle masses ("
+                                                    + std::to_string(masses_size)
+                                                    + ") is different from the size of "
+                                                      "the input ranges for the particle coordinates ("
+                                                    + std::to_string(candidate) + ")");
+                    }
+                    if constexpr (move_data) {
+                        // When we can move the particle data N will be set to zero.
+                        // NOTE: we still need to run the checks above to make sure
+                        // the sizes of the input vectors are consistent.
+                        return 0u;
+                    } else {
+                        return candidate;
+                    }
+                } else {
+                    ignore(cref_begin, cref_end);
+                    // If the particle data is represented by iterators, we need the number
+                    // of particles to be explicitly specified.
+                    return boost::numeric_cast<size_type>(p(kwargs::nparts));
+                }
+            }();
+
+            // Create the particle data suitable for invoking the ctor implementation.
+            auto p_data = [&p, cref_begin]() {
+                if constexpr (move_data) {
+                    ignore(cref_begin);
+                    // When moving the particle data, move-create an array of f_vectors.
+                    return index_apply<NDim>([&p](auto... I) {
+                        return std::array{std::move(p(kwargs::coords<I()>))..., std::move(p(kwargs::masses))};
+                    });
+                } else if constexpr (is_range_v<p_data_cref_t>) {
+                    // For ranges, extract and return the begin iterators.
+                    return index_apply<NDim>([&p, cref_begin](auto... I) {
+                        return std::array{cref_begin(p(kwargs::coords<I()>))..., cref_begin(p(kwargs::masses))};
+                    });
+                } else {
+                    ignore(cref_begin);
+                    // For iterators, just return them.
+                    return index_apply<NDim>([&p](auto... I) {
+                        return std::array{p(kwargs::coords<I()>)..., p(kwargs::masses)};
+                    });
+                }
+            }();
+
+            // Invoke the ctor implementation. Need to separate the case in which we can move in the
+            // data, which requires the use of std::move().
+            if constexpr (move_data) {
+                construct_impl(box_size, box_size_deduced, std::move(p_data), N, max_leaf_n, ncrit);
+            } else {
+                construct_impl(box_size, box_size_deduced, p_data, N, max_leaf_n, ncrit);
+            }
+
+            // NOTE: perhaps we can fold this into construct_impl() eventually.
+            rocm_init_state();
         }
-
-        return retval;
     }
-
-public:
-    // Convenience overload for the construction from an array of vectors of coords/masses.
-    template <typename Allocator, typename... KwArgs>
-    explicit tree(const std::array<std::vector<F, Allocator>, NDim + 1u> &coords, KwArgs &&... args)
-        : tree(ctor_vecs_to_its(coords), boost::numeric_cast<size_type>(coords[0].size()),
-               std::forward<KwArgs>(args)...)
-    {
-    }
-    // Overload for moving in the particle data (rather than copying it).
-    template <typename... KwArgs>
-    explicit tree(std::array<f_vector<F>, NDim + 1u> &&coords, KwArgs &&... args)
-    {
-        // Parse the named arguments.
-        const auto [box_size, box_size_deduced, max_leaf_n, ncrit] = parse_ctor_kwargs(std::forward<KwArgs>(args)...);
-
-        // Do the actual construction.
-        construct_impl(box_size, box_size_deduced, std::move(coords), 0, max_leaf_n, ncrit);
-
-        // NOTE: perhaps we can fold this into construct_impl() eventually.
-        rocm_init_state();
-    }
+    // Copy ctor.
     tree(const tree &other)
         : m_box_size(other.m_box_size), m_box_size_deduced(other.m_box_size_deduced), m_max_leaf_n(other.m_max_leaf_n),
           m_ncrit(other.m_ncrit), m_parts(other.m_parts), m_codes(other.m_codes), m_perm(other.m_perm),
@@ -1533,6 +1696,7 @@ public:
         // We made deep copies from other, setup the views.
         rocm_init_state();
     }
+    // Move ctor.
     tree(tree &&other) noexcept
         : m_box_size(other.m_box_size), m_box_size_deduced(other.m_box_size_deduced), m_max_leaf_n(other.m_max_leaf_n),
           m_ncrit(other.m_ncrit), m_parts(std::move(other.m_parts)), m_codes(std::move(other.m_codes)),
