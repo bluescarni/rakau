@@ -1521,6 +1521,29 @@ private:
     };
     template <typename... KwArgs>
     using generic_ctor_enabler = std::enable_if_t<generic_tree_ctor_enabler<KwArgs &&...>::value, int>;
+    // Various helpers for static checks in the generic ctor.
+    // NOTE: these could go as constexpr lambdas in the body with index_apply,
+    // but GCC 7 goes berserk.
+    //
+    // Check that particle coordinates for all dimensions are provided.
+    template <typename P, std::size_t... I>
+    static constexpr auto gc_check_all_coords(const P &p, std::index_sequence<I...>)
+    {
+        return p.has_all(kwargs::coords<I>...);
+    }
+    // Check that particle coordinates data from index 1 onwards is of type T,
+    // after removal of cvref qualifiers.
+    template <typename T, typename P, std::size_t... I>
+    static constexpr auto gc_check_uniform_ctype(const P &p, std::index_sequence<I...>)
+    {
+        return (std::is_same_v<T, uncvref_t<decltype(p(kwargs::coords<I + 1u>))>> && ...);
+    }
+    // Check if we can move particle data when constructing.
+    template <typename P, std::size_t... I>
+    static constexpr auto gc_check_move_pdata(const P &p, std::index_sequence<I...>)
+    {
+        return (std::is_same_v<decltype(p(kwargs::coords<I>)), f_vector<F> &&> && ...);
+    }
 
 public:
     template <typename... KwArgs, generic_ctor_enabler<KwArgs &&...> = 0>
@@ -1532,8 +1555,7 @@ public:
         if constexpr (p.has_unnamed_arguments()) {
             static_assert(dependent_false_v<F>,
                           "All the arguments for the generic constructor must be keyword arguments.");
-        } else if constexpr (!index_apply<NDim>([&p](auto... I) { return p.has_all(kwargs::coords<I()>...); })
-                             || !p.has(kwargs::masses)) {
+        } else if constexpr (!gc_check_all_coords(p, std::make_index_sequence<NDim>{}) || !p.has(kwargs::masses)) {
             static_assert(
                 dependent_false_v<F>,
                 "The generic tree constructor needs particle coordinates for every dimension, and particle masses.");
@@ -1569,10 +1591,7 @@ public:
             using p_data_cref_t = const p_data_strip_t &;
 
             // Check that all particle data has the same type, apart from cvref qualifications.
-            if constexpr (index_apply<NDim - 1u>([](auto... I) {
-                              return (std::is_same_v<p_data_strip_t,
-                                                     uncvref_t<decltype(p(kwargs::coords<I() + 1u>))>> && ...);
-                          })) {
+            if constexpr (gc_check_uniform_ctype<p_data_strip_t>(p, std::make_index_sequence<NDim - 1u>{})) {
                 static_assert(std::is_same_v<p_data_strip_t, uncvref_t<decltype(p(kwargs::masses))>>,
                               "The type of the particle masses data is not consistent with the type of the particle "
                               "coordinates data.");
@@ -1593,8 +1612,7 @@ public:
             }
 
             // Detect the special case in which we can move data.
-            constexpr bool move_data = index_apply<NDim>(
-                [](auto... I) { return (std::is_same_v<decltype(p(kwargs::coords<I()>)), f_vector<F> &&> && ...); });
+            constexpr bool move_data = gc_check_move_pdata(p, std::make_index_sequence<NDim>{});
 
             // A couple of helpers to fetch the begin/end of ranges. They accomplish the task
             // of automatically casting the input range to const ref, and do the usual ADL + using
