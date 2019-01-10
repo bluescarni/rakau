@@ -539,19 +539,19 @@ inline constexpr unsigned default_ncrit =
 // Machinery to use index_sequence with variadic lambdas. See:
 // http://aherrmann.github.io/programming/2016/02/28/unpacking-tuples-in-cpp14/
 template <typename F, std::size_t... I>
-constexpr auto
-index_apply_impl(const F &f,
-                 const std::index_sequence<I...> &) noexcept(noexcept(f(std::integral_constant<std::size_t, I>{}...)))
-    -> decltype(f(std::integral_constant<std::size_t, I>{}...))
+constexpr auto index_apply_impl(F &&f, const std::index_sequence<I...> &) noexcept(
+    noexcept(std::forward<F>(f)(std::integral_constant<std::size_t, I>{}...)))
+    -> decltype(std::forward<F>(f)(std::integral_constant<std::size_t, I>{}...))
 {
-    return f(std::integral_constant<std::size_t, I>{}...);
+    return std::forward<F>(f)(std::integral_constant<std::size_t, I>{}...);
 }
 
 template <std::size_t N, typename F>
-constexpr auto index_apply(const F &f) noexcept(noexcept(index_apply_impl(f, std::make_index_sequence<N>{})))
-    -> decltype(index_apply_impl(f, std::make_index_sequence<N>{}))
+constexpr auto
+index_apply(F &&f) noexcept(noexcept(index_apply_impl(std::forward<F>(f), std::make_index_sequence<N>{})))
+    -> decltype(index_apply_impl(std::forward<F>(f), std::make_index_sequence<N>{}))
 {
-    return index_apply_impl(f, std::make_index_sequence<N>{});
+    return index_apply_impl(std::forward<F>(f), std::make_index_sequence<N>{});
 }
 } // namespace detail
 
