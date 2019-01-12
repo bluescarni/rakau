@@ -18,6 +18,7 @@
 #include <limits>
 #include <random>
 #include <stdexcept>
+#include <string>
 #include <tuple>
 #include <type_traits>
 #include <utility>
@@ -115,13 +116,13 @@ TEST_CASE("ctors")
                 std::uniform_real_distribution<fp_type> urd(-fp_type(1), fp_type(1));
                 std::generate(vec.begin(), vec.end(), [&urd]() { return urd(rng); });
             }
-            tree_t tvec1{x_coords = arr_vec[0], y_coords = arr_vec[1], z_coords = arr_vec[2], masses = arr_vec[3]};
+            tree_t tvec1{coords<0> = arr_vec[0], coords<1> = arr_vec[1], coords<2> = arr_vec[2], masses = arr_vec[3]};
             REQUIRE(tvec1.nparts() == N);
             REQUIRE(std::equal(arr_vec[0].begin(), arr_vec[0].end(), tvec1.p_its_o()[0]));
             REQUIRE(std::equal(arr_vec[1].begin(), arr_vec[1].end(), tvec1.p_its_o()[1]));
             REQUIRE(std::equal(arr_vec[2].begin(), arr_vec[2].end(), tvec1.p_its_o()[2]));
             REQUIRE(std::equal(arr_vec[3].begin(), arr_vec[3].end(), tvec1.p_its_o()[3]));
-            tree_t tvec2{x_coords = arr_vec[0], y_coords = arr_vec[1], z_coords = arr_vec[2], masses = arr_vec[3],
+            tree_t tvec2{masses = arr_vec[3], y_coords = arr_vec[1], x_coords = arr_vec[0], z_coords = arr_vec[2],
                          box_size = 100};
             REQUIRE(tvec2.nparts() == N);
             REQUIRE(tvec2.box_size() == fp_type(100));
@@ -129,6 +130,12 @@ TEST_CASE("ctors")
             REQUIRE(std::equal(arr_vec[1].begin(), arr_vec[1].end(), tvec2.p_its_o()[1]));
             REQUIRE(std::equal(arr_vec[2].begin(), arr_vec[2].end(), tvec2.p_its_o()[2]));
             REQUIRE(std::equal(arr_vec[3].begin(), arr_vec[3].end(), tvec2.p_its_o()[3]));
+            REQUIRE_THROWS_WITH(
+                (tree_t{x_coords = arr_vec[0], y_coords = arr_vec[1], z_coords = arr_vec[2],
+                        masses = std::vector<fp_type>{}, box_size = 3, max_leaf_n = 4, ncrit = 5}),
+                Contains("The size of the input range for the particle masses (0) is different from the size of "
+                         "the input ranges for the particle coordinates ("
+                         + std::to_string(arr_vec[0].size()) + ")"));
             arr_vec[2].clear();
             REQUIRE_THROWS_WITH((tree_t{x_coords = arr_vec[0], y_coords = arr_vec[1], z_coords = arr_vec[2],
                                         masses = arr_vec[3], box_size = 3, max_leaf_n = 4, ncrit = 5}),

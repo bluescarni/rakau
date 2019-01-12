@@ -1522,8 +1522,8 @@ private:
     template <typename... KwArgs>
     using generic_ctor_enabler = std::enable_if_t<generic_tree_ctor_enabler<KwArgs &&...>::value, int>;
     // Various helpers for static checks in the generic ctor.
-    // NOTE: these could go as constexpr lambdas in the body with index_apply,
-    // but GCC 7 goes berserk.
+    // NOTE: these could go as constexpr lambdas in the ctor body for use with index_apply,
+    // but GCC 7 goes bananas in such a setup (problems with constexpr lambdas).
     //
     // Check that particle coordinates for all dimensions are provided.
     template <typename P, std::size_t... I>
@@ -1532,7 +1532,7 @@ private:
         return p.has_all(kwargs::coords<I>...);
     }
     // Check that particle coordinates data from index 1 onwards is of type T,
-    // after removal of cvref qualifiers.
+    // after the removal of cvref qualifiers.
     template <typename T, typename P, std::size_t... I>
     static constexpr auto gc_check_uniform_ctype(const P &p, std::index_sequence<I...>)
     {
