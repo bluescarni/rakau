@@ -205,6 +205,7 @@ TEST_CASE("accelerations/potentials softening unordered")
                                                                          kwargs::box_size = bsize,
                                                                          kwargs::max_leaf_n = max_leaf_n,
                                                                          kwargs::ncrit = ncrit};
+                            t.accs_pots_u(accpots, theta, kwargs::eps = eps, kwargs::split = sp);
                             // Check that all accelerations/potentials are finite.
                             REQUIRE(std::all_of(accpots[0].begin(), accpots[0].end(),
                                                 [](auto c) { return std::isfinite(c); }));
