@@ -280,6 +280,11 @@ TEST_CASE("ctors")
             REQUIRE(tm_02.max_leaf_n() == 12);
             tree_t tm_03{x_coords = std::move(idata_1[0]), y_coords = std::move(idata_1[1]),
                          z_coords = std::move(idata_1[2]), masses = std::move(idata_1[3])};
+            // NOTE: cppreference says that std::vector is guaranteed to be empty
+            // after a move, but I did not manage to find the standard wording for it.
+            for (std::size_t j = 0; j < 4u; ++j) {
+                REQUIRE(idata_1[j].empty());
+            }
             REQUIRE(tm_03.nparts() == 4u);
             auto tm_pits = tm_03.p_its_o();
             for (std::size_t j = 0; j < 4u; ++j) {

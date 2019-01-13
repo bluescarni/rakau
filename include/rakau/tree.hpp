@@ -1546,6 +1546,7 @@ private:
     }
 
 public:
+    // Generic constructor with keyword arguments.
     template <typename... KwArgs, generic_ctor_enabler<KwArgs &&...> = 0>
     explicit tree(KwArgs &&... args)
     {

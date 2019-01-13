@@ -47,7 +47,8 @@ TEST_CASE("zero masses")
             auto parts = get_uniform_particles<3>(s, bsize, rng);
             // Zero out the masses.
             std::fill(parts.data(), parts.data() + s, fp_type(0));
-            tree_t t({parts.begin() + s, parts.begin() + 2u * s, parts.begin() + 3u * s, parts.begin()}, s,
+            tree_t t(kwargs::x_coords = parts.begin() + s, kwargs::y_coords = parts.begin() + 2u * s,
+                     kwargs::z_coords = parts.begin() + 3u * s, kwargs::masses = parts.begin(), kwargs::nparts = s,
                      kwargs::box_size = bsize);
             t.accs_u(accs, theta);
             REQUIRE(std::all_of(accs[0].begin(), accs[0].end(), [](auto x) { return std::isfinite(x) && x == 0; }));

@@ -51,9 +51,12 @@ TEST_CASE("g constant accelerations")
             constexpr auto s = 10000u;
             constexpr auto theta = fp_type(0.75);
             auto parts = get_uniform_particles<3>(s, bsize, rng);
-            octree<fp_type, decltype(mac_type)::value> t(
-                {parts.begin() + s, parts.begin() + 2u * s, parts.begin() + 3u * s, parts.begin()}, s,
-                box_size = bsize);
+            octree<fp_type, decltype(mac_type)::value> t{x_coords = parts.begin() + s,
+                                                         y_coords = parts.begin() + 2u * s,
+                                                         z_coords = parts.begin() + 3u * s,
+                                                         masses = parts.begin(),
+                                                         nparts = s,
+                                                         box_size = bsize};
             std::array<std::vector<fp_type>, 3> accs;
             t.accs_u(accs, theta, kwargs::split = sp);
             auto accs_u_orig(accs);
