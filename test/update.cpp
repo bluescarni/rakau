@@ -39,9 +39,12 @@ TEST_CASE("update positions")
             constexpr auto bsize = static_cast<fp_type>(1);
             constexpr auto s = 10000u;
             auto parts = get_uniform_particles<3>(s, bsize, rng);
-            octree<fp_type, decltype(mac_type)::value> t(
-                {parts.begin() + s, parts.begin() + 2u * s, parts.begin() + 3u * s, parts.begin()}, s,
-                box_size = fp_type(10)),
+            octree<fp_type, decltype(mac_type)::value> t{x_coords = parts.begin() + s,
+                                                         y_coords = parts.begin() + 2u * s,
+                                                         z_coords = parts.begin() + 3u * s,
+                                                         masses = parts.begin(),
+                                                         nparts = s,
+                                                         box_size = fp_type(10)},
                 t2(t);
             REQUIRE(t.perm() == t.last_perm());
             // Select randomly some particle indices to track.

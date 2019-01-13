@@ -61,9 +61,14 @@ TEST_CASE("potential accuracy ordered")
                 for (auto max_leaf_n : max_leaf_ns) {
                     for (auto ncrit : ncrits) {
                         std::vector<fp_type> diff;
-                        octree<fp_type, decltype(mac_type)::value> t(
-                            {parts.begin() + s, parts.begin() + 2u * s, parts.begin() + 3u * s, parts.begin()}, s,
-                            kwargs::box_size = bsize, kwargs::max_leaf_n = max_leaf_n, kwargs::ncrit = ncrit);
+                        octree<fp_type, decltype(mac_type)::value> t{kwargs::x_coords = parts.begin() + s,
+                                                                     kwargs::y_coords = parts.begin() + 2u * s,
+                                                                     kwargs::z_coords = parts.begin() + 3u * s,
+                                                                     kwargs::masses = parts.begin(),
+                                                                     kwargs::nparts = s,
+                                                                     kwargs::box_size = bsize,
+                                                                     kwargs::max_leaf_n = max_leaf_n,
+                                                                     kwargs::ncrit = ncrit};
                         t.pots_o(pots, theta);
                         // Check that all potentials are finite.
                         REQUIRE(std::all_of(pots.begin(), pots.end(), [](auto c) { return std::isfinite(c); }));
@@ -110,9 +115,14 @@ TEST_CASE("potential accuracy unordered")
                 for (auto max_leaf_n : max_leaf_ns) {
                     for (auto ncrit : ncrits) {
                         std::vector<fp_type> diff;
-                        octree<fp_type, decltype(mac_type)::value> t(
-                            {parts.begin() + s, parts.begin() + 2u * s, parts.begin() + 3u * s, parts.begin()}, s,
-                            kwargs::box_size = bsize, kwargs::max_leaf_n = max_leaf_n, kwargs::ncrit = ncrit);
+                        octree<fp_type, decltype(mac_type)::value> t{kwargs::x_coords = parts.begin() + s,
+                                                                     kwargs::y_coords = parts.begin() + 2u * s,
+                                                                     kwargs::z_coords = parts.begin() + 3u * s,
+                                                                     kwargs::masses = parts.begin(),
+                                                                     kwargs::nparts = s,
+                                                                     kwargs::box_size = bsize,
+                                                                     kwargs::max_leaf_n = max_leaf_n,
+                                                                     kwargs::ncrit = ncrit};
                         t.pots_u(pots, theta, kwargs::split = split);
                         // Check that all potentials are finite.
                         REQUIRE(std::all_of(pots.begin(), pots.end(), [](auto c) { return std::isfinite(c); }));

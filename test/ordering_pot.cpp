@@ -42,9 +42,12 @@ TEST_CASE("potentials ordering")
             constexpr auto s = 10000u;
             // Get random particles in a box 1/10th the size of the domain.
             auto parts = get_uniform_particles<3>(s, bsize / fp_type(10), rng);
-            octree<fp_type, decltype(mac_type)::value> t(
-                {parts.begin() + s, parts.begin() + 2u * s, parts.begin() + 3u * s, parts.begin()}, s,
-                box_size = bsize);
+            octree<fp_type, decltype(mac_type)::value> t{x_coords = parts.begin() + s,
+                                                         y_coords = parts.begin() + 2u * s,
+                                                         z_coords = parts.begin() + 3u * s,
+                                                         masses = parts.begin(),
+                                                         nparts = s,
+                                                         box_size = bsize};
             // Select randomly some particle indices to track.
             using size_type = typename decltype(t)::size_type;
             std::vector<size_type> track_idx(100);

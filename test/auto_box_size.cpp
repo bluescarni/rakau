@@ -31,10 +31,9 @@ TEST_CASE("automatic box size")
         tuple_for_each(fp_types{}, [](auto x) {
             using fp_type = decltype(x);
             {
-                fp_type x_coords[] = {0, 1, 2, 3}, y_coords[] = {-4, -5, -6, -7}, z_coords[] = {4, 5, 3, 1},
-                        masses[] = {1, 1, 1, 1};
-                octree<fp_type, decltype(mac_type)::value> t({x_coords, y_coords, z_coords, masses}, 4, max_leaf_n = 1,
-                                                             ncrit = 1);
+                fp_type x_c[] = {0, 1, 2, 3}, y_c[] = {-4, -5, -6, -7}, z_c[] = {4, 5, 3, 1}, p_masses[] = {1, 1, 1, 1};
+                octree<fp_type, decltype(mac_type)::value> t{x_coords = x_c,    y_coords = y_c, z_coords = z_c,
+                                                             masses = p_masses, max_leaf_n = 1, ncrit = 1};
                 REQUIRE(t.box_size_deduced());
                 REQUIRE(t.box_size() == 14 + fp_type(0.7));
                 t.update_particles_u([](const auto &its) {

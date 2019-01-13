@@ -65,9 +65,14 @@ TEST_CASE("accelerations/potentials softening ordered")
                     for (auto ncrit : ncrits) {
                         for (auto eps : softs) {
                             std::vector<fp_type> x_diff, y_diff, z_diff, pot_diff;
-                            octree<fp_type, decltype(mac_type)::value> t(
-                                {parts.begin() + s, parts.begin() + 2u * s, parts.begin() + 3u * s, parts.begin()}, s,
-                                kwargs::box_size = bsize, kwargs::max_leaf_n = max_leaf_n, kwargs::ncrit = ncrit);
+                            octree<fp_type, decltype(mac_type)::value> t{kwargs::x_coords = parts.begin() + s,
+                                                                         kwargs::y_coords = parts.begin() + 2u * s,
+                                                                         kwargs::z_coords = parts.begin() + 3u * s,
+                                                                         kwargs::masses = parts.begin(),
+                                                                         kwargs::nparts = s,
+                                                                         kwargs::box_size = bsize,
+                                                                         kwargs::max_leaf_n = max_leaf_n,
+                                                                         kwargs::ncrit = ncrit};
                             t.accs_pots_o(accpots, theta, kwargs::eps = eps);
                             // Check that all accelerations/potentials are finite.
                             REQUIRE(std::all_of(accpots[0].begin(), accpots[0].end(),
@@ -129,11 +134,15 @@ TEST_CASE("accelerations/potentials softening ordered")
                                     *(new_parts.begin() + 3u * s + idx) = *(new_parts.begin() + 3u * s + idx + 1u);
                                 }
                                 // Create a new tree.
-                                t = octree<fp_type, decltype(mac_type)::value>(
-                                    {new_parts.begin() + s, new_parts.begin() + 2u * s, new_parts.begin() + 3u * s,
-                                     new_parts.begin()},
-                                    s, kwargs::box_size = bsize, kwargs::max_leaf_n = max_leaf_n,
-                                    kwargs::ncrit = ncrit);
+                                t = octree<fp_type, decltype(mac_type)::value>{
+                                    kwargs::x_coords = parts.begin() + s,
+                                    kwargs::y_coords = parts.begin() + 2u * s,
+                                    kwargs::z_coords = parts.begin() + 3u * s,
+                                    kwargs::masses = parts.begin(),
+                                    kwargs::nparts = s,
+                                    kwargs::box_size = bsize,
+                                    kwargs::max_leaf_n = max_leaf_n,
+                                    kwargs::ncrit = ncrit};
                                 // Compute the accelerations/potentials.
                                 // Try with the init list overload as well.
                                 t.accs_pots_u(
@@ -188,9 +197,14 @@ TEST_CASE("accelerations/potentials softening unordered")
                     for (auto ncrit : ncrits) {
                         for (auto eps : softs) {
                             std::vector<fp_type> x_diff, y_diff, z_diff, pot_diff;
-                            octree<fp_type, decltype(mac_type)::value> t(
-                                {parts.begin() + s, parts.begin() + 2u * s, parts.begin() + 3u * s, parts.begin()}, s,
-                                kwargs::box_size = bsize, kwargs::max_leaf_n = max_leaf_n, kwargs::ncrit = ncrit);
+                            octree<fp_type, decltype(mac_type)::value> t{kwargs::x_coords = parts.begin() + s,
+                                                                         kwargs::y_coords = parts.begin() + 2u * s,
+                                                                         kwargs::z_coords = parts.begin() + 3u * s,
+                                                                         kwargs::masses = parts.begin(),
+                                                                         kwargs::nparts = s,
+                                                                         kwargs::box_size = bsize,
+                                                                         kwargs::max_leaf_n = max_leaf_n,
+                                                                         kwargs::ncrit = ncrit};
                             t.accs_pots_u(accpots, theta, kwargs::eps = eps, kwargs::split = sp);
                             // Check that all accelerations/potentials are finite.
                             REQUIRE(std::all_of(accpots[0].begin(), accpots[0].end(),
@@ -252,11 +266,15 @@ TEST_CASE("accelerations/potentials softening unordered")
                                     *(new_parts.begin() + 3u * s + idx) = *(new_parts.begin() + 3u * s + idx + 1u);
                                 }
                                 // Create a new tree.
-                                t = octree<fp_type, decltype(mac_type)::value>(
-                                    {new_parts.begin() + s, new_parts.begin() + 2u * s, new_parts.begin() + 3u * s,
-                                     new_parts.begin()},
-                                    s, kwargs::box_size = bsize, kwargs::max_leaf_n = max_leaf_n,
-                                    kwargs::ncrit = ncrit);
+                                t = octree<fp_type, decltype(mac_type)::value>{
+                                    kwargs::x_coords = parts.begin() + s,
+                                    kwargs::y_coords = parts.begin() + 2u * s,
+                                    kwargs::z_coords = parts.begin() + 3u * s,
+                                    kwargs::masses = parts.begin(),
+                                    kwargs::nparts = s,
+                                    kwargs::box_size = bsize,
+                                    kwargs::max_leaf_n = max_leaf_n,
+                                    kwargs::ncrit = ncrit};
                                 // Compute the accelerations/potentials.
                                 // Try with the init list overload as well.
                                 t.accs_pots_u(
