@@ -1553,6 +1553,9 @@ public:
         // Parse the kwargs.
         igor::parser p{args...};
 
+        // Check that the user did not pass the same keyword argument multiple times.
+        static_assert(!p.has_duplicates(), "The generic constructor cannot have duplicate keyword arguments.");
+
         if constexpr (p.has_unnamed_arguments()) {
             static_assert(dependent_false_v<F>,
                           "All the arguments for the generic constructor must be keyword arguments.");
@@ -3300,8 +3303,14 @@ private:
     {
         igor::parser p{args...};
 
+        // Check we have no duplicate named arguments.
+        static_assert(!p.has_duplicates(),
+                      "The functions for the computation of accelerations and/or potentials cannot "
+                      "have duplicate keyword arguments.");
+
         // Make sure we have only named arguments in args.
-        static_assert(!p.has_unnamed_arguments(), "Only named arguments can be passed in the parameter pack.");
+        static_assert(!p.has_unnamed_arguments(), "Only keyword arguments can be passed in the parameter pack of the "
+                                                  "functions for the computation of accelerations and potentials");
 
         F G(1), eps(0);
         if constexpr (p.has(kwargs::G)) {
