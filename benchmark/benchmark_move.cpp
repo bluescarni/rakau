@@ -42,9 +42,13 @@ int main(int argc, char **argv)
 
             auto parts = get_plummer_sphere(nparts, static_cast<fp_type>(a), static_cast<fp_type>(bsize), parinit);
 
-            octree<fp_type, decltype(m)::value> t(
-                {parts.data() + nparts, parts.data() + 2 * nparts, parts.data() + 3 * nparts, parts.data()}, nparts,
-                kwargs::max_leaf_n = max_leaf_n, kwargs::ncrit = ncrit);
+            octree<fp_type, decltype(m)::value> t{kwargs::x_coords = parts.data() + nparts,
+                                                  kwargs::y_coords = parts.data() + 2 * nparts,
+                                                  kwargs::z_coords = parts.data() + 3 * nparts,
+                                                  kwargs::masses = parts.data(),
+                                                  kwargs::nparts = nparts,
+                                                  kwargs::max_leaf_n = max_leaf_n,
+                                                  kwargs::ncrit = ncrit};
             std::cout << t << '\n';
             std::array<std::vector<fp_type>, 3> accs;
             t.accs_u(accs, mac_value, kwargs::split = split);
