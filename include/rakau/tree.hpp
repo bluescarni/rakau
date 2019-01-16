@@ -647,7 +647,7 @@ private:
     using node_type = tree_node_t<NDim, F, UInt, MAC>;
     // The tree type.
     using tree_type = std::vector<node_type, di_aligned_allocator<node_type>>;
-    // The critical node descriptor type (nodal code and particle range).
+    // The critical node type.
     using cnode_type = tree_cnode_t<F, UInt>;
     // List of critical nodes.
     using cnode_list_type = std::vector<cnode_type, di_aligned_allocator<cnode_type>>;
@@ -983,7 +983,7 @@ private:
                     return false;
                 }
                 // v1 and v2 are not empty, compare the starting points of their first critical nodes.
-                return get<1>(v1[0]) < get<1>(v2[0]);
+                return v1[0].begin < v2[0].begin;
             });
             // Compute the cumulative sizes in crit_nodes.
             std::vector<size_type, di_aligned_allocator<size_type>> cum_sizes;
@@ -1020,23 +1020,22 @@ private:
         // In a non-empty domain, we must have at least 1 critical node.
         assert(!m_crit_nodes.empty());
         // The list of critical nodes must start with the first particle and end with the last particle.
-        assert(get<1>(m_crit_nodes[0]) == 0u);
-        assert(get<2>(m_crit_nodes.back()) == m_codes.size());
+        assert(m_crit_nodes[0].begin == 0u);
+        assert(m_crit_nodes.back().end == m_codes.size());
 #if !defined(NDEBUG)
         // Verify that the critical nodes list contains all the particles in the domain,
         // that the critical nodes' limits are contiguous, and that the critical nodes are not empty.
         for (decltype(m_crit_nodes.size()) i = 0; i < m_crit_nodes.size() - 1u; ++i) {
-            assert(get<1>(m_crit_nodes[i]) < get<2>(m_crit_nodes[i]));
+            assert(m_crit_nodes[i].begin < m_crit_nodes[i].end);
             if (i == m_crit_nodes.size() - 1u) {
                 break;
             }
-            assert(get<2>(m_crit_nodes[i]) == get<1>(m_crit_nodes[i + 1u]));
+            assert(m_crit_nodes[i].end == m_crit_nodes[i + 1u].begin);
         }
 #endif
         // Check the critical nodes are ordered according to the nodal code.
-        assert(std::is_sorted(m_crit_nodes.begin(), m_crit_nodes.end(), [](const auto &t1, const auto &t2) {
-            return node_compare<NDim>(get<0>(t1), get<0>(t2));
-        }));
+        assert(std::is_sorted(m_crit_nodes.begin(), m_crit_nodes.end(),
+                              [](const auto &t1, const auto &t2) { return node_compare<NDim>(t1.code, t2.code); }));
         // Verify the node levels.
         assert(std::all_of(m_tree.begin(), m_tree.end(),
                            [](const auto &n) { return n.level == tree_level<NDim>(n.code); }));
@@ -2898,9 +2897,9 @@ private:
                 auto &tmp_res = acc_pot_tmp_res<Q>();
                 auto &tmp_tgt = tgt_tmp_data();
                 for (auto i = range.begin(); i != range.end(); ++i) {
-                    const auto tgt_code = get<0>(m_crit_nodes[i]);
-                    const auto tgt_begin = get<1>(m_crit_nodes[i]);
-                    const auto tgt_size = static_cast<size_type>(get<2>(m_crit_nodes[i]) - tgt_begin);
+                    const auto tgt_code = m_crit_nodes[i].code;
+                    const auto tgt_begin = m_crit_nodes[i].begin,
+                               tgt_size = static_cast<size_type>(m_crit_nodes[i].end - tgt_begin);
                     // Size of the temporary vectors that will be used to store the target node
                     // data and the total accelerations/potentials on its particles. If simd is not enabled, this
                     // value will be tgt_size. Otherwise, we add extra padding at the end based on the
@@ -3024,7 +3023,7 @@ private:
                 // starts with an index >= particle_split_idx (note that this could yield
                 // an end() iterator).
                 const auto cn_it = std::lower_bound(m_crit_nodes.begin(), m_crit_nodes.end(), particle_split_idx,
-                                                    [](const auto &cn, size_type value) { return get<1>(cn) < value; });
+                                                    [](const auto &cn, size_type value) { return cn.begin < value; });
                 if (cn_it == m_crit_nodes.end()) {
                     // We found the end() iterator. This means that all computations
                     // will go on the cpu, i.e., we will be splitting at nparts.
@@ -3032,7 +3031,7 @@ private:
                 } else {
                     // We found a non-end() iterator. Fetch its starting index
                     // and use that as a splitting index.
-                    particle_split_idx = get<1>(*cn_it);
+                    particle_split_idx = cn_it->begin;
                 }
 
                 if (nparts() - particle_split_idx >= rocm_min_size()) {
@@ -3114,7 +3113,7 @@ private:
 
                 // Now we need to move the first element of split_indices so that it ends on a node boundary.
                 const auto cn_it = std::lower_bound(m_crit_nodes.begin(), m_crit_nodes.end(), split_indices[0],
-                                                    [](const auto &cn, size_type value) { return get<1>(cn) < value; });
+                                                    [](const auto &cn, size_type value) { cn.begin < value; });
                 if (cn_it == m_crit_nodes.end()) {
                     // We found the end() iterator. This means that all computations
                     // will go on the cpu.
@@ -3122,7 +3121,7 @@ private:
                 } else {
                     // We found a non-end() iterator. Fetch its starting index
                     // and use that as a splitting index.
-                    split_indices[0] = get<1>(*cn_it);
+                    split_indices[0] = cn_it->begin;
                 }
                 // Now we need to take care to move forward the indices that might
                 // now be smaller than split_indices[0].

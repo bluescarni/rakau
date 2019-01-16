@@ -96,7 +96,12 @@ struct tree_node_t<NDim, F, UInt, mac::bh_geom> : base_tree_node_t<NDim, F, UInt
 
 // Critical node.
 template <typename F, typename UInt>
-using tree_cnode_t = std::tuple<UInt, tree_size_t<F>, tree_size_t<F>>;
+struct tree_cnode_t {
+    // Nodal code.
+    UInt code;
+    // Particle range.
+    tree_size_t<F> begin, end;
+};
 
 // Computation of the number of vectors needed to store the result
 // of an acceleration/potential computation.
