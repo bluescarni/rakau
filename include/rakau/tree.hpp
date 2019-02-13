@@ -3660,6 +3660,46 @@ public:
     {
         update_particles_dispatch<true>(std::forward<Func>(f));
     }
+
+private:
+    // Invoke the masses update function with an
+    // exception safe wrapper.
+    template <bool Ordered, typename Func>
+    void update_masses_dispatch(Func &&f)
+    {
+        simple_timer st("overall update_masses");
+        try {
+            if constexpr (Ordered) {
+                // Apply the functor to the ordered mass iterator.
+                std::forward<Func>(f)(ord_p_its_impl(*this)[NDim]);
+            } else {
+                // Apply the functor to the unordered mass iterator.
+                std::forward<Func>(f)(unord_p_its_impl(*this)[NDim]);
+            }
+            // Recompute the properties of all nodes.
+            tbb::parallel_for(tbb::blocked_range(m_tree.begin(), m_tree.end()), [this](const auto &range) {
+                for (auto it = range.begin(); it != range.end(); ++it) {
+                    compute_node_properties(*it);
+                }
+            });
+        } catch (...) {
+            // Erase everything before re-throwing.
+            clear();
+            throw;
+        }
+    }
+
+public:
+    template <typename Func>
+    void update_masses_u(Func &&f)
+    {
+        update_masses_dispatch<false>(std::forward<Func>(f));
+    }
+    template <typename Func>
+    void update_masses_o(Func &&f)
+    {
+        update_masses_dispatch<true>(std::forward<Func>(f));
+    }
     F box_size() const
     {
         return m_box_size;
