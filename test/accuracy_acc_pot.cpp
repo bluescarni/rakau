@@ -62,9 +62,14 @@ TEST_CASE("acceleration/potential accuracy ordered")
                 for (auto max_leaf_n : max_leaf_ns) {
                     for (auto ncrit : ncrits) {
                         std::vector<fp_type> x_diff, y_diff, z_diff, pot_diff;
-                        octree<fp_type, decltype(mac_type)::value> t(
-                            {parts.begin() + s, parts.begin() + 2u * s, parts.begin() + 3u * s, parts.begin()}, s,
-                            kwargs::box_size = bsize, kwargs::max_leaf_n = max_leaf_n, kwargs::ncrit = ncrit);
+                        octree<fp_type, decltype(mac_type)::value> t{kwargs::x_coords = parts.begin() + s,
+                                                                     kwargs::y_coords = parts.begin() + 2u * s,
+                                                                     kwargs::z_coords = parts.begin() + 3u * s,
+                                                                     kwargs::masses = parts.begin(),
+                                                                     kwargs::nparts = s,
+                                                                     kwargs::box_size = bsize,
+                                                                     kwargs::max_leaf_n = max_leaf_n,
+                                                                     kwargs::ncrit = ncrit};
                         t.accs_pots_o(accpots, theta);
                         // Check that all accelerations/potentials are finite.
                         REQUIRE(
@@ -146,9 +151,14 @@ TEST_CASE("acceleration/potential accuracy unordered")
                 for (auto max_leaf_n : max_leaf_ns) {
                     for (auto ncrit : ncrits) {
                         std::vector<fp_type> x_diff, y_diff, z_diff, pot_diff;
-                        octree<fp_type, decltype(mac_type)::value> t(
-                            {parts.begin() + s, parts.begin() + 2u * s, parts.begin() + 3u * s, parts.begin()}, s,
-                            kwargs::box_size = bsize, kwargs::max_leaf_n = max_leaf_n, kwargs::ncrit = ncrit);
+                        octree<fp_type, decltype(mac_type)::value> t{kwargs::x_coords = parts.begin() + s,
+                                                                     kwargs::y_coords = parts.begin() + 2u * s,
+                                                                     kwargs::z_coords = parts.begin() + 3u * s,
+                                                                     kwargs::masses = parts.begin(),
+                                                                     kwargs::nparts = s,
+                                                                     kwargs::box_size = bsize,
+                                                                     kwargs::max_leaf_n = max_leaf_n,
+                                                                     kwargs::ncrit = ncrit};
                         t.accs_pots_u(accpots, theta, kwargs::split = split);
                         // Check that all accelerations/potentials are finite.
                         REQUIRE(

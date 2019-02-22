@@ -143,14 +143,12 @@ A minimal example:
 #include <rakau/tree.hpp>
 
 using namespace rakau;
+using namespace rakau::kwargs;
 
 int main()
 {
-    // Generate some particles in 3D.
-    std::vector<float> x_coords = {1, 2, 3}, y_coords = {4, 5, 6}, z_coords = {7, 8, 9};
-
-    // Create an octree from the vectors of particle coordinates.
-    octree<float> t{{x_coords, y_coords, z_coords}};
+    // Create an octree from a set of particle coordinates and masses.
+    octree<float> t{x_coords = {1, 2, 3}, y_coords = {4, 5, 6}, z_coords = {7, 8, 9}, masses = {1, 1, 1}};
 
     // Prepare output vectors for the accelerations.
     std::array<std::vector<float>, 3> accs;

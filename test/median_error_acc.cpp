@@ -52,9 +52,10 @@ TEST_CASE("acceleration accuracy unordered")
             constexpr fp_type bsize = 100;
             diffs.resize(nparts);
             const auto parts = get_uniform_particles<3>(nparts, bsize, rng);
-            octree<fp_type, decltype(mac_type)::value> t(
-                {parts.begin() + nparts, parts.begin() + 2u * nparts, parts.begin() + 3u * nparts, parts.begin()},
-                nparts);
+            octree<fp_type, decltype(mac_type)::value> t{kwargs::x_coords = parts.begin() + nparts,
+                                                         kwargs::y_coords = parts.begin() + 2u * nparts,
+                                                         kwargs::z_coords = parts.begin() + 3u * nparts,
+                                                         kwargs::masses = parts.begin(), kwargs::nparts = nparts};
             for (auto theta : thetas) {
                 t.accs_u(accs, theta, kwargs::split = sp);
                 for (auto i = 0ul; i < nparts; ++i) {

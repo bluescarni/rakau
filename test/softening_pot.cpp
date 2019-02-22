@@ -64,9 +64,14 @@ TEST_CASE("potentials softening ordered")
                     for (auto ncrit : ncrits) {
                         for (auto eps : softs) {
                             std::vector<fp_type> diff;
-                            octree<fp_type, decltype(mac_type)::value> t(
-                                {parts.begin() + s, parts.begin() + 2u * s, parts.begin() + 3u * s, parts.begin()}, s,
-                                kwargs::box_size = bsize, kwargs::max_leaf_n = max_leaf_n, kwargs::ncrit = ncrit);
+                            octree<fp_type, decltype(mac_type)::value> t{kwargs::x_coords = parts.begin() + s,
+                                                                         kwargs::y_coords = parts.begin() + 2u * s,
+                                                                         kwargs::z_coords = parts.begin() + 3u * s,
+                                                                         kwargs::masses = parts.begin(),
+                                                                         kwargs::nparts = s,
+                                                                         kwargs::box_size = bsize,
+                                                                         kwargs::max_leaf_n = max_leaf_n,
+                                                                         kwargs::ncrit = ncrit};
                             t.pots_o(pots, theta, kwargs::eps = eps);
                             // Check that all potentials are finite.
                             REQUIRE(std::all_of(pots.begin(), pots.end(), [](auto c) { return std::isfinite(c); }));
@@ -95,11 +100,15 @@ TEST_CASE("potentials softening ordered")
                                     *(new_parts.begin() + 3u * s + idx) = *(new_parts.begin() + 3u * s + idx + 1u);
                                 }
                                 // Create a new tree.
-                                t = octree<fp_type, decltype(mac_type)::value>(
-                                    {new_parts.begin() + s, new_parts.begin() + 2u * s, new_parts.begin() + 3u * s,
-                                     new_parts.begin()},
-                                    s, kwargs::box_size = bsize, kwargs::max_leaf_n = max_leaf_n,
-                                    kwargs::ncrit = ncrit);
+                                t = octree<fp_type, decltype(mac_type)::value>{
+                                    kwargs::x_coords = parts.begin() + s,
+                                    kwargs::y_coords = parts.begin() + 2u * s,
+                                    kwargs::z_coords = parts.begin() + 3u * s,
+                                    kwargs::masses = parts.begin(),
+                                    kwargs::nparts = s,
+                                    kwargs::box_size = bsize,
+                                    kwargs::max_leaf_n = max_leaf_n,
+                                    kwargs::ncrit = ncrit};
                                 // Compute the potentials.
                                 // Try with the other overload as well.
                                 t.pots_u(pots.data(), theta, kwargs::eps = eps, kwargs::split = sp);
@@ -139,9 +148,14 @@ TEST_CASE("potentials softening unordered")
                     for (auto ncrit : ncrits) {
                         for (auto eps : softs) {
                             std::vector<fp_type> diff;
-                            octree<fp_type, decltype(mac_type)::value> t(
-                                {parts.begin() + s, parts.begin() + 2u * s, parts.begin() + 3u * s, parts.begin()}, s,
-                                kwargs::box_size = bsize, kwargs::max_leaf_n = max_leaf_n, kwargs::ncrit = ncrit);
+                            octree<fp_type, decltype(mac_type)::value> t{kwargs::x_coords = parts.begin() + s,
+                                                                         kwargs::y_coords = parts.begin() + 2u * s,
+                                                                         kwargs::z_coords = parts.begin() + 3u * s,
+                                                                         kwargs::masses = parts.begin(),
+                                                                         kwargs::nparts = s,
+                                                                         kwargs::box_size = bsize,
+                                                                         kwargs::max_leaf_n = max_leaf_n,
+                                                                         kwargs::ncrit = ncrit};
                             t.pots_u(pots, theta, kwargs::eps = eps, kwargs::split = sp);
                             // Check that all potentials are finite.
                             REQUIRE(std::all_of(pots.begin(), pots.end(), [](auto c) { return std::isfinite(c); }));
@@ -170,11 +184,15 @@ TEST_CASE("potentials softening unordered")
                                     *(new_parts.begin() + 3u * s + idx) = *(new_parts.begin() + 3u * s + idx + 1u);
                                 }
                                 // Create a new tree.
-                                t = octree<fp_type, decltype(mac_type)::value>(
-                                    {new_parts.begin() + s, new_parts.begin() + 2u * s, new_parts.begin() + 3u * s,
-                                     new_parts.begin()},
-                                    s, kwargs::box_size = bsize, kwargs::max_leaf_n = max_leaf_n,
-                                    kwargs::ncrit = ncrit);
+                                t = octree<fp_type, decltype(mac_type)::value>{
+                                    kwargs::x_coords = parts.begin() + s,
+                                    kwargs::y_coords = parts.begin() + 2u * s,
+                                    kwargs::z_coords = parts.begin() + 3u * s,
+                                    kwargs::masses = parts.begin(),
+                                    kwargs::nparts = s,
+                                    kwargs::box_size = bsize,
+                                    kwargs::max_leaf_n = max_leaf_n,
+                                    kwargs::ncrit = ncrit};
                                 // Compute the potentials.
                                 // Try with the other overload as well.
                                 t.pots_u(pots.data(), theta, kwargs::eps = eps, kwargs::split = sp);

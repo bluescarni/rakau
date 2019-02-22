@@ -26,13 +26,14 @@ TEST_CASE("node centre quadtree")
     tree_t t;
     REQUIRE(t.nodes().size() == 0u);
     double buffer[2];
-    t = tree_t{std::array{std::vector{-1.}, std::vector{1.}, std::vector{1.}}, kwargs::box_size = 10};
+    t = tree_t{kwargs::x_coords = std::vector{-1.}, kwargs::y_coords = std::vector{1.},
+               kwargs::masses = std::vector{1.}, kwargs::box_size = 10};
     REQUIRE(t.nodes().size() == 1u);
     get_node_centre(buffer, t.nodes()[0].code, t.box_size());
     REQUIRE(std::abs(buffer[0]) < 10. * std::numeric_limits<double>::epsilon());
     REQUIRE(std::abs(buffer[1]) < 10. * std::numeric_limits<double>::epsilon());
-    t = tree_t{std::array{std::vector{-1., -1., 1., 1.}, std::vector{-1., 1., -1., 1.}, std::vector{1., 1., 1., 1.}},
-               kwargs::box_size = 10, kwargs::max_leaf_n = 1};
+    t = tree_t{kwargs::x_coords = std::vector{-1., -1., 1., 1.}, kwargs::y_coords = std::vector{-1., 1., -1., 1.},
+               kwargs::masses = std::vector{1., 1., 1., 1.}, kwargs::box_size = 10, kwargs::max_leaf_n = 1};
     REQUIRE(t.nodes().size() == 5u);
     get_node_centre(buffer, t.nodes()[0].code, t.box_size());
     REQUIRE(std::abs(buffer[0]) < 10. * std::numeric_limits<double>::epsilon());
@@ -57,16 +58,18 @@ TEST_CASE("node centre octree")
     tree_t t;
     REQUIRE(t.nodes().size() == 0u);
     double buffer[3];
-    t = tree_t{std::array{std::vector{-1.}, std::vector{1.}, std::vector{1.}, std::vector{1.}}, kwargs::box_size = 10};
+    t = tree_t{kwargs::x_coords = std::vector{-1.}, kwargs::y_coords = std::vector{1.},
+               kwargs::z_coords = std::vector{1.}, kwargs::masses = std::vector{1.}, kwargs::box_size = 10};
     REQUIRE(t.nodes().size() == 1u);
     get_node_centre(buffer, t.nodes()[0].code, t.box_size());
     REQUIRE(std::abs(buffer[0]) < 10. * std::numeric_limits<double>::epsilon());
     REQUIRE(std::abs(buffer[1]) < 10. * std::numeric_limits<double>::epsilon());
-    t = tree_t{std::array{std::vector{-1., +1., -1., +1., -1., +1., -1., +1.},
-                          std::vector{-1., -1., +1., +1., -1., -1., +1., +1.},
-                          std::vector{-1., -1., -1., -1., +1., +1., +1., +1.},
-                          std::vector{1., 1., 1., 1., 1., 1., 1., 1.}},
-               kwargs::box_size = 10, kwargs::max_leaf_n = 1};
+    t = tree_t{kwargs::x_coords = std::vector{-1., +1., -1., +1., -1., +1., -1., +1.},
+               kwargs::y_coords = std::vector{-1., -1., +1., +1., -1., -1., +1., +1.},
+               kwargs::z_coords = std::vector{-1., -1., -1., -1., +1., +1., +1., +1.},
+               kwargs::masses = std::vector{1., 1., 1., 1., 1., 1., 1., 1.},
+               kwargs::box_size = 10,
+               kwargs::max_leaf_n = 1};
     REQUIRE(t.nodes().size() == 9u);
     get_node_centre(buffer, t.nodes()[0].code, t.box_size());
     REQUIRE(std::abs(buffer[0]) < 10. * std::numeric_limits<double>::epsilon());

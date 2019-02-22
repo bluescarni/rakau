@@ -9,9 +9,11 @@
 #ifndef RAKAU_DETAIL_TREE_FWD_HPP
 #define RAKAU_DETAIL_TREE_FWD_HPP
 
+#include <algorithm>
 #include <array>
 #include <cassert>
 #include <cstddef>
+#include <iterator>
 #include <limits>
 #include <tuple>
 #include <type_traits>
@@ -77,6 +79,12 @@ struct base_tree_node_t {
     tree_size_t<F> begin, end, n_children;
     // Node code and level.
     UInt code, level;
+    // Comparison operator, used only for debugging purposes.
+    friend bool operator==(const base_tree_node_t &n1, const base_tree_node_t &n2)
+    {
+        return n1.begin == n2.begin && n1.end == n2.end && n1.n_children == n2.n_children && n1.code == n2.code
+               && n1.level == n2.level;
+    }
 };
 
 // Tree node for the BH MAC.
@@ -84,6 +92,12 @@ template <std::size_t NDim, typename F, typename UInt>
 struct tree_node_t<NDim, F, UInt, mac::bh> : base_tree_node_t<NDim, F, UInt> {
     // Node properties (COM coordinates + mass) and square of the node dimension.
     F props[NDim + 1u], dim2;
+    friend bool operator==(const tree_node_t &n1, const tree_node_t &n2)
+    {
+        using base = base_tree_node_t<NDim, F, UInt>;
+        return std::equal(std::begin(n1.props), std::end(n1.props), std::begin(n2.props)) && n1.dim2 == n2.dim2
+               && static_cast<const base &>(n1) == static_cast<const base &>(n2);
+    }
 };
 
 // Tree node for the geometric centre BH MAC.
@@ -92,11 +106,22 @@ struct tree_node_t<NDim, F, UInt, mac::bh_geom> : base_tree_node_t<NDim, F, UInt
     // Node properties (COM coordinates + mass), node dimension and distance
     // between COM and geometric centre.
     F props[NDim + 1u], dim, delta;
+    friend bool operator==(const tree_node_t &n1, const tree_node_t &n2)
+    {
+        using base = base_tree_node_t<NDim, F, UInt>;
+        return std::equal(std::begin(n1.props), std::end(n1.props), std::begin(n2.props)) && n1.dim == n2.dim
+               && n1.delta == n2.delta && static_cast<const base &>(n1) == static_cast<const base &>(n2);
+    }
 };
 
 // Critical node.
 template <typename F, typename UInt>
-using tree_cnode_t = std::tuple<UInt, tree_size_t<F>, tree_size_t<F>>;
+struct tree_cnode_t {
+    // Nodal code.
+    UInt code;
+    // Particle range.
+    tree_size_t<F> begin, end;
+};
 
 // Computation of the number of vectors needed to store the result
 // of an acceleration/potential computation.
