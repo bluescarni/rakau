@@ -2829,13 +2829,15 @@ private:
                       const std::vector<double> &split) const
     {
         // Validation of split, common to all codepaths.
-        if (std::any_of(split.begin(), split.end(), [](const double &x) { return !std::isfinite(x); })) {
+        if (rakau_unlikely(
+                std::any_of(split.begin(), split.end(), [](const double &x) { return !std::isfinite(x); }))) {
             throw std::invalid_argument("The 'split' parameter cannot contain non-finite values");
         }
-        if (std::any_of(split.begin(), split.end(), [](const double &x) { return x < 0.; })) {
+        if (rakau_unlikely(std::any_of(split.begin(), split.end(), [](const double &x) { return x < 0.; }))) {
             throw std::invalid_argument("The 'split' parameter must contain only non-negative values");
         }
-        if (!split.empty() && std::all_of(split.begin(), split.end(), [](const double &x) { return x == 0.; })) {
+        if (rakau_unlikely(!split.empty()
+                           && std::all_of(split.begin(), split.end(), [](const double &x) { return x == 0.; }))) {
             throw std::invalid_argument("The values in the 'split' parameter cannot all be zero");
         }
 
