@@ -150,6 +150,7 @@ inline auto parse_accpot_benchmark_options(int argc, char **argv)
     bool parinit = false;
     std::vector<double> split;
     std::string fp_type, mac_type;
+    bool ordered = false;
 
     po::options_description desc("Allowed options");
     desc.add_options()("help", "produce help message")(
@@ -169,7 +170,8 @@ inline auto parse_accpot_benchmark_options(int argc, char **argv)
         "split", po::value<std::vector<double>>()->multitoken(), "split vector for heterogeneous computations")(
         "fp_type", po::value<std::string>(&fp_type)->default_value("float"),
         "floating-point type to use in the computations")(
-        "mac_type", po::value<std::string>(&mac_type)->default_value("bh"), "MAC type");
+        "mac_type", po::value<std::string>(&mac_type)->default_value("bh"),
+        "MAC type")("ordered", "return the results in the original particle order");
 
     po::variables_map vm;
     po::store(po::parse_command_line(argc, argv, desc), vm);
@@ -207,6 +209,10 @@ inline auto parse_accpot_benchmark_options(int argc, char **argv)
         throw std::invalid_argument("'" + mac_type + "' is not a valid MAC type");
     }
 
+    if (vm.count("ordered")) {
+        ordered = true;
+    }
+
     return std::tuple{nparts,
                       idx,
                       max_leaf_n,
@@ -218,7 +224,8 @@ inline auto parse_accpot_benchmark_options(int argc, char **argv)
                       parinit,
                       std::move(split),
                       std::move(fp_type),
-                      std::move(mac_type)};
+                      std::move(mac_type),
+                      ordered};
 }
 
 } // namespace rakau_benchmark

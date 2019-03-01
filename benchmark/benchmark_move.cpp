@@ -38,7 +38,8 @@ int main(int argc, char **argv)
         using fp_type = decltype(x);
 
         auto inner = [&](auto m) {
-            const auto [nparts, idx, max_leaf_n, ncrit, _1, bsize, a, mac_value, parinit, split, _2, mac_type] = popts;
+            const auto [nparts, idx, max_leaf_n, ncrit, _1, bsize, a, mac_value, parinit, split, _2, mac_type, _3]
+                = popts;
 
             auto parts = get_plummer_sphere(nparts, static_cast<fp_type>(a), static_cast<fp_type>(bsize), parinit);
 
