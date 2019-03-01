@@ -120,17 +120,16 @@ rocm_state<NDim, F, UInt, MAC>::~rocm_state()
 // the views to the tree from the state structure, create views into the output data
 // and then traverse the tree computing the acceleration for each particle.
 template <std::size_t NDim, typename F, typename UInt, mac MAC>
-template <unsigned Q>
-void rocm_state<NDim, F, UInt, MAC>::acc_pot(int p_begin, int p_end,
-                                             const std::array<F *, tree_nvecs_res<Q, NDim>> &out, F mac_value, F G,
-                                             F eps2) const
+template <unsigned Q, typename It>
+void rocm_state<NDim, F, UInt, MAC>::acc_pot(int p_begin, int p_end, const std::array<It, tree_nvecs_res<Q, NDim>> &out,
+                                             F mac_value, F G, F eps2) const
 {
     assert(p_begin <= p_end);
 
     // Fetch the state structure.
     auto &state = *static_cast<const rocm_state_impl<NDim, F, UInt, MAC> *>(m_state);
 
-    assert(p_end <= state.nparts);
+    assert(p_end <= state.m_nparts);
 
     // Create arrays on the device to store the results.
     auto device_arrays = index_apply<tree_nvecs_res<Q, NDim>>(
@@ -381,20 +380,32 @@ void rocm_state<NDim, F, UInt, MAC>::acc_pot(int p_begin, int p_end,
 // Enable all MACs.
 #define RAKAU_ROCM_INST_MACS_SEQUENCE (mac::bh)(mac::bh_geom)
 
-// Macro for the instantiation of the member function. NDim, F, UInt, Q and MAC will be passed in
+// Macros for the instantiation of the member function. NDim, F, UInt, Q and MAC will be passed in
 // as a sequence named Args (in that order).
-#define RAKAU_ROCM_EXPLICIT_INST_MEMFUN(r, Args)                                                                       \
+// In the first macro, the output iterators are pointers. In the second macro, the output iterators
+// are permuted pointers.
+#define RAKAU_ROCM_EXPLICIT_INST_MEMFUN1(r, Args)                                                                      \
     template void rocm_state<BOOST_PP_SEQ_ELEM(0, Args), BOOST_PP_SEQ_ELEM(1, Args), BOOST_PP_SEQ_ELEM(2, Args),       \
-                             BOOST_PP_SEQ_ELEM(4, Args)>::acc_pot<BOOST_PP_SEQ_ELEM(3,                                 \
-                                                                                    Args)>(                            \
+                             BOOST_PP_SEQ_ELEM(4, Args)>::acc_pot<BOOST_PP_SEQ_ELEM(3, Args),                          \
+                                                                  BOOST_PP_SEQ_ELEM(1, Args) *>(                       \
         int, int,                                                                                                      \
         const std::array<BOOST_PP_SEQ_ELEM(1, Args) *,                                                                 \
                          tree_nvecs_res<BOOST_PP_SEQ_ELEM(3, Args), BOOST_PP_SEQ_ELEM(0, Args)>> &,                    \
         BOOST_PP_SEQ_ELEM(1, Args), BOOST_PP_SEQ_ELEM(1, Args), BOOST_PP_SEQ_ELEM(1, Args)) const;
 
+#define RAKAU_ROCM_EXPLICIT_INST_MEMFUN2(r, Args)                                                                      \
+    template void rocm_state<BOOST_PP_SEQ_ELEM(0, Args), BOOST_PP_SEQ_ELEM(1, Args), BOOST_PP_SEQ_ELEM(2, Args),       \
+                             BOOST_PP_SEQ_ELEM(4, Args)>::                                                             \
+        acc_pot<BOOST_PP_SEQ_ELEM(3, Args), perm_it_t<BOOST_PP_SEQ_ELEM(1, Args) *, BOOST_PP_SEQ_ELEM(1, Args)>>(      \
+            int, int,                                                                                                  \
+            const std::array<perm_it_t<BOOST_PP_SEQ_ELEM(1, Args) *, BOOST_PP_SEQ_ELEM(1, Args)>,                      \
+                             tree_nvecs_res<BOOST_PP_SEQ_ELEM(3, Args), BOOST_PP_SEQ_ELEM(0, Args)>> &,                \
+            BOOST_PP_SEQ_ELEM(1, Args), BOOST_PP_SEQ_ELEM(1, Args), BOOST_PP_SEQ_ELEM(1, Args)) const;
+
 // Do the actual instantiation via a cartesian product over the sequences.
 // clang-format off
-BOOST_PP_SEQ_FOR_EACH_PRODUCT(RAKAU_ROCM_EXPLICIT_INST_MEMFUN, (RAKAU_ROCM_INST_DIM_SEQUENCE)(RAKAU_ROCM_INST_FP_SEQUENCE)(RAKAU_ROCM_INST_UINT_SEQUENCE)(RAKAU_ROCM_INST_Q_SEQUENCE)(RAKAU_ROCM_INST_MACS_SEQUENCE));
+BOOST_PP_SEQ_FOR_EACH_PRODUCT(RAKAU_ROCM_EXPLICIT_INST_MEMFUN1, (RAKAU_ROCM_INST_DIM_SEQUENCE)(RAKAU_ROCM_INST_FP_SEQUENCE)(RAKAU_ROCM_INST_UINT_SEQUENCE)(RAKAU_ROCM_INST_Q_SEQUENCE)(RAKAU_ROCM_INST_MACS_SEQUENCE));
+BOOST_PP_SEQ_FOR_EACH_PRODUCT(RAKAU_ROCM_EXPLICIT_INST_MEMFUN2, (RAKAU_ROCM_INST_DIM_SEQUENCE)(RAKAU_ROCM_INST_FP_SEQUENCE)(RAKAU_ROCM_INST_UINT_SEQUENCE)(RAKAU_ROCM_INST_Q_SEQUENCE)(RAKAU_ROCM_INST_MACS_SEQUENCE));
 // clang-format on
 
 // Macro for the instantiation of the state class. Same idea as above.

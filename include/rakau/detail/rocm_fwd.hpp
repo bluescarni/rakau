@@ -38,8 +38,8 @@ public:
     rocm_state &operator=(rocm_state &&) = delete;
     ~rocm_state();
 
-    template <unsigned Q>
-    void acc_pot(int, int, const std::array<F *, tree_nvecs_res<Q, NDim>> &, F, F, F) const;
+    template <unsigned Q, typename It>
+    void acc_pot(int, int, const std::array<It, tree_nvecs_res<Q, NDim>> &, F, F, F) const;
 
 private:
     void *m_state;

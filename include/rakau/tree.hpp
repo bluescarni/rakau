@@ -2991,7 +2991,9 @@ private:
 
         if constexpr ((NDim == 3u || NDim == 2u)
                       && std::conjunction_v<
-                             std::is_same<It, F *>,
+                             // NOTE: at this time, the rocm implementation is enabled only if we are writing
+                             // directly into pointers (either in ordered or unordered fashion).
+                             std::disjunction<std::is_same<It, F *>, std::is_same<It, perm_it_t<F *, F>>>,
                              std::disjunction<std::is_same<UInt, std::uint64_t>, std::is_same<UInt, std::uint32_t>>,
                              std::disjunction<std::is_same<F, float>, std::is_same<F, double>>>) {
             if (m_rocm && split.size() == 2u) {
@@ -3053,8 +3055,7 @@ private:
                 throw std::invalid_argument(
                     "Cannot compute accelerations/potentials on an accelerator: either the "
                     "floating-point and/or integral types involved in the computation are supported only on the cpu, "
-                    "or the output iterators are not pointers (this is the case when using the ordered "
-                    "acceleration/potential computation functions)");
+                    "or the output iterators are of an unsupported type");
             }
             cpu_run(0, m_crit_nodes.size());
         }
@@ -3232,6 +3233,8 @@ private:
             auto out_pits = index_apply<nvecs_res<Q>>([&out, this](auto... I) {
                 return std::array{boost::make_permutation_iterator(out[I()], m_perm.begin())...};
             });
+            // Check that perm_it_t is consistent with the value type of out_pits.
+            static_assert(std::is_same_v<std::remove_reference_t<decltype(out_pits[0])>, perm_it_t<It, F>>);
             // NOTE: we are checking in the acc_pot_impl() function that we can index into
             // the permuted iterators without overflows (see the use of boost::numeric_cast()).
             acc_pot_impl<Q>(out_pits, mac_value, G, eps2, split);
