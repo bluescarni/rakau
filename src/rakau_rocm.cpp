@@ -48,23 +48,10 @@ bool rocm_has_accelerator()
     return hc::accelerator::get_all().size() > 1u;
 }
 
-// Machinery to transform an array of pointers into a tuple of array views.
+// Helper to turn a tuple of values of the same type into an array.
 // NOTE: these tuple <-> array conversions are temporarily needed as hcc
 // does not seem to support capturing arrays of views in a parallel_for(), but
 // tuples are apparently ok.
-template <typename T, std::size_t N, std::size_t... I>
-inline auto ap2tv_impl(const std::array<T *, N> &a, int size, std::index_sequence<I...>)
-{
-    return std::make_tuple(hc::array_view<T, 1>(size, a[I])...);
-}
-
-template <typename T, std::size_t N>
-inline auto ap2tv(const std::array<T *, N> &a, int size)
-{
-    return ap2tv_impl(a, size, std::make_index_sequence<N>{});
-}
-
-// Helper to turn a tuple of values of the same type into an array.
 template <typename Tuple, std::size_t... I>
 inline auto t2a_impl(const Tuple &tup, std::index_sequence<I...>)
 #if defined(__HCC_ACCELERATOR__)
@@ -87,11 +74,11 @@ inline auto t2a(const Tuple &tup)
 // the internal vectors of a tree.
 template <std::size_t NDim, typename F, typename UInt, mac MAC>
 struct rocm_state_impl {
-    using pav_t = decltype(ap2tv(std::declval<const std::array<const F *, NDim + 1u> &>(), 0));
     explicit rocm_state_impl(const std::array<const F *, NDim + 1u> &parts, const UInt *codes, int nparts,
                              const tree_node_t<NDim, F, UInt, MAC> *tree, int tree_size)
-        : m_pav(ap2tv(parts, nparts)), m_codes_view(nparts, codes), m_nparts(nparts), m_tree_view(tree_size, tree),
-          m_tree_size(tree_size)
+        : m_parts_views(index_apply<NDim + 1u>(
+              [nparts, &parts](auto... I) { return std::array{hc::array_view<const F, 1>(nparts, parts[I()])...}; })),
+          m_codes_view(nparts, codes), m_nparts(nparts), m_tree_view(tree_size, tree), m_tree_size(tree_size)
     {
     }
 
@@ -103,7 +90,7 @@ struct rocm_state_impl {
     rocm_state_impl &operator=(rocm_state_impl &&) = delete;
 
     // Views to the particle data.
-    pav_t m_pav;
+    std::array<hc::array_view<const F, 1>, NDim + 1u> m_parts_views;
     // View to the codes.
     hc::array_view<const UInt, 1> m_codes_view;
     // Number of particles/codes.
@@ -143,24 +130,27 @@ void rocm_state<NDim, F, UInt, MAC>::acc_pot(int p_begin, int p_end,
     // Fetch the state structure.
     auto &state = *static_cast<const rocm_state_impl<NDim, F, UInt, MAC> *>(m_state);
 
-    const auto nparts = state.m_nparts;
-    assert(p_end <= nparts);
+    assert(p_end <= state.nparts);
 
-    // Offset the original output pointers: we want to create
-    // a view only to the memory area into which we will actually
-    // be writing.
-    std::array<F *, tree_nvecs_res<Q, NDim>> out_offset;
-    for (std::size_t j = 0; j < tree_nvecs_res<Q, NDim>; ++j) {
-        out_offset[j] = out[j] + p_begin;
-    }
-    // Create the output views.
-    auto rt = ap2tv(out_offset, p_end - p_begin);
+    // Create arrays on the device to store the results.
+    auto device_arrays = index_apply<tree_nvecs_res<Q, NDim>>(
+        [p_end, p_begin](auto... I) { return std::array{(void(I()), hc::array<F, 1>(p_end - p_begin))...}; });
+    // Create views into the device arrays.
+    // NOTE: we work with views at this time because of hcc's issues with capturing C/C++ arrays, which forces
+    // us to transform everything into tuples and convert them back to arrays within the parallel for each.
+    // If we used this workaround with real hc::arrays, rather than views, we would end up asking
+    // for deep copies of the arrays in the tuple/array conversions, which is not what we want.
+    auto device_views = index_apply<tree_nvecs_res<Q, NDim>>(
+        [&device_arrays](auto... I) { return std::tuple{hc::array_view<F, 1>(device_arrays[I()])...}; });
 
     hc::parallel_for_each(
         hc::extent<1>(p_end - p_begin).tile(__HSA_WAVEFRONT_SIZE__),
         [
-            p_begin, pt = state.m_pav, codes_view = state.m_codes_view, nparts, tree_view = state.m_tree_view,
-            tree_size = state.m_tree_size, rt, mac_value, G,
+            p_begin,
+            // Create on the fly the tuple of views into the particles data.
+            pt = index_apply<NDim + 1u>([&state](auto... I) { return std::tuple{state.m_parts_views[I()]...}; }),
+            codes_view = state.m_codes_view, nparts = state.m_nparts, tree_view = state.m_tree_view,
+            tree_size = state.m_tree_size, rt = device_views, mac_value, G,
             eps2
         ](hc::tiled_index<1> thread_id) [[hc]] {
             // Get the global particle index into the tree data.
@@ -171,7 +161,7 @@ void rocm_state<NDim, F, UInt, MAC>::acc_pot(int p_begin, int p_end,
                 return;
             }
 
-            // Turn the tuples back into arrays.
+            // Turn the tuples of views back into arrays of views.
             auto p_view = t2a(pt);
             auto res_view = t2a(rt);
 
@@ -354,8 +344,20 @@ void rocm_state<NDim, F, UInt, MAC>::acc_pot(int p_begin, int p_end,
             }
         })
         .get();
-    for (auto &v : t2a(rt)) {
-        v.synchronize();
+
+    // Write the results (currently on the device) into the output iterators.
+    std::array<hc::completion_future, tree_nvecs_res<Q, NDim>> futs;
+    index_apply<tree_nvecs_res<Q, NDim>>([&device_views, &futs, &device_arrays, &out, p_begin](auto... I) {
+        // NOTE: for each vector of results, we need to first synchronize the corresponding view
+        // (as we used the view for writing the results in the parallel_for_each, we must ensure
+        // everything is actually written to the device memory), and then
+        // perform the copy into out. We do the copy asynchronously and wait for it to
+        // finish in the next loop.
+        (..., (std::get<I()>(device_views).synchronize(),
+               futs[I()] = hc::copy_async(device_arrays[I()], out[I()] + p_begin)));
+    });
+    for (auto &f : futs) {
+        f.get();
     }
 }
 
