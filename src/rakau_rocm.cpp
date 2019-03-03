@@ -120,9 +120,10 @@ rocm_state<NDim, F, UInt, MAC>::~rocm_state()
 // the views to the tree from the state structure, create views into the output data
 // and then traverse the tree computing the acceleration for each particle.
 template <std::size_t NDim, typename F, typename UInt, mac MAC>
-template <unsigned Q, typename It>
-void rocm_state<NDim, F, UInt, MAC>::acc_pot(int p_begin, int p_end, const std::array<It, tree_nvecs_res<Q, NDim>> &out,
-                                             F mac_value, F G, F eps2) const
+template <unsigned Q>
+void rocm_state<NDim, F, UInt, MAC>::acc_pot(int p_begin, int p_end,
+                                             const std::array<F *, tree_nvecs_res<Q, NDim>> &out, F mac_value, F G,
+                                             F eps2, bool offset_output) const
 {
     assert(p_begin <= p_end);
 
@@ -131,16 +132,10 @@ void rocm_state<NDim, F, UInt, MAC>::acc_pot(int p_begin, int p_end, const std::
 
     assert(p_end <= state.m_nparts);
 
-    // Create arrays on the device to store the results.
-    auto device_arrays = index_apply<tree_nvecs_res<Q, NDim>>(
-        [p_end, p_begin](auto... I) { return std::array{(void(I()), hc::array<F, 1>(p_end - p_begin))...}; });
-    // Create views into the device arrays.
-    // NOTE: we work with views at this time because of hcc's issues with capturing C/C++ arrays, which forces
-    // us to transform everything into tuples and convert them back to arrays within the parallel for each.
-    // If we used this workaround with real hc::arrays, rather than views, we would end up asking
-    // for deep copies of the arrays in the tuple/array conversions, which is not what we want.
-    auto device_views = index_apply<tree_nvecs_res<Q, NDim>>(
-        [&device_arrays](auto... I) { return std::tuple{hc::array_view<F, 1>(device_arrays[I()])...}; });
+    // Create views into the output buffers.
+    auto out_views = index_apply<tree_nvecs_res<Q, NDim>>([p_end, p_begin, &out, offset_output](auto... I) {
+        return std::tuple{hc::array_view<F, 1>(p_end - p_begin, out[I()] + (offset_output ? p_begin : 0))...};
+    });
 
     hc::parallel_for_each(
         hc::extent<1>(p_end - p_begin).tile(__HSA_WAVEFRONT_SIZE__),
@@ -149,7 +144,7 @@ void rocm_state<NDim, F, UInt, MAC>::acc_pot(int p_begin, int p_end, const std::
             // Create on the fly the tuple of views into the particles data.
             pt = index_apply<NDim + 1u>([&state](auto... I) { return std::tuple{state.m_parts_views[I()]...}; }),
             codes_view = state.m_codes_view, nparts = state.m_nparts, tree_view = state.m_tree_view,
-            tree_size = state.m_tree_size, rt = device_views, mac_value, G,
+            tree_size = state.m_tree_size, rt = out_views, mac_value, G,
             eps2
         ](hc::tiled_index<1> thread_id) [[hc]] {
             // Get the global particle index into the tree data.
@@ -344,20 +339,8 @@ void rocm_state<NDim, F, UInt, MAC>::acc_pot(int p_begin, int p_end, const std::
         })
         .get();
 
-    // Write the results (currently on the device) into the output iterators.
-    std::array<hc::completion_future, tree_nvecs_res<Q, NDim>> futs;
-    index_apply<tree_nvecs_res<Q, NDim>>([&device_views, &futs, &device_arrays, &out, p_begin](auto... I) {
-        // NOTE: for each vector of results, we need to first synchronize the corresponding view
-        // (as we used the view for writing the results in the parallel_for_each, we must ensure
-        // everything is actually written to the device memory), and then
-        // perform the copy into out. We do the copy asynchronously and wait for it to
-        // finish in the next loop.
-        (..., (std::get<I()>(device_views).synchronize(),
-               futs[I()] = hc::copy_async(device_arrays[I()], out[I()] + p_begin)));
-    });
-    for (auto &f : futs) {
-        f.get();
-    }
+    // Sync the output views.
+    index_apply<tree_nvecs_res<Q, NDim>>([&out_views](auto... I) { (..., std::get<I()>(out_views).synchronize()); });
 }
 
 // Explicit instantiations of the templates implemented above. We are going to use Boost.Preprocessor.
@@ -382,30 +365,18 @@ void rocm_state<NDim, F, UInt, MAC>::acc_pot(int p_begin, int p_end, const std::
 
 // Macros for the instantiation of the member function. NDim, F, UInt, Q and MAC will be passed in
 // as a sequence named Args (in that order).
-// In the first macro, the output iterators are pointers. In the second macro, the output iterators
-// are permuted pointers.
-#define RAKAU_ROCM_EXPLICIT_INST_MEMFUN1(r, Args)                                                                      \
+#define RAKAU_ROCM_EXPLICIT_INST_MEMFUN(r, Args)                                                                       \
     template void rocm_state<BOOST_PP_SEQ_ELEM(0, Args), BOOST_PP_SEQ_ELEM(1, Args), BOOST_PP_SEQ_ELEM(2, Args),       \
-                             BOOST_PP_SEQ_ELEM(4, Args)>::acc_pot<BOOST_PP_SEQ_ELEM(3, Args),                          \
-                                                                  BOOST_PP_SEQ_ELEM(1, Args) *>(                       \
+                             BOOST_PP_SEQ_ELEM(4, Args)>::acc_pot<BOOST_PP_SEQ_ELEM(3,                                 \
+                                                                                    Args)>(                            \
         int, int,                                                                                                      \
         const std::array<BOOST_PP_SEQ_ELEM(1, Args) *,                                                                 \
                          tree_nvecs_res<BOOST_PP_SEQ_ELEM(3, Args), BOOST_PP_SEQ_ELEM(0, Args)>> &,                    \
-        BOOST_PP_SEQ_ELEM(1, Args), BOOST_PP_SEQ_ELEM(1, Args), BOOST_PP_SEQ_ELEM(1, Args)) const;
-
-#define RAKAU_ROCM_EXPLICIT_INST_MEMFUN2(r, Args)                                                                      \
-    template void rocm_state<BOOST_PP_SEQ_ELEM(0, Args), BOOST_PP_SEQ_ELEM(1, Args), BOOST_PP_SEQ_ELEM(2, Args),       \
-                             BOOST_PP_SEQ_ELEM(4, Args)>::                                                             \
-        acc_pot<BOOST_PP_SEQ_ELEM(3, Args), perm_it_t<BOOST_PP_SEQ_ELEM(1, Args) *, BOOST_PP_SEQ_ELEM(1, Args)>>(      \
-            int, int,                                                                                                  \
-            const std::array<perm_it_t<BOOST_PP_SEQ_ELEM(1, Args) *, BOOST_PP_SEQ_ELEM(1, Args)>,                      \
-                             tree_nvecs_res<BOOST_PP_SEQ_ELEM(3, Args), BOOST_PP_SEQ_ELEM(0, Args)>> &,                \
-            BOOST_PP_SEQ_ELEM(1, Args), BOOST_PP_SEQ_ELEM(1, Args), BOOST_PP_SEQ_ELEM(1, Args)) const;
+        BOOST_PP_SEQ_ELEM(1, Args), BOOST_PP_SEQ_ELEM(1, Args), BOOST_PP_SEQ_ELEM(1, Args), bool) const;
 
 // Do the actual instantiation via a cartesian product over the sequences.
 // clang-format off
-BOOST_PP_SEQ_FOR_EACH_PRODUCT(RAKAU_ROCM_EXPLICIT_INST_MEMFUN1, (RAKAU_ROCM_INST_DIM_SEQUENCE)(RAKAU_ROCM_INST_FP_SEQUENCE)(RAKAU_ROCM_INST_UINT_SEQUENCE)(RAKAU_ROCM_INST_Q_SEQUENCE)(RAKAU_ROCM_INST_MACS_SEQUENCE));
-BOOST_PP_SEQ_FOR_EACH_PRODUCT(RAKAU_ROCM_EXPLICIT_INST_MEMFUN2, (RAKAU_ROCM_INST_DIM_SEQUENCE)(RAKAU_ROCM_INST_FP_SEQUENCE)(RAKAU_ROCM_INST_UINT_SEQUENCE)(RAKAU_ROCM_INST_Q_SEQUENCE)(RAKAU_ROCM_INST_MACS_SEQUENCE));
+BOOST_PP_SEQ_FOR_EACH_PRODUCT(RAKAU_ROCM_EXPLICIT_INST_MEMFUN, (RAKAU_ROCM_INST_DIM_SEQUENCE)(RAKAU_ROCM_INST_FP_SEQUENCE)(RAKAU_ROCM_INST_UINT_SEQUENCE)(RAKAU_ROCM_INST_Q_SEQUENCE)(RAKAU_ROCM_INST_MACS_SEQUENCE));
 // clang-format on
 
 // Macro for the instantiation of the state class. Same idea as above.

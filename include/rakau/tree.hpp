@@ -2991,9 +2991,6 @@ private:
 
         if constexpr ((NDim == 3u || NDim == 2u)
                       && std::conjunction_v<
-                             // NOTE: at this time, the rocm implementation is enabled only if we are writing
-                             // directly into pointers (either in ordered or unordered fashion).
-                             std::disjunction<std::is_same<It, F *>, std::is_same<It, perm_it_t<F *, F>>>,
                              std::disjunction<std::is_same<UInt, std::uint64_t>, std::is_same<UInt, std::uint32_t>>,
                              std::disjunction<std::is_same<F, float>, std::is_same<F, double>>>) {
             if (m_rocm && split.size() == 2u) {
@@ -3030,11 +3027,39 @@ private:
                     // NOTE: futures returned by async() will block on destruction. Thus, even if
                     // cpu_run() throws, we will be sure that this thread will end before the exception
                     // is handled.
-                    auto roc_fut
-                        = std::async(std::launch::async, [this, particle_split_idx, &out, mac_value, G, eps2]() {
-                              m_rocm->template acc_pot<Q>(boost::numeric_cast<int>(particle_split_idx),
-                                                          boost::numeric_cast<int>(nparts()), out, mac_value, G, eps2);
-                          });
+                    auto roc_fut = std::async(
+                        std::launch::async, [this, particle_split_idx, &out, mac_value, G, eps2]() {
+                            if constexpr (std::is_same_v<It, F *>) {
+                                m_rocm->template acc_pot<Q>(boost::numeric_cast<int>(particle_split_idx),
+                                                            boost::numeric_cast<int>(nparts()), out, mac_value, G, eps2,
+                                                            true);
+                            } else {
+                                // If we are not outputting directly to pointers,
+                                // write the results to temporary vectors and then
+                                // copy them over.
+                                auto tmp_vecs = index_apply<nvecs_res<Q>>([this, particle_split_idx](auto... I) {
+                                    return std::array{
+                                        (void(I()), f_vector<F>(boost::numeric_cast<typename f_vector<F>::size_type>(
+                                                        nparts() - particle_split_idx)))...};
+                                });
+                                auto new_out = index_apply<nvecs_res<Q>>(
+                                    [&tmp_vecs](auto... I) { return std::array{tmp_vecs[I()].data()...}; });
+                                m_rocm->template acc_pot<Q>(boost::numeric_cast<int>(particle_split_idx),
+                                                            boost::numeric_cast<int>(nparts()), new_out, mac_value, G,
+                                                            eps2, false);
+                                // Copy over from the temporary buffers into the output iterators.
+                                for (std::size_t j = 0; j < nvecs_res<Q>; ++j) {
+                                    tbb::parallel_for(
+                                        tbb::blocked_range(size_type(0),
+                                                           static_cast<size_type>(nparts() - particle_split_idx)),
+                                        [&new_out, &out, j, particle_split_idx](const auto &range) {
+                                            std::copy(new_out[j] + range.begin(), new_out[j] + range.end(),
+                                                      out[j] + boost::numeric_cast<it_diff_type<It>>(particle_split_idx)
+                                                          + boost::numeric_cast<it_diff_type<It>>(range.begin()));
+                                        });
+                                }
+                            }
+                        });
 
                     // Run the cpu implementation.
                     cpu_run(0, boost::numeric_cast<c_size_type>(cn_it - m_crit_nodes.begin()));
@@ -3053,9 +3078,8 @@ private:
         } else {
             if (split.size() == 2u) {
                 throw std::invalid_argument(
-                    "Cannot compute accelerations/potentials on an accelerator: either the "
-                    "floating-point and/or integral types involved in the computation are supported only on the cpu, "
-                    "or the output iterators are of an unsupported type");
+                    "Cannot compute accelerations/potentials on an accelerator: the "
+                    "floating-point and/or integral types involved in the computation are supported only on the cpu");
             }
             cpu_run(0, m_crit_nodes.size());
         }
