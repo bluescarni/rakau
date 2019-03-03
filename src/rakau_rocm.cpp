@@ -363,7 +363,7 @@ void rocm_state<NDim, F, UInt, MAC>::acc_pot(int p_begin, int p_end,
 // Enable all MACs.
 #define RAKAU_ROCM_INST_MACS_SEQUENCE (mac::bh)(mac::bh_geom)
 
-// Macros for the instantiation of the member function. NDim, F, UInt, Q and MAC will be passed in
+// Macro for the instantiation of the member function. NDim, F, UInt, Q and MAC will be passed in
 // as a sequence named Args (in that order).
 #define RAKAU_ROCM_EXPLICIT_INST_MEMFUN(r, Args)                                                                       \
     template void rocm_state<BOOST_PP_SEQ_ELEM(0, Args), BOOST_PP_SEQ_ELEM(1, Args), BOOST_PP_SEQ_ELEM(2, Args),       \

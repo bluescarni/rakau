@@ -3257,8 +3257,6 @@ private:
             auto out_pits = index_apply<nvecs_res<Q>>([&out, this](auto... I) {
                 return std::array{boost::make_permutation_iterator(out[I()], m_perm.begin())...};
             });
-            // Check that perm_it_t is consistent with the value type of out_pits.
-            static_assert(std::is_same_v<std::remove_reference_t<decltype(out_pits[0])>, perm_it_t<It, F>>);
             // NOTE: we are checking in the acc_pot_impl() function that we can index into
             // the permuted iterators without overflows (see the use of boost::numeric_cast()).
             acc_pot_impl<Q>(out_pits, mac_value, G, eps2, split);

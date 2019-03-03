@@ -37,8 +37,6 @@
 
 #endif
 
-#include <boost/iterator/permutation_iterator.hpp>
-
 #include <rakau/detail/di_aligned_allocator.hpp>
 
 namespace rakau
@@ -65,17 +63,6 @@ inline constexpr bool dependent_false_v = dependent_false<T>::value;
 // of std::vector can depend on the actual alignment value.
 template <typename F>
 using tree_size_t = typename std::vector<F, di_aligned_allocator<F, 0>>::size_type;
-
-// In tree's ordered functions, we often take a random access iterator It and
-// then iterate over it in a permuted fashion, where the permutation is given
-// by indices contained in a vector. We do this by transforming It into an appropriate
-// boost::permutation_iterator, whose type can be determined by this alias.
-// NOTE: we need F as well because we need the tree size type, which is dependent
-// upon F.
-template <typename It, typename F>
-using perm_it_t = decltype(boost::make_permutation_iterator(
-    std::declval<const It &>(),
-    std::declval<const std::vector<tree_size_t<F>, di_aligned_allocator<tree_size_t<F>, 0>> &>().begin()));
 
 // Tree node structure.
 // NOTE: the default implementation is empty and it will error
