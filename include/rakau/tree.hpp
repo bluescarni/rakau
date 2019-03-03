@@ -3097,7 +3097,6 @@ private:
 
         if constexpr ((NDim == 3u || NDim == 2u)
                       && std::conjunction_v<
-                             std::is_same<It, F *>,
                              std::disjunction<std::is_same<UInt, std::uint64_t>, std::is_same<UInt, std::uint32_t>>,
                              std::disjunction<std::is_same<F, float>, std::is_same<F, double>>>) {
             if (split.size() > 1u) {
@@ -3122,7 +3121,7 @@ private:
 
                 // Now we need to move the first element of split_indices so that it ends on a node boundary.
                 const auto cn_it = std::lower_bound(m_crit_nodes.begin(), m_crit_nodes.end(), split_indices[0],
-                                                    [](const auto &cn, size_type value) { cn.begin < value; });
+                                                    [](const auto &cn, size_type value) { return cn.begin < value; });
                 if (cn_it == m_crit_nodes.end()) {
                     // We found the end() iterator. This means that all computations
                     // will go on the cpu.
@@ -3159,8 +3158,34 @@ private:
                     // Run the CUDA computation in async mode.
                     auto cuda_fut
                         = std::async(std::launch::async, [&out, &split_indices, this, np, mac_value, G, eps2]() {
-                              cuda_acc_pot_impl<Q>(out, split_indices, m_tree.data(), m_tree.size(), p_its_u(),
-                                                   m_codes.data(), np, mac_value, G, eps2);
+                              if constexpr (std::is_same_v<It, F *>) {
+                                  cuda_acc_pot_impl<Q>(out, split_indices, m_tree.data(), m_tree.size(), p_its_u(),
+                                                       m_codes.data(), np, mac_value, G, eps2, true);
+                              } else {
+                                  // If we are not outputting directly to pointers,
+                                  // write the results to temporary vectors and then
+                                  // copy them over.
+                                  auto tmp_vecs = index_apply<nvecs_res<Q>>([this, &split_indices](auto... I) {
+                                      return std::array{
+                                          (void(I()), f_vector<F>(boost::numeric_cast<typename f_vector<F>::size_type>(
+                                                          nparts() - split_indices[0])))...};
+                                  });
+                                  auto new_out = index_apply<nvecs_res<Q>>(
+                                      [&tmp_vecs](auto... I) { return std::array{tmp_vecs[I()].data()...}; });
+                                  cuda_acc_pot_impl<Q>(new_out, split_indices, m_tree.data(), m_tree.size(), p_its_u(),
+                                                       m_codes.data(), np, mac_value, G, eps2, false);
+                                  // Copy over from the temporary buffers into the output iterators.
+                                  for (std::size_t j = 0; j < nvecs_res<Q>; ++j) {
+                                      tbb::parallel_for(
+                                          tbb::blocked_range(size_type(0),
+                                                             static_cast<size_type>(nparts() - split_indices[0])),
+                                          [&new_out, &out, j, &split_indices](const auto &range) {
+                                              std::copy(new_out[j] + range.begin(), new_out[j] + range.end(),
+                                                        out[j] + boost::numeric_cast<it_diff_type<It>>(split_indices[0])
+                                                            + boost::numeric_cast<it_diff_type<It>>(range.begin()));
+                                          });
+                                  }
+                              }
                           });
 
                     // Run the cpu implementation.
@@ -3180,10 +3205,8 @@ private:
         } else {
             if (split.size() > 1u) {
                 throw std::invalid_argument(
-                    "Cannot compute accelerations/potentials on an accelerator: either the "
-                    "floating-point and/or integral types involved in the computation are supported only on the cpu, "
-                    "or the output iterators are not pointers (this is the case when using the ordered "
-                    "acceleration/potential computation functions)");
+                    "Cannot compute accelerations/potentials on an accelerator: the "
+                    "floating-point and/or integral types involved in the computation are supported only on the cpu");
             }
             cpu_run(0, m_crit_nodes.size());
         }

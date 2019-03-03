@@ -133,7 +133,6 @@ struct arr_wrap {
     T value[N];
 };
 
-
 // Small helpers to compute the rhs of the MAC check. We need this because the members
 // of the node structure vary depending on the MAC.
 template <std::size_t NDim, typename F, typename UInt, mac MAC, std::enable_if_t<MAC == mac::bh, int> = 0>
@@ -350,7 +349,7 @@ template <unsigned Q, std::size_t NDim, typename F, typename UInt, mac MAC>
 void cuda_acc_pot_impl(const std::array<F *, tree_nvecs_res<Q, NDim>> &out,
                        const std::vector<tree_size_t<F>> &split_indices, const tree_node_t<NDim, F, UInt, MAC> *tree,
                        tree_size_t<F> tree_size, const std::array<const F *, NDim + 1u> &p_parts, const UInt *codes,
-                       tree_size_t<F> nparts, F mac_value, F G, F eps2)
+                       tree_size_t<F> nparts, F mac_value, F G, F eps2, bool offset_output)
 {
     assert(split_indices.size() && split_indices.size() - 1u <= cuda_device_count());
 
@@ -522,7 +521,7 @@ void cuda_acc_pot_impl(const std::array<F *, tree_nvecs_res<Q, NDim>> &out,
     // Write out the results.
     for (auto i = 0u; i < ngpus; ++i) {
         for (std::size_t j = 0; j < tree_nvecs_res<Q, NDim>; ++j) {
-            cuda_memcpy_async(out[j] + split_indices[i], res_ptrs[i].value[j],
+            cuda_memcpy_async(out[j] + split_indices[i] - (offset_output ? 0u : split_indices[0]), res_ptrs[i].value[j],
                               sizeof(F) * (split_indices[i + 1u] - split_indices[i]), ::cudaMemcpyDefault, streams[i]);
         }
     }
@@ -562,7 +561,7 @@ void cuda_acc_pot_impl(const std::array<F *, tree_nvecs_res<Q, NDim>> &out,
         tree_size_t<BOOST_PP_SEQ_ELEM(1, Args)>,                                                                       \
         const std::array<const BOOST_PP_SEQ_ELEM(1, Args) *, BOOST_PP_SEQ_ELEM(0, Args) + 1u> &,                       \
         const BOOST_PP_SEQ_ELEM(2, Args) *, tree_size_t<BOOST_PP_SEQ_ELEM(1, Args)>, BOOST_PP_SEQ_ELEM(1, Args),       \
-        BOOST_PP_SEQ_ELEM(1, Args), BOOST_PP_SEQ_ELEM(1, Args));
+        BOOST_PP_SEQ_ELEM(1, Args), BOOST_PP_SEQ_ELEM(1, Args), bool);
 
 // Do the actual instantiation via a cartesian product over the sequences.
 // clang-format off
