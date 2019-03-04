@@ -38,7 +38,8 @@ int main(int argc, char **argv)
         using fp_type = decltype(x);
 
         auto inner = [&](auto m) {
-            const auto [nparts, idx, max_leaf_n, ncrit, _1, bsize, a, mac_value, parinit, split, _2, _3] = popts;
+            const auto [nparts, idx, max_leaf_n, ncrit, _1, bsize, a, mac_value, parinit, split, _2, _3, ordered]
+                = popts;
 
             auto parts = get_plummer_sphere(nparts, static_cast<fp_type>(a), static_cast<fp_type>(bsize), parinit);
 
@@ -51,11 +52,18 @@ int main(int argc, char **argv)
                                                   kwargs::ncrit = ncrit};
             std::cout << t << '\n';
             std::array<std::vector<fp_type>, 3> accs;
-            t.accs_u(accs, mac_value, kwargs::split = split);
-            std::cout << accs[0][t.inv_perm()[idx]] << ", " << accs[1][t.inv_perm()[idx]] << ", "
-                      << accs[2][t.inv_perm()[idx]] << '\n';
-            auto eacc = t.exact_acc_u(t.inv_perm()[idx]);
-            std::cout << eacc[0] << ", " << eacc[1] << ", " << eacc[2] << '\n';
+            if (ordered) {
+                t.accs_o(accs, mac_value, kwargs::split = split);
+                std::cout << accs[0][idx] << ", " << accs[1][idx] << ", " << accs[2][idx] << '\n';
+                auto eacc = t.exact_acc_o(idx);
+                std::cout << eacc[0] << ", " << eacc[1] << ", " << eacc[2] << '\n';
+            } else {
+                t.accs_u(accs, mac_value, kwargs::split = split);
+                std::cout << accs[0][t.inv_perm()[idx]] << ", " << accs[1][t.inv_perm()[idx]] << ", "
+                          << accs[2][t.inv_perm()[idx]] << '\n';
+                auto eacc = t.exact_acc_u(t.inv_perm()[idx]);
+                std::cout << eacc[0] << ", " << eacc[1] << ", " << eacc[2] << '\n';
+            }
         };
 
         if (std::get<11>(popts) == "bh") {

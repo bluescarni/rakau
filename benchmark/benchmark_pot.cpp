@@ -37,7 +37,8 @@ int main(int argc, char **argv)
         using fp_type = decltype(x);
 
         auto inner = [&](auto m) {
-            const auto [nparts, idx, max_leaf_n, ncrit, _1, bsize, a, mac_value, parinit, split, _2, mac_type] = popts;
+            const auto [nparts, idx, max_leaf_n, ncrit, _1, bsize, a, mac_value, parinit, split, _2, mac_type, ordered]
+                = popts;
 
             auto parts = get_plummer_sphere(nparts, static_cast<fp_type>(a), static_cast<fp_type>(bsize), parinit);
 
@@ -50,10 +51,17 @@ int main(int argc, char **argv)
                                                   kwargs::ncrit = ncrit};
             std::cout << t << '\n';
             std::vector<fp_type> pots;
-            t.pots_u(pots, mac_value, kwargs::split = split);
-            std::cout << pots[t.inv_perm()[idx]] << '\n';
-            auto epot = t.exact_pot_u(t.inv_perm()[idx]);
-            std::cout << epot << '\n';
+            if (ordered) {
+                t.pots_o(pots, mac_value, kwargs::split = split);
+                std::cout << pots[idx] << '\n';
+                auto epot = t.exact_pot_o(idx);
+                std::cout << epot << '\n';
+            } else {
+                t.pots_u(pots, mac_value, kwargs::split = split);
+                std::cout << pots[t.inv_perm()[idx]] << '\n';
+                auto epot = t.exact_pot_u(t.inv_perm()[idx]);
+                std::cout << epot << '\n';
+            }
         };
 
         if (std::get<11>(popts) == "bh") {

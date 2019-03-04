@@ -17,6 +17,7 @@
 #include <limits>
 #include <tuple>
 #include <type_traits>
+#include <utility>
 #include <vector>
 
 // We use the BitScanReverse(64) intrinsic in the implementation of clz(), but
@@ -224,6 +225,30 @@ inline UInt tree_level(UInt n)
     assert(cbits >= retval);
     assert((cbits - retval) * NDim < ndigits);
     return retval;
+}
+
+// Machinery to use index_sequence with variadic lambdas. See:
+// http://aherrmann.github.io/programming/2016/02/28/unpacking-tuples-in-cpp14/
+template <typename F, std::size_t... I>
+constexpr auto index_apply_impl(F &&f, const std::index_sequence<I...> &) noexcept(
+    noexcept(std::forward<F>(f)(std::integral_constant<std::size_t, I>{}...)))
+#if defined(__HCC_ACCELERATOR__)
+    [[hc]]
+#endif
+    -> decltype(std::forward<F>(f)(std::integral_constant<std::size_t, I>{}...))
+{
+    return std::forward<F>(f)(std::integral_constant<std::size_t, I>{}...);
+}
+
+template <std::size_t N, typename F>
+constexpr auto
+index_apply(F &&f) noexcept(noexcept(index_apply_impl(std::forward<F>(f), std::make_index_sequence<N>{})))
+#if defined(__HCC_ACCELERATOR__)
+    [[hc]]
+#endif
+    -> decltype(index_apply_impl(std::forward<F>(f), std::make_index_sequence<N>{}))
+{
+    return index_apply_impl(std::forward<F>(f), std::make_index_sequence<N>{});
 }
 
 } // namespace detail

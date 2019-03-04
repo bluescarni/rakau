@@ -535,24 +535,6 @@ inline constexpr unsigned default_ncrit =
     128
 #endif
     ;
-
-// Machinery to use index_sequence with variadic lambdas. See:
-// http://aherrmann.github.io/programming/2016/02/28/unpacking-tuples-in-cpp14/
-template <typename F, std::size_t... I>
-constexpr auto index_apply_impl(F &&f, const std::index_sequence<I...> &) noexcept(
-    noexcept(std::forward<F>(f)(std::integral_constant<std::size_t, I>{}...)))
-    -> decltype(std::forward<F>(f)(std::integral_constant<std::size_t, I>{}...))
-{
-    return std::forward<F>(f)(std::integral_constant<std::size_t, I>{}...);
-}
-
-template <std::size_t N, typename F>
-constexpr auto
-index_apply(F &&f) noexcept(noexcept(index_apply_impl(std::forward<F>(f), std::make_index_sequence<N>{})))
-    -> decltype(index_apply_impl(std::forward<F>(f), std::make_index_sequence<N>{}))
-{
-    return index_apply_impl(std::forward<F>(f), std::make_index_sequence<N>{});
-}
 } // namespace detail
 
 namespace kwargs
@@ -2829,13 +2811,15 @@ private:
                       const std::vector<double> &split) const
     {
         // Validation of split, common to all codepaths.
-        if (std::any_of(split.begin(), split.end(), [](const double &x) { return !std::isfinite(x); })) {
+        if (rakau_unlikely(
+                std::any_of(split.begin(), split.end(), [](const double &x) { return !std::isfinite(x); }))) {
             throw std::invalid_argument("The 'split' parameter cannot contain non-finite values");
         }
-        if (std::any_of(split.begin(), split.end(), [](const double &x) { return x < 0.; })) {
+        if (rakau_unlikely(std::any_of(split.begin(), split.end(), [](const double &x) { return x < 0.; }))) {
             throw std::invalid_argument("The 'split' parameter must contain only non-negative values");
         }
-        if (!split.empty() && std::all_of(split.begin(), split.end(), [](const double &x) { return x == 0.; })) {
+        if (rakau_unlikely(!split.empty()
+                           && std::all_of(split.begin(), split.end(), [](const double &x) { return x == 0.; }))) {
             throw std::invalid_argument("The values in the 'split' parameter cannot all be zero");
         }
 
@@ -3007,7 +2991,6 @@ private:
 
         if constexpr ((NDim == 3u || NDim == 2u)
                       && std::conjunction_v<
-                             std::is_same<It, F *>,
                              std::disjunction<std::is_same<UInt, std::uint64_t>, std::is_same<UInt, std::uint32_t>>,
                              std::disjunction<std::is_same<F, float>, std::is_same<F, double>>>) {
             if (m_rocm && split.size() == 2u) {
@@ -3044,11 +3027,39 @@ private:
                     // NOTE: futures returned by async() will block on destruction. Thus, even if
                     // cpu_run() throws, we will be sure that this thread will end before the exception
                     // is handled.
-                    auto roc_fut
-                        = std::async(std::launch::async, [this, particle_split_idx, &out, mac_value, G, eps2]() {
-                              m_rocm->template acc_pot<Q>(boost::numeric_cast<int>(particle_split_idx),
-                                                          boost::numeric_cast<int>(nparts()), out, mac_value, G, eps2);
-                          });
+                    auto roc_fut = std::async(
+                        std::launch::async, [this, particle_split_idx, &out, mac_value, G, eps2]() {
+                            if constexpr (std::is_same_v<It, F *>) {
+                                m_rocm->template acc_pot<Q>(boost::numeric_cast<int>(particle_split_idx),
+                                                            boost::numeric_cast<int>(nparts()), out, mac_value, G, eps2,
+                                                            true);
+                            } else {
+                                // If we are not outputting directly to pointers,
+                                // write the results to temporary vectors and then
+                                // copy them over.
+                                auto tmp_vecs = index_apply<nvecs_res<Q>>([this, particle_split_idx](auto... I) {
+                                    return std::array{
+                                        (void(I()), f_vector<F>(boost::numeric_cast<typename f_vector<F>::size_type>(
+                                                        nparts() - particle_split_idx)))...};
+                                });
+                                auto new_out = index_apply<nvecs_res<Q>>(
+                                    [&tmp_vecs](auto... I) { return std::array{tmp_vecs[I()].data()...}; });
+                                m_rocm->template acc_pot<Q>(boost::numeric_cast<int>(particle_split_idx),
+                                                            boost::numeric_cast<int>(nparts()), new_out, mac_value, G,
+                                                            eps2, false);
+                                // Copy over from the temporary buffers into the output iterators.
+                                for (std::size_t j = 0; j < nvecs_res<Q>; ++j) {
+                                    tbb::parallel_for(
+                                        tbb::blocked_range(size_type(0),
+                                                           static_cast<size_type>(nparts() - particle_split_idx)),
+                                        [&new_out, &out, j, particle_split_idx](const auto &range) {
+                                            std::copy(new_out[j] + range.begin(), new_out[j] + range.end(),
+                                                      out[j] + boost::numeric_cast<it_diff_type<It>>(particle_split_idx)
+                                                          + boost::numeric_cast<it_diff_type<It>>(range.begin()));
+                                        });
+                                }
+                            }
+                        });
 
                     // Run the cpu implementation.
                     cpu_run(0, boost::numeric_cast<c_size_type>(cn_it - m_crit_nodes.begin()));
@@ -3067,10 +3078,8 @@ private:
         } else {
             if (split.size() == 2u) {
                 throw std::invalid_argument(
-                    "Cannot compute accelerations/potentials on an accelerator: either the "
-                    "floating-point and/or integral types involved in the computation are supported only on the cpu, "
-                    "or the output iterators are not pointers (this is the case when using the ordered "
-                    "acceleration/potential computation functions)");
+                    "Cannot compute accelerations/potentials on an accelerator: the "
+                    "floating-point and/or integral types involved in the computation are supported only on the cpu");
             }
             cpu_run(0, m_crit_nodes.size());
         }
@@ -3088,7 +3097,6 @@ private:
 
         if constexpr ((NDim == 3u || NDim == 2u)
                       && std::conjunction_v<
-                             std::is_same<It, F *>,
                              std::disjunction<std::is_same<UInt, std::uint64_t>, std::is_same<UInt, std::uint32_t>>,
                              std::disjunction<std::is_same<F, float>, std::is_same<F, double>>>) {
             if (split.size() > 1u) {
@@ -3113,7 +3121,7 @@ private:
 
                 // Now we need to move the first element of split_indices so that it ends on a node boundary.
                 const auto cn_it = std::lower_bound(m_crit_nodes.begin(), m_crit_nodes.end(), split_indices[0],
-                                                    [](const auto &cn, size_type value) { cn.begin < value; });
+                                                    [](const auto &cn, size_type value) { return cn.begin < value; });
                 if (cn_it == m_crit_nodes.end()) {
                     // We found the end() iterator. This means that all computations
                     // will go on the cpu.
@@ -3150,8 +3158,34 @@ private:
                     // Run the CUDA computation in async mode.
                     auto cuda_fut
                         = std::async(std::launch::async, [&out, &split_indices, this, np, mac_value, G, eps2]() {
-                              cuda_acc_pot_impl<Q>(out, split_indices, m_tree.data(), m_tree.size(), p_its_u(),
-                                                   m_codes.data(), np, mac_value, G, eps2);
+                              if constexpr (std::is_same_v<It, F *>) {
+                                  cuda_acc_pot_impl<Q>(out, split_indices, m_tree.data(), m_tree.size(), p_its_u(),
+                                                       m_codes.data(), np, mac_value, G, eps2, true);
+                              } else {
+                                  // If we are not outputting directly to pointers,
+                                  // write the results to temporary vectors and then
+                                  // copy them over.
+                                  auto tmp_vecs = index_apply<nvecs_res<Q>>([this, &split_indices](auto... I) {
+                                      return std::array{
+                                          (void(I()), f_vector<F>(boost::numeric_cast<typename f_vector<F>::size_type>(
+                                                          nparts() - split_indices[0])))...};
+                                  });
+                                  auto new_out = index_apply<nvecs_res<Q>>(
+                                      [&tmp_vecs](auto... I) { return std::array{tmp_vecs[I()].data()...}; });
+                                  cuda_acc_pot_impl<Q>(new_out, split_indices, m_tree.data(), m_tree.size(), p_its_u(),
+                                                       m_codes.data(), np, mac_value, G, eps2, false);
+                                  // Copy over from the temporary buffers into the output iterators.
+                                  for (std::size_t j = 0; j < nvecs_res<Q>; ++j) {
+                                      tbb::parallel_for(
+                                          tbb::blocked_range(size_type(0),
+                                                             static_cast<size_type>(nparts() - split_indices[0])),
+                                          [&new_out, &out, j, &split_indices](const auto &range) {
+                                              std::copy(new_out[j] + range.begin(), new_out[j] + range.end(),
+                                                        out[j] + boost::numeric_cast<it_diff_type<It>>(split_indices[0])
+                                                            + boost::numeric_cast<it_diff_type<It>>(range.begin()));
+                                          });
+                                  }
+                              }
                           });
 
                     // Run the cpu implementation.
@@ -3171,10 +3205,8 @@ private:
         } else {
             if (split.size() > 1u) {
                 throw std::invalid_argument(
-                    "Cannot compute accelerations/potentials on an accelerator: either the "
-                    "floating-point and/or integral types involved in the computation are supported only on the cpu, "
-                    "or the output iterators are not pointers (this is the case when using the ordered "
-                    "acceleration/potential computation functions)");
+                    "Cannot compute accelerations/potentials on an accelerator: the "
+                    "floating-point and/or integral types involved in the computation are supported only on the cpu");
             }
             cpu_run(0, m_crit_nodes.size());
         }
@@ -3244,11 +3276,10 @@ private:
             // Make sure we don't run into overflows when doing a permutated iteration
             // over the iterators in out.
             it_diff_check<It>(m_parts[0].size());
-            using it_t = decltype(boost::make_permutation_iterator(out[0], m_perm.begin()));
-            std::array<it_t, nvecs_res<Q>> out_pits;
-            for (std::size_t j = 0; j < nvecs_res<Q>; ++j) {
-                out_pits[j] = boost::make_permutation_iterator(out[j], m_perm.begin());
-            }
+            // Create the permutated iterators.
+            auto out_pits = index_apply<nvecs_res<Q>>([&out, this](auto... I) {
+                return std::array{boost::make_permutation_iterator(out[I()], m_perm.begin())...};
+            });
             // NOTE: we are checking in the acc_pot_impl() function that we can index into
             // the permuted iterators without overflows (see the use of boost::numeric_cast()).
             acc_pot_impl<Q>(out_pits, mac_value, G, eps2, split);
@@ -3514,24 +3545,17 @@ private:
     template <typename Tr>
     static auto ord_p_its_impl(Tr &tr)
     {
-        using it_t = decltype(boost::make_permutation_iterator(tr.m_parts[0].data(), tr.m_inv_perm.begin()));
+        auto retval = index_apply<NDim + 1u>([&tr](auto... I) {
+            return std::array{boost::make_permutation_iterator(tr.m_parts[I()].data(), tr.m_inv_perm.begin())...};
+        });
         // Ensure that the iterators we return can index up to the particle number.
-        it_diff_check<it_t>(tr.m_parts[0].size());
-        std::array<it_t, NDim + 1u> retval;
-        for (std::size_t j = 0; j < NDim + 1u; ++j) {
-            retval[j] = boost::make_permutation_iterator(tr.m_parts[j].data(), tr.m_inv_perm.begin());
-        }
+        it_diff_check<std::remove_reference_t<decltype(retval[0])>>(tr.m_parts[0].size());
         return retval;
     }
     template <typename Tr>
     static auto unord_p_its_impl(Tr &tr)
     {
-        using ptr_t = decltype(tr.m_parts[0].data());
-        std::array<ptr_t, NDim + 1u> retval;
-        for (std::size_t j = 0; j < NDim + 1u; ++j) {
-            retval[j] = tr.m_parts[j].data();
-        }
-        return retval;
+        return index_apply<NDim + 1u>([&tr](auto... I) { return std::array{tr.m_parts[I()].data()...}; });
     }
 
 public:
