@@ -48,28 +48,6 @@ bool rocm_has_accelerator()
     return hc::accelerator::get_all().size() > 1u;
 }
 
-// Helper to turn a tuple of values of the same type into an array.
-// NOTE: these tuple <-> array conversions are temporarily needed as hcc
-// does not seem to support capturing arrays of views in a parallel_for(), but
-// tuples are apparently ok.
-template <typename Tuple, std::size_t... I>
-inline auto t2a_impl(const Tuple &tup, std::index_sequence<I...>)
-#if defined(__HCC_ACCELERATOR__)
-    [[hc]]
-#endif
-{
-    return std::array<std::tuple_element_t<0, Tuple>, std::tuple_size_v<Tuple>>{std::get<I>(tup)...};
-}
-
-template <typename Tuple>
-inline auto t2a(const Tuple &tup)
-#if defined(__HCC_ACCELERATOR__)
-    [[hc]]
-#endif
-{
-    return t2a_impl(tup, std::make_index_sequence<std::tuple_size_v<Tuple>>{});
-}
-
 // Implementation of the rocm_state machinery. We will store in here views to
 // the internal vectors of a tree.
 template <std::size_t NDim, typename F, typename UInt, mac MAC>
@@ -154,8 +132,9 @@ void rocm_state<NDim, F, UInt, MAC>::acc_pot(int p_begin, int p_end,
         }
 
         // Turn the tuples of views back into arrays of views.
-        auto p_view = t2a(pt);
-        auto res_view = t2a(rt);
+        auto p_view = index_apply<NDim + 1u>([&pt](auto... I) { return std::array{std::get<I()>(pt)...}; });
+        auto res_view
+            = index_apply<tree_nvecs_res<Q, NDim>>([&rt](auto... I) { return std::array{std::get<I()>(rt)...}; });
 
         // Array of results, inited to zeroes.
         F res_array[tree_nvecs_res<Q, NDim>]{};
