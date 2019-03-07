@@ -270,8 +270,6 @@ int main(int argc, char **argv)
             tg.wait();
 
             while (true) {
-                std::cout << "First part pos: " << t.p_its_o()[0][0] << '\n';
-
                 // Compute the kicked velocities.
                 tbb::parallel_for(tbb::blocked_range(0ul, nparts), [&](const auto &range) {
                     for (auto i = range.begin(); i != range.end(); ++i) {
@@ -302,8 +300,8 @@ int main(int argc, char **argv)
                     const auto &lp = t.last_perm();
                     for (auto i = range.begin(); i != range.end(); ++i) {
                         x_vel[i] = std::fma(acc_its[0][i], half_timestep, kick_x_vel[lp[i]]);
-                        y_vel[i] = std::fma(acc_its[1][i], half_timestep, kick_x_vel[lp[i]]);
-                        z_vel[i] = std::fma(acc_its[2][i], half_timestep, kick_x_vel[lp[i]]);
+                        y_vel[i] = std::fma(acc_its[1][i], half_timestep, kick_y_vel[lp[i]]);
+                        z_vel[i] = std::fma(acc_its[2][i], half_timestep, kick_z_vel[lp[i]]);
                     }
                 });
             }
