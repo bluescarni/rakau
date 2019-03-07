@@ -292,6 +292,7 @@ int main(int argc, char **argv)
                 tbb::parallel_for(tbb::blocked_range(0ul, nparts), [&](const auto &range) {
                     const auto &lp = t.last_perm();
                     for (auto i = range.begin(); i != range.end(); ++i) {
+                        // NOTE: access the elements of kick_*_vel in the tree internal order.
                         x_vel[i] = std::fma(acc_its[0][i], half_timestep, kick_x_vel[lp[i]]);
                         y_vel[i] = std::fma(acc_its[1][i], half_timestep, kick_y_vel[lp[i]]);
                         z_vel[i] = std::fma(acc_its[2][i], half_timestep, kick_z_vel[lp[i]]);
