@@ -25,7 +25,6 @@
 
 #include <tbb/blocked_range.h>
 #include <tbb/parallel_for.h>
-#include <tbb/task_group.h>
 #include <tbb/task_scheduler_init.h>
 
 #include <rakau/tree.hpp>
@@ -255,19 +254,13 @@ int main(int argc, char **argv)
                 vec.swap(tmp_buffer);
             };
 
-            tbb::task_group tg;
-
             // Reorder the velocities according to the internal tree order.
-            tg.run([&]() {
-                reorder(x_vel);
-                reorder(y_vel);
-                reorder(z_vel);
-            });
+            reorder(x_vel);
+            reorder(y_vel);
+            reorder(z_vel);
 
-            // Concurrently, run the initial accelerations computation.
-            tg.run([&]() { t.accs_u(acc_its, mac_value, kwargs::split = split, kwargs::eps = eps); });
-
-            tg.wait();
+            // Run the initial accelerations computation.
+            t.accs_u(acc_its, mac_value, kwargs::split = split, kwargs::eps = eps);
 
             while (true) {
                 // Compute the kicked velocities.
