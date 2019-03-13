@@ -25,6 +25,7 @@
 
 #include <tbb/blocked_range.h>
 #include <tbb/parallel_for.h>
+#include <tbb/parallel_reduce.h>
 #include <tbb/task_scheduler_init.h>
 
 #include <rakau/tree.hpp>
@@ -112,6 +113,7 @@ int main(int argc, char **argv)
     double a, mac_value, timestep;
     std::vector<double> split;
     std::string fp_type, mac_type;
+    bool track_integrals = false;
 
     po::options_description desc("Allowed options");
     desc.add_options()("help", "produce help message")(
@@ -128,7 +130,8 @@ int main(int argc, char **argv)
         "fp_type", po::value<std::string>(&fp_type)->default_value("float"),
         "floating-point type to use in the computations")(
         "mac_type", po::value<std::string>(&mac_type)->default_value("bh"),
-        "MAC type")("timestep", po::value<double>(&timestep)->default_value(1E-4), "integration timestep");
+        "MAC type")("timestep", po::value<double>(&timestep)->default_value(1E-4),
+                    "integration timestep")("track-integrals", "track integrals of motion");
 
     po::variables_map vm;
     po::store(po::parse_command_line(argc, argv, desc), vm);
@@ -164,6 +167,10 @@ int main(int argc, char **argv)
     if (!std::isfinite(timestep) || timestep <= 0.) {
         throw std::invalid_argument("The integration timestep must be finite and positive, but it is "
                                     + std::to_string(timestep) + " instead");
+    }
+
+    if (vm.count("track-integrals")) {
+        track_integrals = true;
     }
 
     // Setup the number of threads.
@@ -231,6 +238,14 @@ int main(int argc, char **argv)
                 acc_z(boost::numeric_cast<typename std::vector<F>::size_type>(nparts));
             auto acc_its = std::array{acc_x.data(), acc_y.data(), acc_z.data()};
 
+            // Prepare the buffers to contain the potentials, if requested.
+            std::vector<F> pots;
+            std::array<F *, 4> acc_pot_its;
+            if (track_integrals) {
+                pots.resize(boost::numeric_cast<decltype(pots.size())>(nparts));
+                acc_pot_its = std::array{acc_x.data(), acc_y.data(), acc_z.data(), pots.data()};
+            }
+
             // Prepare the buffers to contain the kicked velocities.
             std::vector<F> kick_x_vel(boost::numeric_cast<typename std::vector<F>::size_type>(nparts)),
                 kick_y_vel(boost::numeric_cast<typename std::vector<F>::size_type>(nparts)),
@@ -259,10 +274,78 @@ int main(int argc, char **argv)
             reorder(y_vel);
             reorder(z_vel);
 
-            // Run the initial accelerations computation.
-            t.accs_u(acc_its, mac_value, kwargs::split = split, kwargs::eps = eps);
+            // Define a helper to compute the accelerations/potentials.
+            auto compute_accs_pots = [&]() {
+                if (track_integrals) {
+                    t.accs_pots_u(acc_pot_its, mac_value, kwargs::split = split, kwargs::eps = eps);
+                } else {
+                    t.accs_u(acc_its, mac_value, kwargs::split = split, kwargs::eps = eps);
+                }
+            };
+
+            // Run the initial accs/pots computation.
+            compute_accs_pots();
 
             while (true) {
+                // At the beginning of each timestep, compute the conserved quantities
+                // (if requested).
+                if (track_integrals) {
+                    auto p_its_u = t.p_its_u();
+
+                    // COM of the system.
+                    auto com = tbb::parallel_reduce(tbb::blocked_range(0ul, nparts), std::array{F(0), F(0), F(0)},
+                                                    [&](const auto &range, auto cur_com) {
+                                                        for (auto i = range.begin(); i != range.end(); ++i) {
+                                                            cur_com[0] += *(p_its_u[0] + i);
+                                                            cur_com[1] += *(p_its_u[1] + i);
+                                                            cur_com[2] += *(p_its_u[2] + i);
+                                                        }
+                                                        return cur_com;
+                                                    },
+                                                    [](const auto &a, const auto &b) {
+                                                        return std::array{a[0] + b[0], a[1] + b[1], a[2] + b[2]};
+                                                    });
+                    com[0] /= nparts;
+                    com[1] /= nparts;
+                    com[2] /= nparts;
+
+                    std::cout << "Centre of mass: " << com[0] << ", " << com[1] << ", " << com[2] << '\n';
+
+                    // COM velocity.
+                    auto com_v = tbb::parallel_reduce(tbb::blocked_range(0ul, nparts), std::array{F(0), F(0), F(0)},
+                                                      [&](const auto &range, auto cur_com_v) {
+                                                          for (auto i = range.begin(); i != range.end(); ++i) {
+                                                              cur_com_v[0] += x_vel[i];
+                                                              cur_com_v[1] += y_vel[i];
+                                                              cur_com_v[2] += z_vel[i];
+                                                          }
+                                                          return cur_com_v;
+                                                      },
+                                                      [](const auto &a, const auto &b) {
+                                                          return std::array{a[0] + b[0], a[1] + b[1], a[2] + b[2]};
+                                                      });
+                    com_v[0] /= nparts;
+                    com_v[1] /= nparts;
+                    com_v[2] /= nparts;
+
+                    std::cout << "Centre of mass velocity: " << com_v[0] << ", " << com_v[1] << ", " << com_v[2]
+                              << '\n';
+
+                    // Total energy.
+                    const auto tot_E = tbb::parallel_reduce(
+                        tbb::blocked_range(0ul, nparts), F(0),
+                        [&](const auto &range, auto cur_E) {
+                            for (auto i = range.begin(); i != range.end(); ++i) {
+                                const auto v2 = x_vel[i] * x_vel[i] + y_vel[i] * y_vel[i] + z_vel[i] * z_vel[i];
+                                cur_E += (F(1) / F(2)) * (F(1) / nparts) * v2 + pots[i];
+                            }
+                            return cur_E;
+                        },
+                        [](auto a, auto b) { return a + b; });
+
+                    std::cout << "Total energy: " << tot_E << '\n';
+                }
+
                 // Compute the kicked velocities.
                 tbb::parallel_for(tbb::blocked_range(0ul, nparts), [&](const auto &range) {
                     for (auto i = range.begin(); i != range.end(); ++i) {
@@ -285,8 +368,8 @@ int main(int argc, char **argv)
                     });
                 });
 
-                // Compute the accelerations in the new positions.
-                t.accs_u(acc_its, mac_value, kwargs::split = split, kwargs::eps = eps);
+                // Compute the accelerations/potentials in the new positions.
+                compute_accs_pots();
 
                 // Update the velocities.
                 tbb::parallel_for(tbb::blocked_range(0ul, nparts), [&](const auto &range) {
