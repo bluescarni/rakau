@@ -535,6 +535,27 @@ inline constexpr unsigned default_ncrit =
     128
 #endif
     ;
+
+// Return a vector of indices into the input vector of nodes, t,
+// representing the ordered set of leaf nodes.
+template <typename Nodes>
+inline auto coll_leaves_permutation(const Nodes &t)
+{
+    using idx_t = typename Nodes::size_type;
+
+    // Prepare the output.
+    std::vector<idx_t> retval;
+    retval.reserve(static_cast<decltype(retval.size())>(t.size()));
+
+    for (idx_t i = 0; i < t.size(); ++i) {
+        if (!t[i].n_children) {
+            retval.push_back(i);
+        }
+    }
+
+    return retval;
+}
+
 } // namespace detail
 
 namespace kwargs
