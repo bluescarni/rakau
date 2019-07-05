@@ -100,7 +100,7 @@ struct di_aligned_allocator {
     }
     // The construction function.
     template <typename U>
-    void construct(U *p) const
+    void construct(U *p) const noexcept(noexcept(::new (static_cast<void *>(p)) U))
     {
         // When no construction arguments are supplied, do default
         // initialisation rather than value initialisation.
@@ -108,6 +108,7 @@ struct di_aligned_allocator {
     }
     template <typename U, typename... Args>
     void construct(U *p, Args &&... args) const
+        noexcept(noexcept(::new (static_cast<void *>(p)) U(std::forward<Args>(args)...)))
     {
         // This is the standard std::allocator implementation.
         // http://en.cppreference.com/w/cpp/memory/allocator/construct
