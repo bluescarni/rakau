@@ -556,6 +556,109 @@ inline auto coll_leaves_permutation(const Nodes &t)
     return retval;
 }
 
+// Given a particle with position p_pos and a rectangular bounding box
+// whose edges have sizes aabb_sizes, return the list of
+// the vertices of the bounding box.
+// The coordinates of the returned
+// points will be clamped in the [min_coord, max_coord] range for
+// every dimension.
+template <typename F, std::size_t NDim>
+inline auto coll_get_aabb_vertices(const std::array<F, NDim> &p_pos, const std::array<F, NDim> &aabb_sizes,
+                                   const F &min_coord, const F &max_coord)
+{
+    // min/max coord must be finite.
+    assert(std::isfinite(min_coord) && std::isfinite(max_coord));
+    // min_coord < max_coord.
+    assert(min_coord < max_coord);
+    // p_pos must contain finite values in the [min_coord, max_coord] range.
+    assert(std::all_of(p_pos.begin(), p_pos.end(),
+                       [min_coord, max_coord](F x) { return std::isfinite(x) && x >= min_coord && x <= max_coord; }));
+    // aabb_sizes all finite and non-negative.
+    // NOTE: empty AABBs are allowed.
+    assert(std::all_of(aabb_sizes.begin(), aabb_sizes.end(), [](F x) { return std::isfinite(x) && x >= F(0); }));
+
+    // The number of vertices of the AABB is 2**NDim.
+    static_assert(NDim < unsigned(std::numeric_limits<std::size_t>::digits), "Overflow error.");
+    constexpr auto n_points = std::size_t(1) << NDim;
+
+    // Compute the min/max coordinates of the AABB (in 2D, the lower-left
+    // and upper-right corners of the AABB).
+    // NOTE: these will *not* be clamped.
+    const auto aabb_minmax_coords = [&aabb_sizes, &p_pos]() {
+        std::array<std::array<F, NDim>, 2> retval;
+
+        for (std::size_t i = 0; i < NDim; ++i) {
+            const auto min_c = fma_wrap(aabb_sizes[i], -F(1) / F(2), p_pos[i]);
+            const auto max_c = fma_wrap(aabb_sizes[i], F(1) / F(2), p_pos[i]);
+
+            // Check them.
+            if (rakau_unlikely(!std::isfinite(min_c) || !std::isfinite(max_c) || min_c > max_c)) {
+                throw std::invalid_argument(
+                    "The computation of the min/max coordinates of an AABB produced the invalid pair of values ("
+                    + std::to_string(min_c) + ", " + std::to_string(max_c) + ")");
+            }
+
+            retval[0][i] = min_c;
+            retval[1][i] = max_c;
+        }
+
+        return retval;
+    }();
+
+    // The coordinates of all the points of the AABB.
+    std::array<std::array<F, NDim>, n_points> aabb_points;
+
+    // Fill in aabb_points. The idea here is that
+    // we need to generate all the 2**NDim possible combinations of min/max
+    // aabb coordinates. We do it via the bit-level representation
+    // of the numbers from 0 to 2**NDim - 1u. For instance, in 3 dimensions,
+    // we have the numbers from 0 to 7 included:
+    //
+    // 0 0 0 | i = 0
+    // 0 0 1 | i = 1
+    // 0 1 0 | i = 2
+    // 0 1 1 | i = 3
+    // ...
+    // 1 1 1 | i = 7
+    //
+    // We interpret a zero bit as setting the min aabb coordinate,
+    // a one bit as setting the max aabb coordinate. So, for instance,
+    // i = 3 corresponds to the aabb point (min, max, max).
+    for (std::size_t i = 0; i < n_points; ++i) {
+        for (std::size_t j = 0; j < NDim; ++j) {
+            const auto idx = (i >> j) & 1u;
+            // NOTE: we asserted that min_coord < max_coord, and that they
+            // are finite. Moreover, we also checked that aabb_minmax_coords[idx][j]
+            // is a finite value. Gonna assume that std::clamp() does not do anything weird
+            // FP-wise, so we don't check its output.
+            aabb_points[i][j] = std::clamp(aabb_minmax_coords[idx][j], min_coord, max_coord);
+        }
+    }
+
+    return aabb_points;
+
+    // // The [min, max] coordinates allowed for the aabb points.
+    // const auto min_coord = -b_size / 2;
+    // // NOTE: the domain size in a tree is understood to be a half-open range,
+    // // thus the maximum coordinate is not b_size / 2 but the number
+    // // immediately before it.
+    // const auto max_coord = std::nextafter(b_size / 2, F(-1));
+
+    // // Get the coordinates of the NDim * 2 points of the bounding box.
+    // std::array<std::array<std::array<F, NDim>, 2>, NDim> bb_points;
+    // for (std::size_t i = 0; i < NDim; ++i) {
+    //     // Size of the aabb in the i-th dimension.
+    //     const auto size = aabb[i];
+
+    //     // The
+    //     auto &bb_min = bb_points[i][0];
+    //     auto &bb_max = bb_points[i][1];
+
+    //     for (std::size_t j = 0; j < NDim; ++j) {
+    //     }
+    // }
+}
+
 } // namespace detail
 
 namespace kwargs
