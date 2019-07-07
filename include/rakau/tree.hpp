@@ -1381,11 +1381,12 @@ private:
                 }
             }
             // Generate the initial m_perm data (this is just a iota).
-            tbb::parallel_for(tbb::blocked_range(size_type(0), np, boost::numeric_cast<size_type>(data_chunking)),
-                              [this](const auto &range) {
-                                  std::iota(m_perm.data() + range.begin(), m_perm.data() + range.end(), range.begin());
-                              },
-                              tbb::simple_partitioner());
+            tbb::parallel_for(
+                tbb::blocked_range(size_type(0), np, boost::numeric_cast<size_type>(data_chunking)),
+                [this](const auto &range) {
+                    std::iota(m_perm.data() + range.begin(), m_perm.data() + range.end(), range.begin());
+                },
+                tbb::simple_partitioner());
         }
 
         // Deduce the box size, if needed.
@@ -1430,12 +1431,13 @@ private:
             tg.run([this]() { perm_to_inv_perm(); });
             // Copy over m_perm to m_last_perm.
             tg.run([this, np]() {
-                tbb::parallel_for(tbb::blocked_range(size_type(0), np, boost::numeric_cast<size_type>(data_chunking)),
-                                  [this](const auto &range) {
-                                      std::copy(m_perm.data() + range.begin(), m_perm.data() + range.end(),
-                                                m_last_perm.data() + range.begin());
-                                  },
-                                  tbb::simple_partitioner());
+                tbb::parallel_for(
+                    tbb::blocked_range(size_type(0), np, boost::numeric_cast<size_type>(data_chunking)),
+                    [this](const auto &range) {
+                        std::copy(m_perm.data() + range.begin(), m_perm.data() + range.end(),
+                                  m_last_perm.data() + range.begin());
+                    },
+                    tbb::simple_partitioner());
             });
             tg.wait();
         }
@@ -2991,8 +2993,8 @@ private:
 
         if constexpr ((NDim == 3u || NDim == 2u)
                       && std::conjunction_v<
-                             std::disjunction<std::is_same<UInt, std::uint64_t>, std::is_same<UInt, std::uint32_t>>,
-                             std::disjunction<std::is_same<F, float>, std::is_same<F, double>>>) {
+                          std::disjunction<std::is_same<UInt, std::uint64_t>, std::is_same<UInt, std::uint32_t>>,
+                          std::disjunction<std::is_same<F, float>, std::is_same<F, double>>>) {
             if (m_rocm && split.size() == 2u) {
                 // Actually run the ROCm implementation only if we have an accelerator and split contains 2 entries.
 
@@ -3097,8 +3099,8 @@ private:
 
         if constexpr ((NDim == 3u || NDim == 2u)
                       && std::conjunction_v<
-                             std::disjunction<std::is_same<UInt, std::uint64_t>, std::is_same<UInt, std::uint32_t>>,
-                             std::disjunction<std::is_same<F, float>, std::is_same<F, double>>>) {
+                          std::disjunction<std::is_same<UInt, std::uint64_t>, std::is_same<UInt, std::uint32_t>>,
+                          std::disjunction<std::is_same<F, float>, std::is_same<F, double>>>) {
             if (split.size() > 1u) {
                 const auto np = nparts();
 
@@ -3610,12 +3612,12 @@ private:
         });
 
         // Reset m_last_perm to a iota.
-        tbb::parallel_for(tbb::blocked_range(size_type(0), nparts, boost::numeric_cast<size_type>(data_chunking)),
-                          [this](const auto &range) {
-                              std::iota(m_last_perm.data() + range.begin(), m_last_perm.data() + range.end(),
-                                        range.begin());
-                          },
-                          tbb::simple_partitioner());
+        tbb::parallel_for(
+            tbb::blocked_range(size_type(0), nparts, boost::numeric_cast<size_type>(data_chunking)),
+            [this](const auto &range) {
+                std::iota(m_last_perm.data() + range.begin(), m_last_perm.data() + range.end(), range.begin());
+            },
+            tbb::simple_partitioner());
         // Do the indirect sorting onto m_last_perm.
         indirect_code_sort(m_last_perm.begin(), m_last_perm.end());
         {
