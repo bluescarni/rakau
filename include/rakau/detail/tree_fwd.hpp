@@ -141,7 +141,7 @@ inline constexpr std::size_t tree_nvecs_res = compute_tree_nvecs_res<Q, NDim>();
 template <typename UInt, std::size_t NDim>
 constexpr auto compute_cbits_v()
 {
-    constexpr unsigned nbits = std::numeric_limits<UInt>::digits;
+    constexpr auto nbits = static_cast<unsigned>(std::numeric_limits<UInt>::digits);
     static_assert(nbits > NDim, "The number of bits must be greater than the number of dimensions.");
     return static_cast<UInt>(nbits / NDim - !(nbits % NDim));
 }
