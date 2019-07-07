@@ -699,6 +699,77 @@ inline auto coll_get_aabb_vertices(const std::array<F, NDim> &p_pos, const std::
     // }
 }
 
+// Given:
+//
+// - a particle p_pos,
+// - the level of the leaf node in which the
+//   particle resides (llevel),
+// - a bounding box with sizes aabb_sizes,
+// - a domain size of 1/inv_box_size,
+//
+// compute the code of the smallest node not smaller than the leaf node
+// that contains the particle and its aabb (that is, the return
+// value will be the code of the leaf node or of one of its ancestors).
+// min_coord and max_coord can be inferred by inv_box_size, hence they are redundant,
+// but we pass them in to avoid re-computing them at every invocation.
+template <typename F, std::size_t NDim, typename UInt>
+inline UInt coll_get_enclosing_node(const std::array<F, NDim> &p_pos, const UInt &llevel,
+                                    const std::array<F, NDim> &aabb_sizes, const F &min_coord, const F &max_coord,
+                                    const F &inv_box_size)
+{
+    // The number of vertices of the AABB is 2**NDim.
+    static_assert(NDim < unsigned(std::numeric_limits<std::size_t>::digits), "Overflow error.");
+    constexpr auto n_points = std::size_t(1) << NDim;
+
+    // Get the list of vertices of the AABB.
+    const auto aabb_vertices = coll_get_aabb_vertices(p_pos, aabb_sizes, min_coord, max_coord);
+
+    // Compute their codes, and shift them down by (cbits - llevel) * NDim.
+    // We do this because we want to produce a nodal code
+    // whose level is llevel or lower, thus we already know we need
+    // to throw away some information from the lower bits of the AABB codes.
+    const auto shift_amount = (cbits_v<UInt, NDim> - llevel) * NDim;
+    std::array<UInt, n_points> aabb_codes;
+    std::array<UInt, NDim> tmp;
+    morton_encoder<NDim, UInt> me;
+    for (std::size_t i = 0; i < n_points; ++i) {
+        for (std::size_t j = 0; i < NDim; ++j) {
+            tmp[j] = disc_single_coord<NDim, UInt>(aabb_vertices[i][j], inv_box_size);
+        }
+        const auto code = me(tmp.data());
+        aabb_codes[i] = code >> shift_amount;
+    }
+
+    // Small helper to check if all codes in aabb_codes are equal.
+    auto check_equal_aabb_codes = [&aabb_codes]() {
+        const auto cmp = aabb_codes[0];
+        for (std::size_t i = 1; i < n_points; ++i) {
+            if (aabb_codes[i] != cmp) {
+                return false;
+            }
+        }
+        return true;
+    };
+
+    // The level of the output node. It will be
+    // llevel or lower.
+    auto out_level = llevel;
+
+    // Keep on shifting down the codes until they are all the same.
+    // In other words, establish the common prefix of all codes.
+    while (!check_equal_aabb_codes()) {
+        for (auto &c : aabb_codes) {
+            c >>= NDim;
+        }
+        assert(out_level > 0u);
+        --out_level;
+    }
+
+    // We have now the common prefix. Add a 1 bit on top
+    // to produce the nodal code and return it.
+    return aabb_codes[0] + (UInt(1) << (out_level * NDim));
+}
+
 } // namespace detail
 
 namespace kwargs
