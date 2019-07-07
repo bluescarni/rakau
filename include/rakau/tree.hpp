@@ -370,6 +370,46 @@ struct morton_decoder<2, std::uint32_t> {
     }
 };
 
+// Discretize a coordinate in a square domain of size 1/inv_box_size.
+template <std::size_t NDim, typename UInt, typename F>
+inline UInt disc_single_coord(const F &x, const F &inv_box_size)
+{
+    constexpr UInt factor = UInt(1) << cbits_v<UInt, NDim>;
+
+    // Translate and rescale the coordinate so that -box_size/2 becomes zero
+    // and box_size/2 becomes 1.
+    auto tmp = fma_wrap(x, inv_box_size, F(1) / F(2));
+    // Rescale by factor.
+    tmp *= F(factor);
+
+    // Check: don't end up with a nonfinite value.
+    if (rakau_unlikely(!std::isfinite(tmp))) {
+        throw std::invalid_argument("While trying to discretise the input coordinate " + std::to_string(x)
+                                    + " in a box of size " + std::to_string(F(1) / inv_box_size)
+                                    + ", the non-finite value " + std::to_string(tmp) + " was generated");
+    }
+    // Check: don't end up outside the [0, factor) range.
+    if (rakau_unlikely(tmp < F(0) || tmp >= F(factor))) {
+        throw std::invalid_argument("The discretisation of the input coordinate " + std::to_string(x)
+                                    + " in a box of size " + std::to_string(F(1) / inv_box_size)
+                                    + " produced the floating-point value " + std::to_string(tmp)
+                                    + ", which is outside the allowed bounds");
+    }
+
+    // Cast to UInt.
+    auto retval = static_cast<UInt>(tmp);
+
+    // Last check, make sure we don't overflow.
+    if (rakau_unlikely(retval >= factor)) {
+        throw std::invalid_argument("The discretisation of the input coordinate " + std::to_string(x)
+                                    + " in a box of size " + std::to_string(F(1) / inv_box_size)
+                                    + " produced the integral value " + std::to_string(retval)
+                                    + ", which is outside the allowed bounds");
+    }
+
+    return retval;
+}
+
 // Small function to compare nodal codes.
 template <std::size_t NDim, typename UInt>
 inline bool node_compare(UInt n1, UInt n2)
@@ -1295,39 +1335,10 @@ private:
     }
     // Discretize the coordinates of the particle at index idx. The result will
     // be written into retval.
-    void disc_coords(std::array<UInt, NDim> &retval, size_type idx) const
+    void disc_coords(std::array<UInt, NDim> &retval, size_type idx, const F &inv_box_size) const
     {
-        constexpr UInt factor = UInt(1) << cbits;
         for (std::size_t j = 0; j < NDim; ++j) {
-            // Load the coordinate locally.
-            const auto x = m_parts[j][idx];
-            // Translate and rescale the coordinate so that -box_size/2 becomes zero
-            // and box_size/2 becomes 1.
-            auto tmp = x / m_box_size + F(1) / F(2);
-            // Rescale by factor.
-            tmp *= factor;
-            // Check: don't end up with a nonfinite value.
-            if (rakau_unlikely(!std::isfinite(tmp))) {
-                throw std::invalid_argument("While trying to discretise the input coordinate " + std::to_string(x)
-                                            + " in a box of size " + std::to_string(m_box_size)
-                                            + ", the non-finite value " + std::to_string(tmp) + " was generated");
-            }
-            // Check: don't end up outside the [0, factor) range.
-            if (rakau_unlikely(tmp < F(0) || tmp >= F(factor))) {
-                throw std::invalid_argument("The discretisation of the input coordinate " + std::to_string(x)
-                                            + " in a box of size " + std::to_string(m_box_size)
-                                            + " produced the floating-point value " + std::to_string(tmp)
-                                            + ", which is outside the allowed bounds");
-            }
-            // Cast to UInt and write to retval.
-            retval[j] = static_cast<UInt>(tmp);
-            // Last check, make sure we don't overflow.
-            if (rakau_unlikely(retval[j] >= factor)) {
-                throw std::invalid_argument("The discretisation of the input coordinate " + std::to_string(x)
-                                            + " in a box of size " + std::to_string(m_box_size)
-                                            + " produced the integral value " + std::to_string(retval[j])
-                                            + ", which is outside the allowed bounds");
-            }
+            retval[j] = detail::disc_single_coord<NDim, UInt>(m_parts[j][idx], inv_box_size);
         }
     }
     // Small helper to determine m_inv_perm based on the indirect sorting vector m_perm.
@@ -1396,7 +1407,7 @@ private:
         // Pick the max of the NDim coordinates, multiply by 2 to get the box size.
         auto retval = *std::max_element(mc.begin(), mc.end()) * F(2);
         // Add a 5% slack.
-        retval += retval * (F(1) / F(20));
+        retval = fma_wrap(retval, F(1) / F(20), retval);
         // Final check.
         if (!std::isfinite(retval)) {
             throw std::invalid_argument("The automatic deduction of the domain size produced the non-finite value "
@@ -1519,16 +1530,19 @@ private:
             m_box_size = determine_box_size(p_its_u(), np);
         }
 
+        // Compute the inverse of the box size for discretisation.
+        const auto inv_box_size = F(1) / m_box_size;
+
         {
             // Do the Morton encoding.
             simple_timer st_m("morton encoding");
-            tbb::parallel_for(tbb::blocked_range(size_type(0), np), [this](const auto &range) {
+            tbb::parallel_for(tbb::blocked_range(size_type(0), np), [this, inv_box_size](const auto &range) {
                 // Temporary structure used in the encoding.
                 std::array<UInt, NDim> tmp_dcoord;
                 // The encoder object.
                 morton_encoder<NDim, UInt> me;
                 for (auto i = range.begin(); i != range.end(); ++i) {
-                    disc_coords(tmp_dcoord, i);
+                    disc_coords(tmp_dcoord, i, inv_box_size);
                     m_codes[i] = me(tmp_dcoord.data());
                 }
             });
@@ -1935,12 +1949,14 @@ public:
         // to the correct Morton code.
         std::array<UInt, NDim> tmp_dcoord;
         morton_encoder<NDim, UInt> me;
+        // Compute the inverse of the box size for discretisation.
+        const auto inv_box_size = F(1) / m_box_size;
         for (size_type i = 0; i < m_parts[NDim].size(); ++i) {
             for (std::size_t j = 0; j < NDim; ++j) {
                 assert(m_parts[j][i] < m_box_size / F(2));
                 assert(m_parts[j][i] >= -m_box_size / F(2));
             }
-            disc_coords(tmp_dcoord, i);
+            disc_coords(tmp_dcoord, i, inv_box_size);
             assert(m_codes[i] == me(tmp_dcoord.data()));
         }
         // m_inv_perm and m_perm are consistent with each other.
@@ -3726,12 +3742,15 @@ private:
             m_box_size = determine_box_size(p_its_u(), nparts);
         }
 
+        // Compute the inverse of the box size for discretisation.
+        const auto inv_box_size = F(1) / m_box_size;
+
         // Establish the new codes.
-        tbb::parallel_for(tbb::blocked_range(size_type(0), nparts), [this](const auto &range) {
+        tbb::parallel_for(tbb::blocked_range(size_type(0), nparts), [this, inv_box_size](const auto &range) {
             std::array<UInt, NDim> tmp_dcoord;
             morton_encoder<NDim, UInt> me;
             for (auto i = range.begin(); i != range.end(); ++i) {
-                disc_coords(tmp_dcoord, i);
+                disc_coords(tmp_dcoord, i, inv_box_size);
                 m_codes[i] = me(tmp_dcoord.data());
             }
         });
