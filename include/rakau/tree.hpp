@@ -402,7 +402,7 @@ inline void get_node_centre(F (&out)[NDim], UInt node_code, F box_size)
     const auto c_code = static_cast<UInt>((node_code - (UInt(1) << (node_level * NDim)))
                                           << ((cbits_v<UInt, NDim> - node_level) * NDim));
     // Get the size/2 of the node.
-    const auto node_dim_2 = get_node_dim(node_level, box_size) / 2;
+    const auto node_dim_2 = get_node_dim(node_level, box_size) * (F(1) / F(2));
     // Get the size of the cell.
     const auto cell_size = box_size / static_cast<F>(UInt(1) << cbits_v<UInt, NDim>);
 
@@ -419,7 +419,7 @@ inline void get_node_centre(F (&out)[NDim], UInt node_code, F box_size)
     // - offset by -box_size/2 to refer everything to the centre of the box,
     // - add half of the node dimension to reach the centre of the node.
     for (std::size_t j = 0; j < NDim; ++j) {
-        out[j] = fma_wrap(static_cast<F>(d_code[j]), cell_size, node_dim_2 - box_size / 2);
+        out[j] = fma_wrap(static_cast<F>(d_code[j]), cell_size, node_dim_2 - box_size * (F(1) / F(2)));
     }
 }
 
