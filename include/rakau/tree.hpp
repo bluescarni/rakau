@@ -3781,6 +3781,18 @@ public:
     {
         return ord_p_its_impl(*this);
     }
+    auto c_it_u() const
+    {
+        return m_codes.data();
+    }
+    auto c_it_o() const
+    {
+        auto retval = boost::make_permutation_iterator(m_codes.data(), m_inv_perm.begin());
+        // Ensure that the iterator we return can index up to the particle number.
+        it_diff_check<decltype(retval)>(m_parts[0].size());
+
+        return retval;
+    }
     const auto &perm() const
     {
         return m_perm;
