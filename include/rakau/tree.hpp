@@ -404,7 +404,7 @@ inline void get_node_centre(F (&out)[NDim], UInt node_code, F box_size)
     // Get the size/2 of the node.
     const auto node_dim_2 = get_node_dim(node_level, box_size) * (F(1) / F(2));
     // Get the size of the cell.
-    const auto cell_size = box_size / static_cast<F>(UInt(1) << cbits_v<UInt, NDim>);
+    const auto cell_size = box_size * (F(1) / static_cast<F>(UInt(1) << cbits_v<UInt, NDim>));
 
     // Do the decoding. This will produce the discretized coordinates
     // of the first cell in the node.
@@ -1200,7 +1200,7 @@ private:
             const auto x = m_parts[j][idx];
             // Translate and rescale the coordinate so that -box_size/2 becomes zero
             // and box_size/2 becomes 1.
-            auto tmp = x / m_box_size + F(.5);
+            auto tmp = x / m_box_size + F(1) / F(2);
             // Rescale by factor.
             tmp *= factor;
             // Check: don't end up with a nonfinite value.
@@ -1293,7 +1293,7 @@ private:
         // Pick the max of the NDim coordinates, multiply by 2 to get the box size.
         auto retval = *std::max_element(mc.begin(), mc.end()) * F(2);
         // Add a 5% slack.
-        retval += retval / F(20);
+        retval += retval * (F(1) / F(20));
         // Final check.
         if (!std::isfinite(retval)) {
             throw std::invalid_argument("The automatic deduction of the domain size produced the non-finite value "
@@ -2878,7 +2878,8 @@ private:
             const auto pad_coord = [this, mac_value]() {
                 if constexpr (MAC == mac::bh) {
                     // NOTE: for the bh mac, mac_value is theta**-2.
-                    const auto M = m_box_size / (std::sqrt(F(1) / mac_value) * std::sqrt(F(NDim))) + m_box_size / F(2);
+                    const auto M
+                        = m_box_size / (std::sqrt(F(1) / mac_value) * std::sqrt(F(NDim))) + m_box_size * (F(1) / F(2));
                     // NOTE: M is mathematically always >= m_box_size / F(2), which puts it on the top right
                     // corner of the box for theta2 == inf. To make it completely safe with respect to the requirement
                     // of avoiding singularities in the self interaction routine, we double it.
