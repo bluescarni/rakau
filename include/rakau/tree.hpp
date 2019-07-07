@@ -769,6 +769,18 @@ inline UInt coll_get_enclosing_node(const std::array<F, NDim> &p_pos, const UInt
     // to produce the nodal code and return it.
     auto retval = aabb_codes[0] + (UInt(1) << (out_level * NDim));
 
+#if !defined(NDEBUG)
+    // Check that the original particle code starts with
+    // aabb_codes[0] (the common prefix).
+    for (std::size_t i = 0; i < NDim; ++i) {
+        tmp[i] = disc_single_coord<NDim, UInt>(p_pos[i], inv_box_size);
+    }
+    auto orig_code = morton_encoder<NDim, UInt>{}(tmp.data());
+    // Shift it down the required number of levels.
+    orig_code >>= (cbits_v<UInt, NDim> - out_level) * NDim;
+    assert(orig_code == aabb_codes[0]);
+#endif
+
     return retval;
 }
 
