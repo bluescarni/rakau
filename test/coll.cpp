@@ -13,17 +13,13 @@
 
 #include <algorithm>
 #include <array>
+#include <cstddef>
 #include <initializer_list>
 #include <numeric>
 #include <random>
 #include <tuple>
-// #include <type_traits>
-// #include <vector>
 
 #include <boost/iterator/permutation_iterator.hpp>
-// #include <boost/tuple/tuple.hpp>
-
-// #include <rakau/config.hpp>
 
 #include "test_utils.hpp"
 
@@ -145,4 +141,51 @@ TEST_CASE("coll_get_aabb_vertices_2d")
     REQUIRE(std::find(ret.begin(), ret.end(), v2d{10., -10.}) != ret.end());
     REQUIRE(std::find(ret.begin(), ret.end(), v2d{-10., -10.}) != ret.end());
     REQUIRE(std::find(ret.begin(), ret.end(), v2d{10., 10.}) != ret.end());
+}
+
+TEST_CASE("coll_get_enclosing_node_2d")
+{
+    using v2d = std::array<double, 2>;
+
+    // Particle at the origin, straddling all 4 children.
+    v2d pos{0., 0.};
+    v2d aabb_sizes{1., 1.};
+
+    auto ncode = detail::coll_get_enclosing_node(pos, std::size_t(0), aabb_sizes, -5., 5., .0625);
+    REQUIRE(ncode == 1u);
+
+    // Move it only slightly, still straddling.
+    pos = {.1, .1};
+    ncode = detail::coll_get_enclosing_node(pos, std::size_t(1), aabb_sizes, -5., 5., .0625);
+    REQUIRE(ncode == 1u);
+
+    // Place it fully in all quadrants..
+    pos = {1., 1.};
+    ncode = detail::coll_get_enclosing_node(pos, std::size_t(1), aabb_sizes, -5., 5., .0625);
+    REQUIRE(ncode == 7u);
+
+    pos = {-1., 1.};
+    ncode = detail::coll_get_enclosing_node(pos, std::size_t(1), aabb_sizes, -5., 5., .0625);
+    REQUIRE(ncode == 6u);
+
+    pos = {-1., -1.};
+    ncode = detail::coll_get_enclosing_node(pos, std::size_t(1), aabb_sizes, -5., 5., .0625);
+    REQUIRE(ncode == 4u);
+
+    // Straddle 2 quadrants.
+    pos = {1., 0.};
+    ncode = detail::coll_get_enclosing_node(pos, std::size_t(1), aabb_sizes, -5., 5., .0625);
+    REQUIRE(ncode == 1u);
+
+    pos = {0., 1.};
+    ncode = detail::coll_get_enclosing_node(pos, std::size_t(1), aabb_sizes, -5., 5., .0625);
+    REQUIRE(ncode == 1u);
+
+    pos = {-1., 0.};
+    ncode = detail::coll_get_enclosing_node(pos, std::size_t(1), aabb_sizes, -5., 5., .0625);
+    REQUIRE(ncode == 1u);
+
+    pos = {0., -1.};
+    ncode = detail::coll_get_enclosing_node(pos, std::size_t(1), aabb_sizes, -5., 5., .0625);
+    REQUIRE(ncode == 1u);
 }

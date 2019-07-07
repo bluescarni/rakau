@@ -733,7 +733,7 @@ inline UInt coll_get_enclosing_node(const std::array<F, NDim> &p_pos, const UInt
     std::array<UInt, NDim> tmp;
     morton_encoder<NDim, UInt> me;
     for (std::size_t i = 0; i < n_points; ++i) {
-        for (std::size_t j = 0; i < NDim; ++j) {
+        for (std::size_t j = 0; j < NDim; ++j) {
             tmp[j] = disc_single_coord<NDim, UInt>(aabb_vertices[i][j], inv_box_size);
         }
         const auto code = me(tmp.data());
@@ -767,7 +767,9 @@ inline UInt coll_get_enclosing_node(const std::array<F, NDim> &p_pos, const UInt
 
     // We have now the common prefix. Add a 1 bit on top
     // to produce the nodal code and return it.
-    return aabb_codes[0] + (UInt(1) << (out_level * NDim));
+    auto retval = aabb_codes[0] + (UInt(1) << (out_level * NDim));
+
+    return retval;
 }
 
 } // namespace detail
