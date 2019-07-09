@@ -370,6 +370,46 @@ struct morton_decoder<2, std::uint32_t> {
     }
 };
 
+// Discretize a coordinate in a square domain of size 1/inv_box_size.
+template <std::size_t NDim, typename UInt, typename F>
+inline UInt disc_single_coord(const F &x, const F &inv_box_size)
+{
+    constexpr UInt factor = UInt(1) << cbits_v<UInt, NDim>;
+
+    // Translate and rescale the coordinate so that -box_size/2 becomes zero
+    // and box_size/2 becomes 1.
+    auto tmp = fma_wrap(x, inv_box_size, F(1) / F(2));
+    // Rescale by factor.
+    tmp *= F(factor);
+
+    // Check: don't end up with a nonfinite value.
+    if (rakau_unlikely(!std::isfinite(tmp))) {
+        throw std::invalid_argument("While trying to discretise the input coordinate " + std::to_string(x)
+                                    + " in a box of size " + std::to_string(F(1) / inv_box_size)
+                                    + ", the non-finite value " + std::to_string(tmp) + " was generated");
+    }
+    // Check: don't end up outside the [0, factor) range.
+    if (rakau_unlikely(tmp < F(0) || tmp >= F(factor))) {
+        throw std::invalid_argument("The discretisation of the input coordinate " + std::to_string(x)
+                                    + " in a box of size " + std::to_string(F(1) / inv_box_size)
+                                    + " produced the floating-point value " + std::to_string(tmp)
+                                    + ", which is outside the allowed bounds");
+    }
+
+    // Cast to UInt.
+    auto retval = static_cast<UInt>(tmp);
+
+    // Last check, make sure we don't overflow.
+    if (rakau_unlikely(retval >= factor)) {
+        throw std::invalid_argument("The discretisation of the input coordinate " + std::to_string(x)
+                                    + " in a box of size " + std::to_string(F(1) / inv_box_size)
+                                    + " produced the integral value " + std::to_string(retval)
+                                    + ", which is outside the allowed bounds");
+    }
+
+    return retval;
+}
+
 // Small function to compare nodal codes.
 template <std::size_t NDim, typename UInt>
 inline bool node_compare(UInt n1, UInt n2)
@@ -402,9 +442,9 @@ inline void get_node_centre(F (&out)[NDim], UInt node_code, F box_size)
     const auto c_code = static_cast<UInt>((node_code - (UInt(1) << (node_level * NDim)))
                                           << ((cbits_v<UInt, NDim> - node_level) * NDim));
     // Get the size/2 of the node.
-    const auto node_dim_2 = get_node_dim(node_level, box_size) / 2;
+    const auto node_dim_2 = get_node_dim(node_level, box_size) * (F(1) / F(2));
     // Get the size of the cell.
-    const auto cell_size = box_size / static_cast<F>(UInt(1) << cbits_v<UInt, NDim>);
+    const auto cell_size = box_size * (F(1) / static_cast<F>(UInt(1) << cbits_v<UInt, NDim>));
 
     // Do the decoding. This will produce the discretized coordinates
     // of the first cell in the node.
@@ -419,7 +459,7 @@ inline void get_node_centre(F (&out)[NDim], UInt node_code, F box_size)
     // - offset by -box_size/2 to refer everything to the centre of the box,
     // - add half of the node dimension to reach the centre of the node.
     for (std::size_t j = 0; j < NDim; ++j) {
-        out[j] = fma_wrap(static_cast<F>(d_code[j]), cell_size, node_dim_2 - box_size / 2);
+        out[j] = fma_wrap(static_cast<F>(d_code[j]), cell_size, node_dim_2 - box_size * (F(1) / F(2)));
     }
 }
 
@@ -1171,39 +1211,10 @@ private:
     }
     // Discretize the coordinates of the particle at index idx. The result will
     // be written into retval.
-    void disc_coords(std::array<UInt, NDim> &retval, size_type idx) const
+    void disc_coords(std::array<UInt, NDim> &retval, size_type idx, const F &inv_box_size) const
     {
-        constexpr UInt factor = UInt(1) << cbits;
         for (std::size_t j = 0; j < NDim; ++j) {
-            // Load the coordinate locally.
-            const auto x = m_parts[j][idx];
-            // Translate and rescale the coordinate so that -box_size/2 becomes zero
-            // and box_size/2 becomes 1.
-            auto tmp = x / m_box_size + F(.5);
-            // Rescale by factor.
-            tmp *= factor;
-            // Check: don't end up with a nonfinite value.
-            if (rakau_unlikely(!std::isfinite(tmp))) {
-                throw std::invalid_argument("While trying to discretise the input coordinate " + std::to_string(x)
-                                            + " in a box of size " + std::to_string(m_box_size)
-                                            + ", the non-finite value " + std::to_string(tmp) + " was generated");
-            }
-            // Check: don't end up outside the [0, factor) range.
-            if (rakau_unlikely(tmp < F(0) || tmp >= F(factor))) {
-                throw std::invalid_argument("The discretisation of the input coordinate " + std::to_string(x)
-                                            + " in a box of size " + std::to_string(m_box_size)
-                                            + " produced the floating-point value " + std::to_string(tmp)
-                                            + ", which is outside the allowed bounds");
-            }
-            // Cast to UInt and write to retval.
-            retval[j] = static_cast<UInt>(tmp);
-            // Last check, make sure we don't overflow.
-            if (rakau_unlikely(retval[j] >= factor)) {
-                throw std::invalid_argument("The discretisation of the input coordinate " + std::to_string(x)
-                                            + " in a box of size " + std::to_string(m_box_size)
-                                            + " produced the integral value " + std::to_string(retval[j])
-                                            + ", which is outside the allowed bounds");
-            }
+            retval[j] = detail::disc_single_coord<NDim, UInt>(m_parts[j][idx], inv_box_size);
         }
     }
     // Small helper to determine m_inv_perm based on the indirect sorting vector m_perm.
@@ -1272,7 +1283,7 @@ private:
         // Pick the max of the NDim coordinates, multiply by 2 to get the box size.
         auto retval = *std::max_element(mc.begin(), mc.end()) * F(2);
         // Add a 5% slack.
-        retval += retval / F(20);
+        retval = fma_wrap(retval, F(1) / F(20), retval);
         // Final check.
         if (!std::isfinite(retval)) {
             throw std::invalid_argument("The automatic deduction of the domain size produced the non-finite value "
@@ -1381,11 +1392,12 @@ private:
                 }
             }
             // Generate the initial m_perm data (this is just a iota).
-            tbb::parallel_for(tbb::blocked_range(size_type(0), np, boost::numeric_cast<size_type>(data_chunking)),
-                              [this](const auto &range) {
-                                  std::iota(m_perm.data() + range.begin(), m_perm.data() + range.end(), range.begin());
-                              },
-                              tbb::simple_partitioner());
+            tbb::parallel_for(
+                tbb::blocked_range(size_type(0), np, boost::numeric_cast<size_type>(data_chunking)),
+                [this](const auto &range) {
+                    std::iota(m_perm.data() + range.begin(), m_perm.data() + range.end(), range.begin());
+                },
+                tbb::simple_partitioner());
         }
 
         // Deduce the box size, if needed.
@@ -1394,16 +1406,19 @@ private:
             m_box_size = determine_box_size(p_its_u(), np);
         }
 
+        // Compute the inverse of the box size for discretisation.
+        const auto inv_box_size = F(1) / m_box_size;
+
         {
             // Do the Morton encoding.
             simple_timer st_m("morton encoding");
-            tbb::parallel_for(tbb::blocked_range(size_type(0), np), [this](const auto &range) {
+            tbb::parallel_for(tbb::blocked_range(size_type(0), np), [this, inv_box_size](const auto &range) {
                 // Temporary structure used in the encoding.
                 std::array<UInt, NDim> tmp_dcoord;
                 // The encoder object.
                 morton_encoder<NDim, UInt> me;
                 for (auto i = range.begin(); i != range.end(); ++i) {
-                    disc_coords(tmp_dcoord, i);
+                    disc_coords(tmp_dcoord, i, inv_box_size);
                     m_codes[i] = me(tmp_dcoord.data());
                 }
             });
@@ -1430,12 +1445,13 @@ private:
             tg.run([this]() { perm_to_inv_perm(); });
             // Copy over m_perm to m_last_perm.
             tg.run([this, np]() {
-                tbb::parallel_for(tbb::blocked_range(size_type(0), np, boost::numeric_cast<size_type>(data_chunking)),
-                                  [this](const auto &range) {
-                                      std::copy(m_perm.data() + range.begin(), m_perm.data() + range.end(),
-                                                m_last_perm.data() + range.begin());
-                                  },
-                                  tbb::simple_partitioner());
+                tbb::parallel_for(
+                    tbb::blocked_range(size_type(0), np, boost::numeric_cast<size_type>(data_chunking)),
+                    [this](const auto &range) {
+                        std::copy(m_perm.data() + range.begin(), m_perm.data() + range.end(),
+                                  m_last_perm.data() + range.begin());
+                    },
+                    tbb::simple_partitioner());
             });
             tg.wait();
         }
@@ -1809,12 +1825,14 @@ public:
         // to the correct Morton code.
         std::array<UInt, NDim> tmp_dcoord;
         morton_encoder<NDim, UInt> me;
+        // Compute the inverse of the box size for discretisation.
+        const auto inv_box_size = F(1) / m_box_size;
         for (size_type i = 0; i < m_parts[NDim].size(); ++i) {
             for (std::size_t j = 0; j < NDim; ++j) {
                 assert(m_parts[j][i] < m_box_size / F(2));
                 assert(m_parts[j][i] >= -m_box_size / F(2));
             }
-            disc_coords(tmp_dcoord, i);
+            disc_coords(tmp_dcoord, i, inv_box_size);
             assert(m_codes[i] == me(tmp_dcoord.data()));
         }
         // m_inv_perm and m_perm are consistent with each other.
@@ -2857,7 +2875,8 @@ private:
             const auto pad_coord = [this, mac_value]() {
                 if constexpr (MAC == mac::bh) {
                     // NOTE: for the bh mac, mac_value is theta**-2.
-                    const auto M = m_box_size / (std::sqrt(F(1) / mac_value) * std::sqrt(F(NDim))) + m_box_size / F(2);
+                    const auto M
+                        = m_box_size / (std::sqrt(F(1) / mac_value) * std::sqrt(F(NDim))) + m_box_size * (F(1) / F(2));
                     // NOTE: M is mathematically always >= m_box_size / F(2), which puts it on the top right
                     // corner of the box for theta2 == inf. To make it completely safe with respect to the requirement
                     // of avoiding singularities in the self interaction routine, we double it.
@@ -2991,8 +3010,8 @@ private:
 
         if constexpr ((NDim == 3u || NDim == 2u)
                       && std::conjunction_v<
-                             std::disjunction<std::is_same<UInt, std::uint64_t>, std::is_same<UInt, std::uint32_t>>,
-                             std::disjunction<std::is_same<F, float>, std::is_same<F, double>>>) {
+                          std::disjunction<std::is_same<UInt, std::uint64_t>, std::is_same<UInt, std::uint32_t>>,
+                          std::disjunction<std::is_same<F, float>, std::is_same<F, double>>>) {
             if (m_rocm && split.size() == 2u) {
                 // Actually run the ROCm implementation only if we have an accelerator and split contains 2 entries.
 
@@ -3097,8 +3116,8 @@ private:
 
         if constexpr ((NDim == 3u || NDim == 2u)
                       && std::conjunction_v<
-                             std::disjunction<std::is_same<UInt, std::uint64_t>, std::is_same<UInt, std::uint32_t>>,
-                             std::disjunction<std::is_same<F, float>, std::is_same<F, double>>>) {
+                          std::disjunction<std::is_same<UInt, std::uint64_t>, std::is_same<UInt, std::uint32_t>>,
+                          std::disjunction<std::is_same<F, float>, std::is_same<F, double>>>) {
             if (split.size() > 1u) {
                 const auto np = nparts();
 
@@ -3567,6 +3586,18 @@ public:
     {
         return ord_p_its_impl(*this);
     }
+    auto c_it_u() const
+    {
+        return m_codes.data();
+    }
+    auto c_it_o() const
+    {
+        auto retval = boost::make_permutation_iterator(m_codes.data(), m_inv_perm.begin());
+        // Ensure that the iterator we return can index up to the particle number.
+        it_diff_check<decltype(retval)>(m_parts[0].size());
+
+        return retval;
+    }
     const auto &perm() const
     {
         return m_perm;
@@ -3599,23 +3630,26 @@ private:
             m_box_size = determine_box_size(p_its_u(), nparts);
         }
 
+        // Compute the inverse of the box size for discretisation.
+        const auto inv_box_size = F(1) / m_box_size;
+
         // Establish the new codes.
-        tbb::parallel_for(tbb::blocked_range(size_type(0), nparts), [this](const auto &range) {
+        tbb::parallel_for(tbb::blocked_range(size_type(0), nparts), [this, inv_box_size](const auto &range) {
             std::array<UInt, NDim> tmp_dcoord;
             morton_encoder<NDim, UInt> me;
             for (auto i = range.begin(); i != range.end(); ++i) {
-                disc_coords(tmp_dcoord, i);
+                disc_coords(tmp_dcoord, i, inv_box_size);
                 m_codes[i] = me(tmp_dcoord.data());
             }
         });
 
         // Reset m_last_perm to a iota.
-        tbb::parallel_for(tbb::blocked_range(size_type(0), nparts, boost::numeric_cast<size_type>(data_chunking)),
-                          [this](const auto &range) {
-                              std::iota(m_last_perm.data() + range.begin(), m_last_perm.data() + range.end(),
-                                        range.begin());
-                          },
-                          tbb::simple_partitioner());
+        tbb::parallel_for(
+            tbb::blocked_range(size_type(0), nparts, boost::numeric_cast<size_type>(data_chunking)),
+            [this](const auto &range) {
+                std::iota(m_last_perm.data() + range.begin(), m_last_perm.data() + range.end(), range.begin());
+            },
+            tbb::simple_partitioner());
         // Do the indirect sorting onto m_last_perm.
         indirect_code_sort(m_last_perm.begin(), m_last_perm.end());
         {

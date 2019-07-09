@@ -318,3 +318,38 @@ TEST_CASE("ctors")
         });
     });
 }
+
+TEST_CASE("code iterators")
+{
+    tuple_for_each(fp_types{}, [](auto x) {
+        using fp_type = decltype(x);
+        constexpr auto bsize = static_cast<fp_type>(1);
+        constexpr auto s = 10000u;
+        auto parts = get_uniform_particles<3>(s, bsize, rng);
+        octree<fp_type> t{x_coords = parts.begin() + s,
+                          y_coords = parts.begin() + 2u * s,
+                          z_coords = parts.begin() + 3u * s,
+                          masses = parts.begin(),
+                          nparts = s,
+                          box_size = fp_type(1.25)};
+
+        auto c_it_u = t.c_it_u();
+        REQUIRE(std::is_sorted(c_it_u, c_it_u + s));
+
+        auto c_it_o = t.c_it_o();
+        std::array<fp_type, 3> tmp;
+        std::array<std::size_t, 3> tmp_d;
+        detail::morton_encoder<3, std::size_t> me;
+        for (auto i = 0u; i < s; ++i) {
+            tmp[0] = *(parts.begin() + s + i);
+            tmp[1] = *(parts.begin() + 2u * s + i);
+            tmp[2] = *(parts.begin() + 3u * s + i);
+
+            tmp_d[0] = detail::disc_single_coord<3, std::size_t>(tmp[0], 1 / fp_type(1.25));
+            tmp_d[1] = detail::disc_single_coord<3, std::size_t>(tmp[1], 1 / fp_type(1.25));
+            tmp_d[2] = detail::disc_single_coord<3, std::size_t>(tmp[2], 1 / fp_type(1.25));
+
+            REQUIRE(me(tmp_d.data()) == *(c_it_o + i));
+        }
+    });
+}
