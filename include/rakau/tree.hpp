@@ -612,16 +612,10 @@ inline auto coll_leaves_permutation(const Nodes &t)
 // whose edges have sizes aabb_sizes, return the list of
 // the vertices of the bounding box.
 template <typename F, std::size_t NDim>
-inline auto coll_get_aabb_vertices(const std::array<F, NDim> &p_pos, const std::array<F, NDim> &aabb_sizes,
-                                   const F &min_coord, const F &max_coord)
+inline auto coll_get_aabb_vertices(const std::array<F, NDim> &p_pos, const std::array<F, NDim> &aabb_sizes)
 {
-    // min/max coord must be finite.
-    assert(std::isfinite(min_coord) && std::isfinite(max_coord));
-    // min_coord < max_coord.
-    assert(min_coord < max_coord);
-    // p_pos must contain finite values in the [min_coord, max_coord] range.
-    assert(std::all_of(p_pos.begin(), p_pos.end(),
-                       [min_coord, max_coord](F x) { return std::isfinite(x) && x >= min_coord && x <= max_coord; }));
+    // p_pos must contain finite values.
+    assert(std::all_of(p_pos.begin(), p_pos.end(), [](F x) { return std::isfinite(x); }));
     // aabb_sizes all finite and non-negative.
     // NOTE: empty AABBs are allowed.
     assert(std::all_of(aabb_sizes.begin(), aabb_sizes.end(), [](F x) { return std::isfinite(x) && x >= F(0); }));
@@ -632,7 +626,6 @@ inline auto coll_get_aabb_vertices(const std::array<F, NDim> &p_pos, const std::
 
     // Compute the min/max coordinates of the AABB (in 2D, the lower-left
     // and upper-right corners of the AABB).
-    // NOTE: these will *not* be clamped.
     const auto aabb_minmax_coords = [&aabb_sizes, &p_pos]() {
         std::array<std::array<F, NDim>, 2> retval;
 
@@ -676,12 +669,7 @@ inline auto coll_get_aabb_vertices(const std::array<F, NDim> &p_pos, const std::
     for (std::size_t i = 0; i < n_points; ++i) {
         for (std::size_t j = 0; j < NDim; ++j) {
             const auto idx = (i >> j) & 1u;
-            // NOTE: we asserted that min_coord < max_coord, and that they
-            // are finite. Moreover, we also checked that aabb_minmax_coords[idx][j]
-            // is a finite value. Gonna assume that std::clamp() does not do anything weird
-            // FP-wise, so we don't check its output.
-            aabb_points[i][j] = std::clamp(aabb_minmax_coords[idx][j], min_coord, max_coord);
-            assert(aabb_points[i][j] >= min_coord && aabb_points[i][j] <= max_coord);
+            aabb_points[i][j] = aabb_minmax_coords[idx][j];
         }
     }
 
@@ -699,21 +687,18 @@ inline auto coll_get_aabb_vertices(const std::array<F, NDim> &p_pos, const std::
 // compute the code of the smallest node not smaller than the leaf node
 // that contains the particle and its aabb (that is, the return
 // value will be the code of the leaf node or of one of its ancestors).
-// min_coord and max_coord can be inferred by inv_box_size, hence they are redundant,
-// but we pass them in to avoid re-computing them at every invocation.
 template <typename F, std::size_t NDim, typename UInt>
 inline UInt coll_get_enclosing_node(const std::array<F, NDim> &p_pos, const UInt &llevel,
-                                    const std::array<F, NDim> &aabb_sizes, const F &min_coord, const F &max_coord,
-                                    const F &inv_box_size)
+                                    const std::array<F, NDim> &aabb_sizes, const F &inv_box_size)
 {
     // The number of vertices of the AABB is 2**NDim.
     static_assert(NDim < unsigned(std::numeric_limits<std::size_t>::digits), "Overflow error.");
     constexpr auto n_points = std::size_t(1) << NDim;
 
     // Get the list of vertices of the AABB.
-    const auto aabb_vertices = coll_get_aabb_vertices(p_pos, aabb_sizes, min_coord, max_coord);
+    const auto aabb_vertices = coll_get_aabb_vertices(p_pos, aabb_sizes);
 
-    // Compute their codes, and shift them down by (cbits - llevel) * NDim.
+    // Compute their clamped codes, and shift them down by (cbits - llevel) * NDim.
     // We do this because we want to produce a nodal code
     // whose level is llevel or lower, thus we already know we need
     // to throw away some information from the lower bits of the AABB codes.
@@ -723,12 +708,7 @@ inline UInt coll_get_enclosing_node(const std::array<F, NDim> &p_pos, const UInt
     morton_encoder<NDim, UInt> me;
     for (std::size_t i = 0; i < n_points; ++i) {
         for (std::size_t j = 0; j < NDim; ++j) {
-            // NOTE: set clamping to true. This is helpful because
-            // if the AABB is cropped by the boundary of the box,
-            // inside disc_single_coord we might end up generating
-            // a coordinate slightly outside box boundary, due to FP shenanigans.
-            // We know anyway that here the aabb_vertices have already been
-            // clamped to the box boundaries.
+            // NOTE: discretize with clamping.
             tmp[j] = disc_single_coord<NDim, UInt, true>(aabb_vertices[i][j], inv_box_size);
         }
         const auto code = me(tmp.data());
@@ -3673,18 +3653,33 @@ public:
     {
         accs_pots_o(acc_pot_ilist_to_array<2>(out), mac_value, std::forward<KwArgs>(args)...);
     }
-    template <typename It>
-    auto compute_clist(It it) const
-    {
-        simple_timer st("clist computation");
 
-        // TODO check the range of it.
+private:
+    template <bool Ordered, typename It>
+    auto compute_cgraph_impl(It it) const
+    {
+        simple_timer st("cgraph computation");
+
+        // Check that we can index into It at least
+        // up to the number of particles.
+        it_diff_check<It>(m_parts[0].size());
+
+        // The return value.
+        std::vector<tbb::concurrent_unordered_set<size_type>> cgraph;
+
+        // The vector holding the extra particles (the straddlers)
+        // for every leaf node of the tree.
+        // NOTE: for consistency with the particle indices
+        // in the original leaf node structure, we will store
+        // in v_extra indices referring to the internal tree
+        // order. We will translate them to indices in the original
+        // order, if needed, later.
+        std::vector<tbb::concurrent_vector<size_type>> v_extra;
+
+        // The vector for iterating over the leaf nodes.
+        decltype(detail::coll_leaves_permutation(m_tree)) clp;
 
         tbb::task_group tg;
-
-        std::vector<tbb::concurrent_vector<size_type>> v_extra;
-        std::vector<tbb::concurrent_unordered_set<size_type>> c_list;
-        decltype(detail::coll_leaves_permutation(m_tree)) clp;
 
         tg.run([this, &v_extra, &clp, it]() {
             simple_timer st_vextra("vextra computation");
@@ -3694,122 +3689,137 @@ public:
             clp = detail::coll_leaves_permutation(m_tree);
             v_extra.resize(boost::numeric_cast<decltype(v_extra.size())>(clp.size()));
 
-            // TODO: check these against the assertions.
+            // Pre-compute the inverse of the domain size.
             const auto inv_box_size = F(1) / m_box_size;
-            const auto min_coord = -m_box_size * (F(1) / F(2));
-            const auto max_coord = std::nextafter(m_box_size * (F(1) / F(2)), F(-1));
 
             // Augment the leaf nodes with the extra particles.
-            tbb::parallel_for(tbb::blocked_range(decltype(clp.size())(0), clp.size()),
-                              [this, &clp, &v_extra, it, inv_box_size, min_coord, max_coord](const auto &r) {
-                                  // Temporary vector for the particle position
-                                  // and the sizes of the AABB.
-                                  std::array<F, NDim> tmp, aabb_sizes;
-                                  // A local map in which we will map indices
-                                  // to leaf nodes to extra particles for those nodes.
-                                  // We will add the contents of this map to v_extra
-                                  // at the end.
-                                  std::unordered_map<decltype(clp.size()), std::vector<size_type>> local_map;
+            tbb::parallel_for(tbb::blocked_range(decltype(clp.size())(0), clp.size()), [this, &clp, &v_extra, it,
+                                                                                        inv_box_size](const auto &r) {
+                // Temporary vector for the particle position
+                // and the sizes of the AABB.
+                std::array<F, NDim> tmp, aabb_sizes;
+                // A local map in which we will map leaf node indices
+                // to extra particles for those nodes.
+                // We will add the contents of this map to v_extra
+                // at the end.
+                std::unordered_map<decltype(clp.size()), std::vector<size_type>> local_map;
 
-                                  for (auto i = r.begin(); i != r.end(); ++i) {
-                                      // Fetch/cache some properties of the leaf node.
-                                      const auto &lnode = m_tree[clp[i]];
-                                      const auto lcode = lnode.code;
-                                      const auto llevel = detail::tree_level<NDim>(lcode);
+                for (auto i = r.begin(); i != r.end(); ++i) {
+                    // Fetch/cache some properties of the leaf node.
+                    const auto &lnode = m_tree[clp[i]];
+                    const auto lcode = lnode.code;
+                    const auto llevel = detail::tree_level<NDim>(lcode);
 
-                                      // Iterate over the particles of the leaf node.
-                                      const auto e = lnode.end;
-                                      for (auto b = lnode.begin; b != e; ++b) {
-                                          // TODO: this will be different in ordered mode.
-                                          const auto pidx = b;
+                    // Iterate over the particles of the leaf node.
+                    const auto e = lnode.end;
+                    for (auto pidx = lnode.begin; pidx != e; ++pidx) {
+                        // Fill in the tmp vectors for the particle pos
+                        // and AABB.
+                        // NOTE: if Ordered, we must transform the original
+                        // pidx, as 'it' points to a vector of aabb sizes sorted
+                        // in the original order.
+                        const auto aabb_size = Ordered ? *(it + m_perm[pidx]) : *(it + pidx);
+                        for (std::size_t j = 0; j < NDim; ++j) {
+                            tmp[j] = m_parts[j][pidx];
+                            aabb_sizes[j] = aabb_size;
+                        }
 
-                                          // Fill in the tmp vectors for the particle pos
-                                          // and AABB.
-                                          const auto aabb_size = *(it + pidx);
-                                          for (std::size_t j = 0; j < NDim; ++j) {
-                                              tmp[j] = m_parts[j][pidx];
-                                              aabb_sizes[j] = aabb_size;
-                                          }
+                        // Compute the enclosing node of the current particle.
+                        const auto ecode = detail::coll_get_enclosing_node(tmp, llevel, aabb_sizes, inv_box_size);
 
-                                          // Compute the enclosing node of the current particle.
-                                          const auto ecode = detail::coll_get_enclosing_node(
-                                              tmp, llevel, aabb_sizes, min_coord, max_coord, inv_box_size);
+                        if (ecode == lcode) {
+                            // The enclosing node is the leaf node
+                            // itself, don't do anything.
+                            continue;
+                        }
 
-                                          if (ecode == lcode) {
-                                              // The enclosing node is the leaf node
-                                              // itself, don't do anything.
-                                              continue;
-                                          }
+                        // The enclosing node is an ancestor of the
+                        // leaf node. We need to add the current particle
+                        // to all the leaf nodes which are children of
+                        // the enclosing node.
+                        // We will be iterating over the set of all leaf nodes
+                        // starting from the current one. We will move backwards
+                        // and forward until we have identified all the children nodes
+                        // of the enclosing node.
 
-                                          // The enclosing node is an ancestor of the
-                                          // leaf node. We need to add the particle
-                                          // to all the leaf nodes which are children of
-                                          // the enclosing node.
-                                          // We will be iterating over the set of all leaf nodes
-                                          // starting from the current one. We will move backwards
-                                          // and forward until we have identified all the children nodes
-                                          // of the enclosing node.
+                        // Small helper to establish if the node with the input code
+                        // is a child of the enclosing node.
+                        auto is_child = [ecode_level = detail::tree_level<NDim>(ecode), ecode](UInt code) {
+                            const auto level = detail::tree_level<NDim>(code);
+                            if (level < ecode_level) {
+                                // The input node has a lower level than
+                                // the enclosing node, it cannot be one of its
+                                // children.
+                                return false;
+                            }
+                            if ((code >> ((level - ecode_level) * NDim)) != ecode) {
+                                // The input code does not start with ecode: it belongs
+                                // to another branch of the tree.
+                                return false;
+                            }
+                            return true;
+                        };
 
-                                          // Small helper to establish if the node with the input code
-                                          // is a child of the enclosing node.
-                                          auto is_child
-                                              = [ecode_level = detail::tree_level<NDim>(ecode), ecode](UInt code) {
-                                                    const auto level = detail::tree_level<NDim>(code);
-                                                    if (level < ecode_level) {
-                                                        // The input node has a higher level than
-                                                        // the enclosing node, it cannot be one of its
-                                                        // children.
-                                                        return false;
-                                                    }
-                                                    if ((code >> ((level - ecode_level) * NDim)) != ecode) {
-                                                        // The input code does not start with ecode: it is
-                                                        // the child of another anode.
-                                                        return false;
-                                                    }
-                                                    return true;
-                                                };
+                        // The backwards iteration.
+                        auto j = i;
+                        while (j) {
+                            if (!is_child(m_tree[clp[--j]].code)) {
+                                break;
+                            }
+                            local_map[j].push_back(pidx);
+                        }
 
-                                          // The backwards iteration.
-                                          auto j = i;
-                                          while (j) {
-                                              if (!is_child(m_tree[clp[--j]].code)) {
-                                                  break;
-                                              }
-                                              local_map[j].push_back(pidx);
-                                          }
+                        // The forward iteration.
+                        for (j = i + 1u; j < clp.size(); ++j) {
+                            if (!is_child(m_tree[clp[j]].code)) {
+                                break;
+                            }
+                            local_map[j].push_back(pidx);
+                        }
+                    }
+                }
 
-                                          // The forward iteration.
-                                          for (j = i + 1u; j < clp.size(); ++j) {
-                                              if (!is_child(m_tree[clp[j]].code)) {
-                                                  break;
-                                              }
-                                              local_map[j].push_back(pidx);
-                                          }
-                                      }
-                                  }
-
-                                  // Merge the local map into v_extra.
-                                  for (const auto &[i, v] : local_map) {
-                                      v_extra[static_cast<decltype(v_extra.size())>(i)].grow_by(v.begin(), v.end());
-                                  }
-                              });
+                // Merge the local map into v_extra.
+                for (const auto &[i, v] : local_map) {
+                    v_extra[static_cast<decltype(v_extra.size())>(i)].grow_by(v.begin(), v.end());
+                }
+            });
         });
 
         // Concurrently, prepare the collision list via resize.
-        tg.run([this, &c_list]() { c_list.resize(boost::numeric_cast<decltype(c_list.size())>(m_parts[0].size())); });
+        tg.run([this, &cgraph]() { cgraph.resize(boost::numeric_cast<decltype(cgraph.size())>(m_parts[0].size())); });
 
         tg.wait();
 
         simple_timer st_aabb("aabb testing");
-        // Iterate over the leaf nodes and run the collision detection.
+        // Iterate over the augmented leaf nodes and run the collision detection.
         tbb::parallel_for(tbb::blocked_range(decltype(clp.size())(0), clp.size()), [this, &clp, &v_extra, it,
-                                                                                    &c_list](const auto &r) {
+                                                                                    &cgraph](const auto &r) {
+            // Local collision graph, mapping a particle to a set
+            // of particles with which it collides.
+            // NOTE: this will always use unordered indices, we will translate
+            // to ordered indices, if necessary, at the end.
             std::unordered_map<size_type, std::vector<size_type>> local_map;
+
+            // Temporary vector in which we store the set of particles
+            // belonging to an augmented leaf node: the set of the original
+            // particles, plus the straddlers (contained in v_extra).
             std::vector<size_type> local_indices;
 
+            // Small helper to check for overlap between the AABBs
+            // of the two particles at indices idx1 and idx2.
             auto aabb_overlap = [this, it](size_type idx1, size_type idx2) {
-                const auto aabb_size1 = *(it + idx1);
-                const auto aabb_size2 = *(it + idx2);
+                // Like above, we might need to access the aabb sizes in a permuted
+                // fashion, as idx1 and idx2 will refer to particle indices
+                // in the internal tree order.
+                const auto aabb_size1 = Ordered ? *(it + m_perm[idx1]) : *(it + idx1);
+                const auto aabb_size2 = Ordered ? *(it + m_perm[idx2]) : *(it + idx2);
+
+                // If either AABB has a size of zero (i.e., point particles), we don't
+                // report a collision.
+                if (aabb_size1 == F(0) || aabb_size2 == F(0)) {
+                    return false;
+                }
 
                 for (std::size_t j = 0; j < NDim; ++j) {
                     const auto min1 = fma_wrap(aabb_size1, -F(1) / F(2), m_parts[j][idx1]);
@@ -3827,17 +3837,31 @@ public:
             };
 
             for (auto i = r.begin(); i != r.end(); ++i) {
+                // Fetch references to the leaf node and its
+                // extra particles.
                 const auto &lnode = m_tree[clp[i]];
                 const auto extras = v_extra[static_cast<decltype(v_extra.size())>(i)];
-                local_indices.resize(lnode.end - lnode.begin + extras.size());
-                std::iota(local_indices.data(), local_indices.data() + (lnode.end - lnode.begin), lnode.begin);
-                std::copy(extras.begin(), extras.end(), local_indices.data() + (lnode.end - lnode.begin));
-                for (decltype(local_indices.size()) j0 = 0; j0 < local_indices.size(); ++j0) {
-                    for (auto j1 = j0 + 1u; j1 < local_indices.size(); ++j1) {
-                        const auto pidx0 = local_indices[j0];
+
+                // Fill in the full set of particles belonging to this node: the
+                // original ones, plus those from v_extra.
+                const auto orig_size = lnode.end - lnode.begin;
+                local_indices.resize(boost::numeric_cast<decltype(local_indices.size())>(orig_size + extras.size()));
+                std::iota(local_indices.data(), local_indices.data() + orig_size, lnode.begin);
+                std::copy(extras.begin(), extras.end(), local_indices.data() + orig_size);
+
+                // Check AABB overlaps over all the particles.
+                const auto ls = local_indices.size();
+                for (decltype(local_indices.size()) j0 = 0; j0 < ls; ++j0) {
+                    const auto pidx0 = local_indices[j0];
+                    for (auto j1 = j0 + 1u; j1 < ls; ++j1) {
                         const auto pidx1 = local_indices[j1];
 
                         if (aabb_overlap(pidx0, pidx1)) {
+                            // NOTE: we use the unordered indices
+                            // for the local map. We will be transforming
+                            // to ordered indices, if necessary,
+                            // only when merging the local map
+                            // into the global one.
                             local_map[pidx0].push_back(pidx1);
                             local_map[pidx1].push_back(pidx0);
                         }
@@ -3845,12 +3869,45 @@ public:
                 }
             }
 
+            // Merge the local collision graph into the global one, translating
+            // the indices on the fly if necessary.
             for (const auto &[idx, v] : local_map) {
-                c_list[static_cast<decltype(c_list.size())>(idx)].insert(v.begin(), v.end());
+                if constexpr (Ordered) {
+                    auto idx_transform = [this](auto n) { return m_perm[n]; };
+                    cgraph[static_cast<decltype(cgraph.size())>(m_perm[idx])].insert(
+                        boost::make_transform_iterator(v.begin(), idx_transform),
+                        boost::make_transform_iterator(v.end(), idx_transform));
+                } else {
+                    cgraph[static_cast<decltype(cgraph.size())>(idx)].insert(v.begin(), v.end());
+                }
             }
         });
 
-        return c_list;
+#if !defined(NDEBUG)
+        // Verify the collision graph.
+        for (decltype(cgraph.size()) i = 0; i < cgraph.size(); ++i) {
+            for (auto idx : cgraph[i]) {
+                assert(idx < cgraph.size());
+                assert(std::find(cgraph[static_cast<decltype(cgraph.size())>(idx)].begin(),
+                                 cgraph[static_cast<decltype(cgraph.size())>(idx)].end(), i)
+                       != cgraph[static_cast<decltype(cgraph.size())>(idx)].end());
+            }
+        }
+#endif
+
+        return cgraph;
+    }
+
+public:
+    template <typename It>
+    auto compute_cgraph_u(It it) const
+    {
+        return compute_cgraph_impl<false>(it);
+    }
+    template <typename It>
+    auto compute_cgraph_o(It it) const
+    {
+        return compute_cgraph_impl<true>(it);
     }
 
 private:
