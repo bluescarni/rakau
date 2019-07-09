@@ -189,3 +189,27 @@ TEST_CASE("coll_get_enclosing_node_2d")
     ncode = detail::coll_get_enclosing_node(pos, std::size_t(1), aabb_sizes, -5., 5., .0625);
     REQUIRE(ncode == 1u);
 }
+
+TEST_CASE("compute_clist")
+{
+    constexpr auto bsize = 1.;
+    constexpr auto s = 100000u;
+    auto parts = get_uniform_particles<3>(s, bsize, rng);
+    octree<double> t{x_coords = parts.begin() + s,
+                     y_coords = parts.begin() + 2u * s,
+                     z_coords = parts.begin() + 3u * s,
+                     masses = parts.begin(),
+                     nparts = s,
+                     box_size = bsize};
+    const std::vector<double> aabb_sizes(s, 1E-3);
+
+    auto clist = t.compute_clist(aabb_sizes.data());
+
+    // for (decltype(clist.size()) i = 0; i < clist.size(); ++i) {
+    //     std::cout << i << " | ";
+    //     for (auto idx : clist[i]) {
+    //         std::cout << idx << ", ";
+    //     }
+    //     std::cout << '\n';
+    // }
+}

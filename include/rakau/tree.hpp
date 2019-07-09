@@ -14,9 +14,6 @@
 #include <atomic>
 #include <bitset>
 #include <cassert>
-#if defined(RAKAU_WITH_TIMER)
-#include <chrono>
-#endif
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -33,14 +30,20 @@
 #include <string>
 #include <tuple>
 #include <type_traits>
+#include <unordered_map>
 #include <utility>
 #include <vector>
+
+#if defined(RAKAU_WITH_TIMER)
+#include <chrono>
+#endif
 
 #include <boost/iterator/permutation_iterator.hpp>
 #include <boost/iterator/transform_iterator.hpp>
 #include <boost/numeric/conversion/cast.hpp>
 
 #include <tbb/blocked_range.h>
+#include <tbb/concurrent_unordered_set.h>
 #include <tbb/concurrent_vector.h>
 #include <tbb/parallel_for.h>
 #include <tbb/parallel_reduce.h>
@@ -371,7 +374,9 @@ struct morton_decoder<2, std::uint32_t> {
 };
 
 // Discretize a coordinate in a square domain of size 1/inv_box_size.
-template <std::size_t NDim, typename UInt, typename F>
+// If Clamp is true, then the coordinate will be clamped within
+// the domain.
+template <std::size_t NDim, typename UInt, bool Clamp = false, typename F>
 inline UInt disc_single_coord(const F &x, const F &inv_box_size)
 {
     constexpr UInt factor = UInt(1) << cbits_v<UInt, NDim>;
@@ -388,12 +393,18 @@ inline UInt disc_single_coord(const F &x, const F &inv_box_size)
                                     + " in a box of size " + std::to_string(F(1) / inv_box_size)
                                     + ", the non-finite value " + std::to_string(tmp) + " was generated");
     }
-    // Check: don't end up outside the [0, factor) range.
-    if (rakau_unlikely(tmp < F(0) || tmp >= F(factor))) {
-        throw std::invalid_argument("The discretisation of the input coordinate " + std::to_string(x)
-                                    + " in a box of size " + std::to_string(F(1) / inv_box_size)
-                                    + " produced the floating-point value " + std::to_string(tmp)
-                                    + ", which is outside the allowed bounds");
+
+    if constexpr (Clamp) {
+        // If requested, clamp the coordinate to [0, factor).
+        tmp = std::clamp(tmp, F(0), std::nextafter(F(factor), F(-1)));
+    } else {
+        // Check: don't end up outside the [0, factor) range.
+        if (rakau_unlikely(tmp < F(0) || tmp >= F(factor))) {
+            throw std::invalid_argument("The discretisation of the input coordinate " + std::to_string(x)
+                                        + " in a box of size " + std::to_string(F(1) / inv_box_size)
+                                        + " produced the floating-point value " + std::to_string(tmp)
+                                        + ", which is outside the allowed bounds");
+        }
     }
 
     // Cast to UInt.
@@ -578,6 +589,7 @@ inline constexpr unsigned default_ncrit =
 
 // Return a vector of indices into the input vector of nodes, t,
 // representing the ordered set of leaf nodes.
+// NOTE: need to understand if/when/how this should be parallelised.
 template <typename Nodes>
 inline auto coll_leaves_permutation(const Nodes &t)
 {
@@ -599,9 +611,6 @@ inline auto coll_leaves_permutation(const Nodes &t)
 // Given a particle with position p_pos and a rectangular bounding box
 // whose edges have sizes aabb_sizes, return the list of
 // the vertices of the bounding box.
-// The coordinates of the returned
-// points will be clamped in the [min_coord, max_coord] range for
-// every dimension.
 template <typename F, std::size_t NDim>
 inline auto coll_get_aabb_vertices(const std::array<F, NDim> &p_pos, const std::array<F, NDim> &aabb_sizes,
                                    const F &min_coord, const F &max_coord)
@@ -672,31 +681,11 @@ inline auto coll_get_aabb_vertices(const std::array<F, NDim> &p_pos, const std::
             // is a finite value. Gonna assume that std::clamp() does not do anything weird
             // FP-wise, so we don't check its output.
             aabb_points[i][j] = std::clamp(aabb_minmax_coords[idx][j], min_coord, max_coord);
+            assert(aabb_points[i][j] >= min_coord && aabb_points[i][j] <= max_coord);
         }
     }
 
     return aabb_points;
-
-    // // The [min, max] coordinates allowed for the aabb points.
-    // const auto min_coord = -b_size / 2;
-    // // NOTE: the domain size in a tree is understood to be a half-open range,
-    // // thus the maximum coordinate is not b_size / 2 but the number
-    // // immediately before it.
-    // const auto max_coord = std::nextafter(b_size / 2, F(-1));
-
-    // // Get the coordinates of the NDim * 2 points of the bounding box.
-    // std::array<std::array<std::array<F, NDim>, 2>, NDim> bb_points;
-    // for (std::size_t i = 0; i < NDim; ++i) {
-    //     // Size of the aabb in the i-th dimension.
-    //     const auto size = aabb[i];
-
-    //     // The
-    //     auto &bb_min = bb_points[i][0];
-    //     auto &bb_max = bb_points[i][1];
-
-    //     for (std::size_t j = 0; j < NDim; ++j) {
-    //     }
-    // }
 }
 
 // Given:
@@ -734,7 +723,13 @@ inline UInt coll_get_enclosing_node(const std::array<F, NDim> &p_pos, const UInt
     morton_encoder<NDim, UInt> me;
     for (std::size_t i = 0; i < n_points; ++i) {
         for (std::size_t j = 0; j < NDim; ++j) {
-            tmp[j] = disc_single_coord<NDim, UInt>(aabb_vertices[i][j], inv_box_size);
+            // NOTE: set clamping to true. This is helpful because
+            // if the AABB is cropped by the boundary of the box,
+            // inside disc_single_coord we might end up generating
+            // a coordinate slightly outside box boundary, due to FP shenanigans.
+            // We know anyway that here the aabb_vertices have already been
+            // clamped to the box boundaries.
+            tmp[j] = disc_single_coord<NDim, UInt, true>(aabb_vertices[i][j], inv_box_size);
         }
         const auto code = me(tmp.data());
         aabb_codes[i] = code >> shift_amount;
@@ -3677,6 +3672,185 @@ public:
     void accs_pots_o(std::initializer_list<It> out, F mac_value, KwArgs &&... args) const
     {
         accs_pots_o(acc_pot_ilist_to_array<2>(out), mac_value, std::forward<KwArgs>(args)...);
+    }
+    template <typename It>
+    auto compute_clist(It it) const
+    {
+        simple_timer st("clist computation");
+
+        // TODO check the range of it.
+
+        tbb::task_group tg;
+
+        std::vector<tbb::concurrent_vector<size_type>> v_extra;
+        std::vector<tbb::concurrent_unordered_set<size_type>> c_list;
+        decltype(detail::coll_leaves_permutation(m_tree)) clp;
+
+        tg.run([this, &v_extra, &clp, it]() {
+            simple_timer st_vextra("vextra computation");
+
+            // Compute the permutation to iterate over the leaf nodes, and prepare
+            // the container of the extra particles for each leaf node.
+            clp = detail::coll_leaves_permutation(m_tree);
+            v_extra.resize(boost::numeric_cast<decltype(v_extra.size())>(clp.size()));
+
+            // TODO: check these against the assertions.
+            const auto inv_box_size = F(1) / m_box_size;
+            const auto min_coord = -m_box_size * (F(1) / F(2));
+            const auto max_coord = std::nextafter(m_box_size * (F(1) / F(2)), F(-1));
+
+            // Augment the leaf nodes with the extra particles.
+            tbb::parallel_for(tbb::blocked_range(decltype(clp.size())(0), clp.size()),
+                              [this, &clp, &v_extra, it, inv_box_size, min_coord, max_coord](const auto &r) {
+                                  // Temporary vector for the particle position
+                                  // and the sizes of the AABB.
+                                  std::array<F, NDim> tmp, aabb_sizes;
+                                  // A local map in which we will map indices
+                                  // to leaf nodes to extra particles for those nodes.
+                                  // We will add the contents of this map to v_extra
+                                  // at the end.
+                                  std::unordered_map<decltype(clp.size()), std::vector<size_type>> local_map;
+
+                                  for (auto i = r.begin(); i != r.end(); ++i) {
+                                      // Fetch/cache some properties of the leaf node.
+                                      const auto &lnode = m_tree[clp[i]];
+                                      const auto lcode = lnode.code;
+                                      const auto llevel = detail::tree_level<NDim>(lcode);
+
+                                      // Iterate over the particles of the leaf node.
+                                      const auto e = lnode.end;
+                                      for (auto b = lnode.begin; b != e; ++b) {
+                                          // TODO: this will be different in ordered mode.
+                                          const auto pidx = b;
+
+                                          // Fill in the tmp vectors for the particle pos
+                                          // and AABB.
+                                          const auto aabb_size = *(it + pidx);
+                                          for (std::size_t j = 0; j < NDim; ++j) {
+                                              tmp[j] = m_parts[j][pidx];
+                                              aabb_sizes[j] = aabb_size;
+                                          }
+
+                                          // Compute the enclosing node of the current particle.
+                                          const auto ecode = detail::coll_get_enclosing_node(
+                                              tmp, llevel, aabb_sizes, min_coord, max_coord, inv_box_size);
+
+                                          if (ecode == lcode) {
+                                              // The enclosing node is the leaf node
+                                              // itself, don't do anything.
+                                              continue;
+                                          }
+
+                                          // The enclosing node is an ancestor of the
+                                          // leaf node. We need to add the particle
+                                          // to all the leaf nodes which are children of
+                                          // the enclosing node.
+                                          // We will be iterating over the set of all leaf nodes
+                                          // starting from the current one. We will move backwards
+                                          // and forward until we have identified all the children nodes
+                                          // of the enclosing node.
+
+                                          // Small helper to establish if the node with the input code
+                                          // is a child of the enclosing node.
+                                          auto is_child
+                                              = [ecode_level = detail::tree_level<NDim>(ecode), ecode](UInt code) {
+                                                    const auto level = detail::tree_level<NDim>(code);
+                                                    if (level < ecode_level) {
+                                                        // The input node has a higher level than
+                                                        // the enclosing node, it cannot be one of its
+                                                        // children.
+                                                        return false;
+                                                    }
+                                                    if ((code >> ((level - ecode_level) * NDim)) != ecode) {
+                                                        // The input code does not start with ecode: it is
+                                                        // the child of another anode.
+                                                        return false;
+                                                    }
+                                                    return true;
+                                                };
+
+                                          // The backwards iteration.
+                                          auto j = i;
+                                          while (j) {
+                                              if (!is_child(m_tree[clp[--j]].code)) {
+                                                  break;
+                                              }
+                                              local_map[j].push_back(pidx);
+                                          }
+
+                                          // The forward iteration.
+                                          for (j = i + 1u; j < clp.size(); ++j) {
+                                              if (!is_child(m_tree[clp[j]].code)) {
+                                                  break;
+                                              }
+                                              local_map[j].push_back(pidx);
+                                          }
+                                      }
+                                  }
+
+                                  // Merge the local map into v_extra.
+                                  for (const auto &[i, v] : local_map) {
+                                      v_extra[static_cast<decltype(v_extra.size())>(i)].grow_by(v.begin(), v.end());
+                                  }
+                              });
+        });
+
+        // Concurrently, prepare the collision list via resize.
+        tg.run([this, &c_list]() { c_list.resize(boost::numeric_cast<decltype(c_list.size())>(m_parts[0].size())); });
+
+        tg.wait();
+
+        simple_timer st_aabb("aabb testing");
+        // Iterate over the leaf nodes and run the collision detection.
+        tbb::parallel_for(tbb::blocked_range(decltype(clp.size())(0), clp.size()), [this, &clp, &v_extra, it,
+                                                                                    &c_list](const auto &r) {
+            std::unordered_map<size_type, std::vector<size_type>> local_map;
+            std::vector<size_type> local_indices;
+
+            auto aabb_overlap = [this, it](size_type idx1, size_type idx2) {
+                const auto aabb_size1 = *(it + idx1);
+                const auto aabb_size2 = *(it + idx2);
+
+                for (std::size_t j = 0; j < NDim; ++j) {
+                    const auto min1 = fma_wrap(aabb_size1, -F(1) / F(2), m_parts[j][idx1]);
+                    const auto max1 = fma_wrap(aabb_size1, F(1) / F(2), m_parts[j][idx1]);
+
+                    const auto min2 = fma_wrap(aabb_size2, -F(1) / F(2), m_parts[j][idx2]);
+                    const auto max2 = fma_wrap(aabb_size2, F(1) / F(2), m_parts[j][idx2]);
+
+                    if (!(max1 > min2 && min1 < max2)) {
+                        return false;
+                    }
+                }
+
+                return true;
+            };
+
+            for (auto i = r.begin(); i != r.end(); ++i) {
+                const auto &lnode = m_tree[clp[i]];
+                const auto extras = v_extra[static_cast<decltype(v_extra.size())>(i)];
+                local_indices.resize(lnode.end - lnode.begin + extras.size());
+                std::iota(local_indices.data(), local_indices.data() + (lnode.end - lnode.begin), lnode.begin);
+                std::copy(extras.begin(), extras.end(), local_indices.data() + (lnode.end - lnode.begin));
+                for (decltype(local_indices.size()) j0 = 0; j0 < local_indices.size(); ++j0) {
+                    for (auto j1 = j0 + 1u; j1 < local_indices.size(); ++j1) {
+                        const auto pidx0 = local_indices[j0];
+                        const auto pidx1 = local_indices[j1];
+
+                        if (aabb_overlap(pidx0, pidx1)) {
+                            local_map[pidx0].push_back(pidx1);
+                            local_map[pidx1].push_back(pidx0);
+                        }
+                    }
+                }
+            }
+
+            for (const auto &[idx, v] : local_map) {
+                c_list[static_cast<decltype(c_list.size())>(idx)].insert(v.begin(), v.end());
+            }
+        });
+
+        return c_list;
     }
 
 private:
