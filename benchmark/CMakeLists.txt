@@ -12,6 +12,7 @@ endfunction()
 
 ADD_RAKAU_BENCHMARK(benchmark_acc)
 ADD_RAKAU_BENCHMARK(benchmark_acc_pot)
+ADD_RAKAU_BENCHMARK(benchmark_coll)
 ADD_RAKAU_BENCHMARK(benchmark_pot)
 ADD_RAKAU_BENCHMARK(benchmark_move)
 ADD_RAKAU_BENCHMARK(benchmark_leapfrog)

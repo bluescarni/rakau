@@ -228,6 +228,61 @@ inline auto parse_accpot_benchmark_options(int argc, char **argv)
                       ordered};
 }
 
+inline auto parse_coll_benchmark_options(int argc, char **argv)
+{
+    namespace po = boost::program_options;
+
+    unsigned long nparts;
+    unsigned max_leaf_n, nthreads;
+    double bsize, a, psize;
+    bool parinit = false;
+    std::string fp_type;
+    bool ordered = false;
+
+    po::options_description desc("Allowed options");
+    desc.add_options()("help", "produce help message")(
+        "nparts", po::value<unsigned long>(&nparts)->default_value(1'000'000ul), "number of particles")(
+        "max_leaf_n", po::value<unsigned>(&max_leaf_n)->default_value(rakau::default_max_leaf_n),
+        "max number of particles in a leaf node")("a", po::value<double>(&a)->default_value(1.), "Plummer core radius")(
+        "bsize", po::value<double>(&bsize)->default_value(0.),
+        "size of the domain (if 0, it is automatically deduced)")(
+        "psize", po::value<double>(&psize)->default_value(1E-3),
+        "particle size")("nthreads", po::value<unsigned>(&nthreads)->default_value(0u),
+                         "number of threads to use (0 for auto-detection)")(
+        "parinit", "parallel nondeterministic initialisation of the particle distribution")(
+        "fp_type", po::value<std::string>(&fp_type)->default_value("float"),
+        "floating-point type to use in the computations")(
+        "ordered", "compute the collision graph using the original particle order");
+
+    po::variables_map vm;
+    po::store(po::parse_command_line(argc, argv, desc), vm);
+    po::notify(vm);
+
+    if (vm.count("help")) {
+        std::cout << desc << "\n";
+        std::exit(0);
+    }
+
+    if (nparts == 0u) {
+        throw std::invalid_argument("The number of particles cannot be zero");
+    }
+
+    if (vm.count("parinit")) {
+        parinit = true;
+    }
+
+    if (fp_type != "float" && fp_type != "double") {
+        throw std::invalid_argument("Only the 'float' and 'double' floating-point types are supported, but the type '"
+                                    + fp_type + "' was specified instead");
+    }
+
+    if (vm.count("ordered")) {
+        ordered = true;
+    }
+
+    return std::tuple{nparts, max_leaf_n, nthreads, bsize, a, parinit, std::move(fp_type), ordered, psize};
+}
+
 } // namespace rakau_benchmark
 
 #endif
