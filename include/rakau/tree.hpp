@@ -38,6 +38,7 @@
 #include <chrono>
 #endif
 
+#include <boost/container/small_vector.hpp>
 #include <boost/iterator/permutation_iterator.hpp>
 #include <boost/iterator/transform_iterator.hpp>
 #include <boost/numeric/conversion/cast.hpp>
@@ -45,6 +46,7 @@
 #include <tbb/blocked_range.h>
 #include <tbb/concurrent_unordered_set.h>
 #include <tbb/concurrent_vector.h>
+#include <tbb/enumerable_thread_specific.h>
 #include <tbb/parallel_for.h>
 #include <tbb/parallel_reduce.h>
 #include <tbb/parallel_sort.h>
@@ -3673,7 +3675,7 @@ private:
         // in the original leaf node structure, we will store
         // in v_extra indices referring to the internal tree
         // order. We will translate them to indices in the original
-        // order, if needed, later.
+        // order, if needed, only at the very end.
         std::vector<tbb::concurrent_vector<size_type>> v_extra;
 
         // The vector for iterating over the leaf nodes.
@@ -3689,99 +3691,121 @@ private:
             clp = detail::coll_leaves_permutation(m_tree);
             v_extra.resize(boost::numeric_cast<decltype(v_extra.size())>(clp.size()));
 
+            using local_map_t = std::vector<boost::container::small_vector<size_type, 1u>>;
+            tbb::enumerable_thread_specific<local_map_t> local_maps(
+                local_map_t(boost::numeric_cast<typename local_map_t::size_type>(clp.size())));
+
             // Pre-compute the inverse of the domain size.
             const auto inv_box_size = F(1) / m_box_size;
 
-            // Augment the leaf nodes with the extra particles.
-            tbb::parallel_for(tbb::blocked_range(decltype(clp.size())(0), clp.size()), [this, &clp, &v_extra, it,
-                                                                                        inv_box_size](const auto &r) {
-                // Temporary vector for the particle position
-                // and the sizes of the AABB.
-                std::array<F, NDim> tmp, aabb_sizes;
-                // A local map in which we will map leaf node indices
-                // to extra particles for those nodes.
-                // We will add the contents of this map to v_extra
-                // at the end.
-                std::unordered_map<decltype(clp.size()), std::vector<size_type>> local_map;
+            // Determine the straddling particles that need to be added to each leaf node.
+            tbb::parallel_for(tbb::blocked_range(decltype(clp.size())(0), clp.size()),
+                              [this, &clp, &v_extra, it, inv_box_size, &local_maps](const auto &r) {
+                                  // Temporary vector for the particle position
+                                  // and the sizes of the AABB.
+                                  std::array<F, NDim> tmp, aabb_sizes;
 
-                for (auto i = r.begin(); i != r.end(); ++i) {
-                    // Fetch/cache some properties of the leaf node.
-                    const auto &lnode = m_tree[clp[i]];
-                    const auto lcode = lnode.code;
-                    const auto llevel = detail::tree_level<NDim>(lcode);
+                                  // Extract the reference to the local map.
+                                  auto &local_map = local_maps.local();
 
-                    // Iterate over the particles of the leaf node.
-                    const auto e = lnode.end;
-                    for (auto pidx = lnode.begin; pidx != e; ++pidx) {
-                        // Fill in the tmp vectors for the particle pos
-                        // and AABB.
-                        // NOTE: if Ordered, we must transform the original
-                        // pidx, as 'it' points to a vector of aabb sizes sorted
-                        // in the original order.
-                        const auto aabb_size = Ordered ? *(it + m_perm[pidx]) : *(it + pidx);
-                        for (std::size_t j = 0; j < NDim; ++j) {
-                            tmp[j] = m_parts[j][pidx];
-                            aabb_sizes[j] = aabb_size;
-                        }
+                                  for (auto i = r.begin(); i != r.end(); ++i) {
+                                      // Fetch/cache some properties of the leaf node.
+                                      const auto &lnode = m_tree[clp[i]];
+                                      const auto lcode = lnode.code;
+                                      const auto llevel = detail::tree_level<NDim>(lcode);
 
-                        // Compute the enclosing node of the current particle.
-                        const auto ecode = detail::coll_get_enclosing_node(tmp, llevel, aabb_sizes, inv_box_size);
+                                      // Iterate over the particles of the leaf node.
+                                      const auto e = lnode.end;
+                                      for (auto pidx = lnode.begin; pidx != e; ++pidx) {
+                                          // Fill in the tmp vectors for the particle pos
+                                          // and AABB.
+                                          // NOTE: if Ordered, we must transform the original
+                                          // pidx, as 'it' points to a vector of aabb sizes sorted
+                                          // in the original order.
+                                          const auto aabb_size = Ordered ? *(it + m_perm[pidx]) : *(it + pidx);
+                                          for (std::size_t j = 0; j < NDim; ++j) {
+                                              tmp[j] = m_parts[j][pidx];
+                                              aabb_sizes[j] = aabb_size;
+                                          }
 
-                        if (ecode == lcode) {
-                            // The enclosing node is the leaf node
-                            // itself, don't do anything.
-                            continue;
-                        }
+                                          // Compute the code of the enclosing node for the
+                                          // current particle.
+                                          const auto ecode
+                                              = detail::coll_get_enclosing_node(tmp, llevel, aabb_sizes, inv_box_size);
 
-                        // The enclosing node is an ancestor of the
-                        // leaf node. We need to add the current particle
-                        // to all the leaf nodes which are children of
-                        // the enclosing node.
-                        // We will be iterating over the set of all leaf nodes
-                        // starting from the current one. We will move backwards
-                        // and forward until we have identified all the children nodes
-                        // of the enclosing node.
+                                          if (ecode == lcode) {
+                                              // The enclosing node is the leaf node
+                                              // itself, don't do anything.
+                                              continue;
+                                          }
 
-                        // Small helper to establish if the node with the input code
-                        // is a child of the enclosing node.
-                        auto is_child = [ecode_level = detail::tree_level<NDim>(ecode), ecode](UInt code) {
-                            const auto level = detail::tree_level<NDim>(code);
-                            if (level < ecode_level) {
-                                // The input node has a lower level than
-                                // the enclosing node, it cannot be one of its
-                                // children.
-                                return false;
-                            }
-                            if ((code >> ((level - ecode_level) * NDim)) != ecode) {
-                                // The input code does not start with ecode: it belongs
-                                // to another branch of the tree.
-                                return false;
-                            }
-                            return true;
-                        };
+                                          // The enclosing node is an ancestor of the
+                                          // leaf node. We need to add the current particle
+                                          // to all the leaf nodes which are children of
+                                          // the enclosing node.
+                                          // We will be iterating over the set of all leaf nodes
+                                          // starting from the current one. We will move backwards
+                                          // and forward until we have identified all the children nodes
+                                          // of the enclosing node.
 
-                        // The backwards iteration.
-                        auto j = i;
-                        while (j) {
-                            if (!is_child(m_tree[clp[--j]].code)) {
-                                break;
-                            }
-                            local_map[j].push_back(pidx);
-                        }
+                                          // Small helper to establish if the node with the input code
+                                          // is a child of the enclosing node.
+                                          auto is_child
+                                              = [ecode_level = detail::tree_level<NDim>(ecode), ecode](UInt code) {
+                                                    const auto level = detail::tree_level<NDim>(code);
 
-                        // The forward iteration.
-                        for (j = i + 1u; j < clp.size(); ++j) {
-                            if (!is_child(m_tree[clp[j]].code)) {
-                                break;
-                            }
-                            local_map[j].push_back(pidx);
-                        }
+                                                    if (level < ecode_level) {
+                                                        // The input node has a lower level than
+                                                        // the enclosing node, it cannot be one of its
+                                                        // children.
+                                                        return false;
+                                                    }
+
+                                                    if ((code >> ((level - ecode_level) * NDim)) != ecode) {
+                                                        // The input code does not start with ecode: it belongs
+                                                        // to another branch of the tree.
+                                                        return false;
+                                                    }
+
+                                                    return true;
+                                                };
+
+                                          // The backwards iteration.
+                                          auto j = i;
+                                          while (j) {
+                                              if (!is_child(m_tree[clp[--j]].code)) {
+                                                  break;
+                                              }
+                                              local_map[j].push_back(pidx);
+                                          }
+
+                                          // The forward iteration.
+                                          for (j = i + 1u; j < clp.size(); ++j) {
+                                              if (!is_child(m_tree[clp[j]].code)) {
+                                                  break;
+                                              }
+                                              local_map[j].push_back(pidx);
+                                          }
+                                      }
+                                  }
+                              });
+
+            for (const auto &lm : local_maps) {
+                auto acc = 0ull;
+                std::cout << std::accumulate(lm.begin(), lm.end(), 0ull, [](auto cur, const auto &v) {
+                    return cur + v.size();
+                }) << ", ";
+            }
+            std::cout << '\n';
+            tbb::parallel_for(tbb::blocked_range(local_maps.begin(), local_maps.end()), [&v_extra](const auto &r) {
+                for (auto it = r.begin(); it != r.end(); ++it) {
+                    const auto &lm = *it;
+                    const auto lm_size = lm.size();
+
+                    for (decltype(lm.size()) i = 0; i < lm_size; ++i) {
+                        const auto &lv = lm[i];
+                        v_extra[i].grow_by(lv.begin(), lv.end());
                     }
-                }
-
-                // Merge the local map into v_extra.
-                for (const auto &[i, v] : local_map) {
-                    v_extra[static_cast<decltype(v_extra.size())>(i)].grow_by(v.begin(), v.end());
                 }
             });
         });
@@ -3840,7 +3864,7 @@ private:
                 // Fetch references to the leaf node and its
                 // extra particles.
                 const auto &lnode = m_tree[clp[i]];
-                const auto extras = v_extra[static_cast<decltype(v_extra.size())>(i)];
+                const auto &extras = v_extra[i];
 
                 // Fill in the full set of particles belonging to this node: the
                 // original ones, plus those from v_extra.
