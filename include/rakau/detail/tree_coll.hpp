@@ -73,8 +73,6 @@ inline UInt tree<NDim, F, UInt, MAC>::coll_size_to_level(F s) const
 template <std::size_t NDim, typename F, typename UInt, mac MAC>
 inline auto tree<NDim, F, UInt, MAC>::coll_leaves_permutation() const
 {
-    simple_timer st("coll_leaves_permutation");
-
     // Prepare the output.
     std::vector<size_type> retval;
     const auto tsize = m_tree.size();
@@ -107,7 +105,14 @@ inline namespace detail
 // the point p_pos. The coordinates of the AABB vertices will be clamped
 // to the domain boundaries (via inv_box_size).
 template <typename UInt, typename F, std::size_t NDim>
-inline auto tree_coll_get_aabb_codes(const std::array<F, NDim> &p_pos, F aabb_size, F inv_box_size)
+inline auto
+#if defined(__GNUC__)
+    // NOTE: unsure why, but disabling inlining
+    // on this function is a big performance win on some
+    // test cases. Need to investigate.
+    __attribute__((noinline))
+#endif
+    tree_coll_get_aabb_codes(const std::array<F, NDim> &p_pos, F aabb_size, F inv_box_size)
 {
     // p_pos must contain finite values.
     assert(std::all_of(p_pos.begin(), p_pos.end(), [](F x) { return std::isfinite(x); }));
@@ -209,8 +214,10 @@ inline auto tree<NDim, F, UInt, MAC>::compute_cgraph_impl(It it) const
     // up to the number of particles.
     detail::it_diff_check<It>(m_parts[0].size());
 
-    // The vector for iterating over the leaf nodes.
+    // The vector for iterating over the leaf nodes, and the corresponding
+    // permutation iterators.
     decltype(coll_leaves_permutation()) clp;
+    decltype(boost::make_permutation_iterator(m_tree.begin(), clp.begin())) c_begin, c_end;
 
     // The vector of additional particles for each leaf node.
     std::vector<tbb::concurrent_vector<size_type>> v_add;
@@ -226,8 +233,6 @@ inline auto tree<NDim, F, UInt, MAC>::compute_cgraph_impl(It it) const
         simple_timer st("cgraph prepare");
         cgraph.resize(boost::numeric_cast<decltype(cgraph.size())>(m_parts[0].size()));
     });
-
-    decltype(boost::make_permutation_iterator(m_tree.begin(), clp.begin())) c_begin, c_end;
 
     tg.run([this, &clp, &v_add, it, &c_begin, &c_end]() {
         {
@@ -385,21 +390,23 @@ inline auto tree<NDim, F, UInt, MAC>::compute_cgraph_impl(It it) const
 
 #if !defined(NDEBUG)
     // Verify v_add.
-    for (decltype(v_add.size()) i = 0; i < v_add.size(); ++i) {
-        const auto &v = v_add[i];
-        for (auto idx : v) {
-            // The indices of the extra particles cannot
-            // be referring to particles already in the node.
-            assert(idx < m_tree[clp[i]].begin || idx >= m_tree[clp[i]].end);
+    tbb::parallel_for(tbb::blocked_range(decltype(v_add.size())(0), v_add.size()), [this, &clp, &v_add](const auto &r) {
+        for (auto i = r.begin(); i != r.end(); ++i) {
+            const auto &v = v_add[i];
+            for (auto idx : v) {
+                // The indices of the extra particles cannot
+                // be referring to particles already in the node.
+                assert(idx < m_tree[clp[i]].begin || idx >= m_tree[clp[i]].end);
+            }
         }
-    }
+    });
 #endif
 
     // Build the collision graph.
     tbb::parallel_for(tbb::blocked_range(c_begin, c_end), [this, &v_add, &cgraph, c_begin, it](const auto &r) {
         // A thread local vector to store all the particle indices
         // of a node, including the extra particles.
-        std::vector<size_type> node_indices;
+        static thread_local std::vector<size_type> node_indices;
 
         // Vectors to hold the min/max aabb coordinates
         // for a particle.
@@ -411,15 +418,19 @@ inline auto tree<NDim, F, UInt, MAC>::compute_cgraph_impl(It it) const
             const auto &lnode = *l_it;
             auto &va = v_add[static_cast<decltype(v_add.size())>(l_it - c_begin)];
 
-            // Fill in all the particle indices belonging to the node: its original
+            // Write into node_indices all the particle indices belonging to the node: its original
             // particles, plus the additional ones.
             node_indices.resize(boost::numeric_cast<decltype(node_indices.size())>(lnode.end - lnode.begin));
             std::iota(node_indices.begin(), node_indices.end(), lnode.begin);
+            // NOTE: the vector of extra particles might contain
+            // duplicates: sort it, apply std::unique() and insert
+            // only the non-duplicate values.
             std::sort(va.begin(), va.end());
             const auto new_va_end = std::unique(va.begin(), va.end());
             node_indices.insert(node_indices.end(), va.begin(), new_va_end);
 
-            // Run the N**2 collision detection.
+            // Run the N**2 AABB overlap detection on all particles
+            // in node_indices.
             const auto tot_n = node_indices.size();
             for (decltype(node_indices.size()) i = 0; i < tot_n; ++i) {
                 // Load the index of the first particle.
@@ -461,7 +472,11 @@ inline auto tree<NDim, F, UInt, MAC>::compute_cgraph_impl(It it) const
                         const auto min2 = m_parts[k][idx2] - aabb_size2 * (F(1) / F(2));
                         const auto max2 = m_parts[k][idx2] + aabb_size2 * (F(1) / F(2));
 
-                        if (!(max_aabb[k] > min2 && min_aabb[k] < max2)) {
+                        // NOTE: we regard the AABBs as closed ranges, that is,
+                        // a single point in common in two segments is enough
+                        // to trigger an overlap condition. Thus, test with
+                        // >= and <=.
+                        if (!(max_aabb[k] >= min2 && min_aabb[k] <= max2)) {
                             overlap = false;
                             break;
                         }
@@ -482,24 +497,36 @@ inline auto tree<NDim, F, UInt, MAC>::compute_cgraph_impl(It it) const
         }
     });
 
-    tbb::parallel_for(tbb::blocked_range(cgraph.begin(), cgraph.end()), [](const auto &r) {
-        for (auto &v : r) {
-            detail::it_diff_check<decltype(v.begin())>(v.size());
+    // Last step: sort+duplicate removal for the
+    // vectors in cgraph.
+    {
+        simple_timer st_cd("cgraph deduplication");
+        tbb::parallel_for(tbb::blocked_range(cgraph.begin(), cgraph.end()), [](const auto &r) {
+            for (auto &v : r) {
+                detail::it_diff_check<decltype(v.begin())>(v.size());
 
-            std::sort(v.begin(), v.end());
-            const auto new_end = std::unique(v.begin(), v.end());
-            v.resize(static_cast<decltype(v.size())>(new_end - v.begin()));
-        }
-    });
+                std::sort(v.begin(), v.end());
+                const auto new_end = std::unique(v.begin(), v.end());
+                v.resize(static_cast<decltype(v.size())>(new_end - v.begin()));
+            }
+        });
+    }
 
 #if !defined(NDEBUG)
     // Verify the collision graph.
-    for (decltype(cgraph.size()) i = 0; i < cgraph.size(); ++i) {
-        for (auto idx : cgraph[i]) {
-            assert(idx < cgraph.size());
-            assert(std::find(cgraph[idx].begin(), cgraph[idx].end(), i) != cgraph[idx].end());
+    tbb::parallel_for(tbb::blocked_range(decltype(cgraph.size())(0), cgraph.size()), [&cgraph](const auto &r) {
+        for (auto i = r.begin(); i != r.end(); ++i) {
+            for (auto idx : cgraph[i]) {
+                assert(idx < cgraph.size());
+                assert(std::is_sorted(cgraph[idx].begin(), cgraph[idx].end()));
+                const auto new_end = std::unique(cgraph[idx].begin(), cgraph[idx].end());
+                assert(new_end == cgraph[idx].end());
+                const auto lb_it = std::lower_bound(cgraph[idx].begin(), cgraph[idx].end(), i);
+                assert(lb_it != cgraph[idx].end());
+                assert(*lb_it == i);
+            }
         }
-    }
+    });
 #endif
 
     return cgraph;
