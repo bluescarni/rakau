@@ -49,13 +49,6 @@ int main(int argc, char **argv)
                           kwargs::max_leaf_n = max_leaf_n};
 
         std::cout << t << '\n';
-        std::cout << detail::tree_level<3>(std::max_element(t.nodes().begin(), t.nodes().end(),
-                                                            [](const auto &n1, const auto &n2) {
-                                                                return detail::tree_level<3>(n1.code)
-                                                                       < detail::tree_level<3>(n2.code);
-                                                            })
-                                               ->code)
-                  << '\n';
 
         decltype(t.compute_cgraph_o(aabb_sizes.data())) cgraph;
         if (ordered) {

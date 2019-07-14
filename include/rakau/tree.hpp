@@ -38,7 +38,6 @@
 #include <chrono>
 #endif
 
-#include <boost/container/small_vector.hpp>
 #include <boost/iterator/permutation_iterator.hpp>
 #include <boost/iterator/transform_iterator.hpp>
 #include <boost/numeric/conversion/cast.hpp>
@@ -3657,15 +3656,274 @@ public:
     }
 
 private:
+    auto coll_leaves_permutation() const;
+    UInt coll_size_to_level(F) const;
+
+    // Compute the codes of the vertices of an AABB of size aabb_size around
+    // the point p_pos. The coordinates of the AABB vertices will be clamped
+    // to the domain boundaries (via inv_box_size).
+    static auto coll_get_aabb_codes(const std::array<F, NDim> &p_pos, F aabb_size, F inv_box_size)
+    {
+        // p_pos must contain finite values.
+        assert(std::all_of(p_pos.begin(), p_pos.end(), [](F x) { return std::isfinite(x); }));
+        // aabb_size finite and non-negative.
+        // NOTE: empty AABBs are allowed.
+        assert(std::isfinite(aabb_size) && aabb_size >= F(0));
+
+        // The number of vertices of the AABB is 2**NDim.
+        static_assert(NDim < unsigned(std::numeric_limits<std::size_t>::digits), "Overflow error.");
+        constexpr auto n_points = std::size_t(1) << NDim;
+
+        // Compute the min/max coordinates of the AABB (in 2D, the lower-left
+        // and upper-right corners of the AABB).
+        const auto aabb_minmax_coords = [half = aabb_size * (F(1) / F(2)), &p_pos]() {
+            std::array<std::array<F, NDim>, 2> retval;
+
+            for (std::size_t i = 0; i < NDim; ++i) {
+                const auto min_c = p_pos[i] - half;
+                const auto max_c = p_pos[i] + half;
+
+                // Check them.
+                if (rakau_unlikely(!std::isfinite(min_c) || !std::isfinite(max_c) || min_c > max_c)) {
+                    throw std::invalid_argument(
+                        "The computation of the min/max coordinates of an AABB produced the invalid pair of values ("
+                        + std::to_string(min_c) + ", " + std::to_string(max_c) + ")");
+                }
+
+                retval[0][i] = min_c;
+                retval[1][i] = max_c;
+            }
+
+            return retval;
+        }();
+
+        // The return value.
+        std::array<UInt, n_points> aabb_codes;
+
+        // Fill in aabb_codes. The idea here is that
+        // we need to generate all the 2**NDim possible combinations of min/max
+        // aabb coordinates. We do it via the bit-level representation
+        // of the numbers from 0 to 2**NDim - 1u. For instance, in 3 dimensions,
+        // we have the numbers from 0 to 7 included:
+        //
+        // 0 0 0 | i = 0
+        // 0 0 1 | i = 1
+        // 0 1 0 | i = 2
+        // 0 1 1 | i = 3
+        // ...
+        // 1 1 1 | i = 7
+        //
+        // We interpret a zero bit as setting the min aabb coordinate,
+        // a one bit as setting the max aabb coordinate. So, for instance,
+        // i = 3 corresponds to the aabb point (min, max, max).
+        std::array<UInt, NDim> tmp_disc;
+        morton_encoder<NDim, UInt> me;
+        for (std::size_t i = 0; i < n_points; ++i) {
+            for (std::size_t j = 0; j < NDim; ++j) {
+                const auto idx = (i >> j) & 1u;
+                // NOTE: discretize with clamping.
+                tmp_disc[j] = disc_single_coord<NDim, UInt, true>(aabb_minmax_coords[idx][j], inv_box_size);
+            }
+            aabb_codes[i] = me(tmp_disc.data());
+        }
+
+        return aabb_codes;
+    }
+
+    // Given a nodal code and its level, determine the
+    // closed range of [min, max] highest level codes
+    // (that is, positional codes with an extra 1 bit on top)
+    // belonging to the node.
+    std::pair<UInt, UInt> coll_code_to_range(UInt code, UInt level) const
+    {
+        assert(detail::tree_level<NDim>(code) == level);
+
+        const auto shift_amount = (cbits - level) * NDim;
+
+        assert(unsigned(std::numeric_limits<UInt>::digits) >= shift_amount);
+
+        // Move up, right filling zeroes.
+        const UInt min = code << shift_amount;
+        // Turn the filling zeroes into ones.
+        const UInt max = min + (UInt(-1) >> (unsigned(std::numeric_limits<UInt>::digits) - shift_amount));
+
+        return std::pair{min, max};
+    }
+
+    // Implementation of the computation of the collision graph.
     template <bool Ordered, typename It>
     auto compute_cgraph_impl(It it) const
     {
-        simple_timer st("cgraph computation");
+        simple_timer st("overall cgraph computation");
 
         // Check that we can index into It at least
         // up to the number of particles.
         it_diff_check<It>(m_parts[0].size());
 
+        // Run in parallel independent computations.
+        tbb::task_group tg;
+
+        decltype(coll_leaves_permutation()) clp;
+        std::vector<std::vector<size_type>> cgraph;
+        std::vector<tbb::concurrent_vector<size_type>> v_add;
+
+        tg.run([this, &cgraph]() {
+            simple_timer st("cgraph prepare");
+            cgraph.resize(boost::numeric_cast<decltype(cgraph.size())>(m_parts[0].size()));
+        });
+
+        tg.run([this, &clp, &v_add, it]() {
+            // Determine the permutation indices over the
+            // leaf nodes.
+            clp = coll_leaves_permutation();
+
+            // Create the iterators for accessing the leaf nodes.
+            // NOTE: make sure we don't overflow when indexing.
+            it_diff_check<decltype(m_tree.begin())>(m_tree.size());
+            auto c_begin = boost::make_permutation_iterator(m_tree.begin(), clp.begin());
+            auto c_end = boost::make_permutation_iterator(m_tree.end(), clp.end());
+
+            // Pre-compute the inverse of the domain size.
+            const auto inv_box_size = F(1) / m_box_size;
+
+            simple_timer st("v_add computation");
+            // Prepare the data structure for recording the additional
+            // particles for each leaf node.
+            // TODO in parallel?
+            v_add.resize(boost::numeric_cast<decltype(v_add.size())>(clp.size()));
+
+            // Fill in v_add. We will be first accumulating into thread local
+            // temporaries, and we will then merge the partial results in v_add.
+            using local_map_t = std::vector<std::vector<size_type>>;
+            tbb::enumerable_thread_specific<local_map_t> local_maps(
+                local_map_t(boost::numeric_cast<typename local_map_t::size_type>(clp.size())));
+
+            tbb::parallel_for(tbb::blocked_range(c_begin, c_end), [this, &local_maps, it, inv_box_size, c_begin,
+                                                                   c_end](const auto &r) {
+                // Temporary vector for the particle position.
+                std::array<F, NDim> tmp;
+
+                // Get out a reference to the local map.
+                auto &lmap = local_maps.local();
+
+                // Iteration over the leaf nodes.
+                for (const auto &lnode : r) {
+                    // Fetch/cache some properties of the leaf node.
+                    const auto lcode = lnode.code;
+                    const auto llevel = detail::tree_level<NDim>(lcode);
+
+                    // Iterate over the particles of the leaf node.
+                    const auto e = lnode.end;
+                    for (auto pidx = lnode.begin; pidx != e; ++pidx) {
+                        // Fill in the particle position and load the particle's AABB size.
+                        // NOTE: if Ordered, we must transform the original
+                        // pidx, as 'it' points to a vector of aabb sizes sorted
+                        // in the original order.
+                        const auto aabb_size = Ordered ? *(it + m_perm[pidx]) : *(it + pidx);
+                        for (std::size_t j = 0; j < NDim; ++j) {
+                            tmp[j] = m_parts[j][pidx];
+                        }
+
+                        // Fetch the particle code.
+                        const auto pcode = m_codes[pidx];
+
+                        // Compute the clamped codes of the AABB vertices.
+                        const auto aabb_codes = coll_get_aabb_codes(tmp, aabb_size, inv_box_size);
+                        constexpr auto n_aabb_codes = std::tuple_size_v<std::remove_const_t<decltype(aabb_codes)>>;
+
+                        // Array of flags identifying AABB vertices which straddle. Inited
+                        // to all false.
+                        std::array<bool, n_aabb_codes> straddle_flags{};
+
+                        // Flag the straddling AABB vertices.
+                        // NOTE: the idea here is that the codes for all positions in the current node share
+                        // the same initial llevel*NDim digits, which we can determine from pcode.
+                        const auto n_straddle = [llevel, &aabb_codes, &straddle_flags, pcode]() {
+                            std::size_t retval = 0;
+                            const auto shift_amount = (cbits - llevel) * NDim;
+                            const auto common_prefix = pcode >> shift_amount;
+
+                            for (std::size_t i = 0; i < n_aabb_codes; ++i) {
+                                if (aabb_codes[i] >> shift_amount != common_prefix) {
+                                    straddle_flags[i] = true;
+                                    ++retval;
+                                }
+                            }
+
+                            return retval;
+                        }();
+
+                        if (!n_straddle) {
+                            // No AABB vertices straddle, move to the next particle.
+                            continue;
+                        }
+
+                        // The particle straddles. We need to identify the other
+                        // leaf nodes into which it straddles.
+                        // For each straddling vertex V of the AABB, we will be looking
+                        // in the tree for the node N which contains V and
+                        // whose size is greater than the AABB size, and we will
+                        // add the particle to all the leaf nodes inside N.
+
+                        // Convert the AABB size to a node level.
+                        // NOTE: we implicitly checked above, when computing the aabb_codes,
+                        // that the AABB sizes stored in 'it' are finite and non-negative.
+                        const auto aabb_level = coll_size_to_level(aabb_size);
+
+                        for (std::size_t i = 0; i < n_aabb_codes; ++i) {
+                            if (!straddle_flags[i]) {
+                                // The current vertex does not straddle, skip it.
+                                continue;
+                            }
+
+                            // Compute the code of the node at level aabb_level
+                            // that encloses the straddling vertex.
+                            const auto s_code
+                                = (aabb_codes[i] >> ((cbits - aabb_level) * NDim)) + (UInt(1) << (aabb_level * NDim));
+
+                            // Determine the range of nodal codes for the s_code node.
+                            const auto blappo = coll_code_to_range(s_code, aabb_level);
+
+                            // The last that fully precedes, or the first which overlaps.
+                            auto l_begin
+                                = std::lower_bound(c_begin, c_end, blappo, [this](const auto &n, const auto &p) {
+                                      const auto [n_min, n_max] = coll_code_to_range(n.code, n.level);
+                                      return n_max < p.first;
+                                  });
+
+                            // The first that is completely after.
+                            auto l_end = std::upper_bound(c_begin, c_end, blappo, [this](const auto &p, const auto &n) {
+                                const auto [n_min, n_max] = coll_code_to_range(n.code, n.level);
+                                return p.second < n_min;
+                            });
+
+                            for (; l_begin != l_end; ++l_begin) {
+                                lmap[l_begin - c_begin].push_back(pidx);
+                            }
+                        }
+                    }
+                }
+            });
+
+            // Merge the local maps into v_add.
+            tbb::parallel_for(tbb::blocked_range(local_maps.begin(), local_maps.end()), [&v_add](const auto &r) {
+                for (auto &lmap : r) {
+                    for (decltype(lmap.size()) i = 0; i < lmap.size(); ++i) {
+                        auto &v = lmap[i];
+                        std::sort(v.begin(), v.end());
+                        v.erase(std::unique(v.begin(), v.end()), v.end());
+
+                        v_add[i].grow_by(v.begin(), v.end());
+                    }
+                }
+            });
+        });
+
+        tg.wait();
+
+        return cgraph;
+
+#if 0
         // The return value.
         std::vector<tbb::concurrent_unordered_set<size_type>> cgraph;
 
@@ -3679,16 +3937,16 @@ private:
         std::vector<tbb::concurrent_vector<size_type>> v_extra;
 
         // The vector for iterating over the leaf nodes.
-        decltype(detail::coll_leaves_permutation(m_tree)) clp;
+        decltype(detail::coll_leaves_permutation(m_tree, leaf_level)) clp;
 
         tbb::task_group tg;
 
-        tg.run([this, &v_extra, &clp, it]() {
+        tg.run([this, &v_extra, &clp, it, leaf_level]() {
             simple_timer st_vextra("vextra computation");
 
             // Compute the permutation to iterate over the leaf nodes, and prepare
             // the container of the extra particles for each leaf node.
-            clp = detail::coll_leaves_permutation(m_tree);
+            clp = detail::coll_leaves_permutation(m_tree, leaf_level);
             v_extra.resize(boost::numeric_cast<decltype(v_extra.size())>(clp.size()));
 
             using local_map_t = std::vector<boost::container::small_vector<size_type, 1u>>;
@@ -3698,7 +3956,7 @@ private:
             // Pre-compute the inverse of the domain size.
             const auto inv_box_size = F(1) / m_box_size;
 
-            // Determine the straddling particles that need to be added to each leaf node.
+            // Determine the straddling particles that need to be added to the leaf nodes.
             tbb::parallel_for(tbb::blocked_range(decltype(clp.size())(0), clp.size()),
                               [this, &clp, &v_extra, it, inv_box_size, &local_maps](const auto &r) {
                                   // Temporary vector for the particle position
@@ -3811,7 +4069,10 @@ private:
         });
 
         // Concurrently, prepare the collision list via resize.
-        tg.run([this, &cgraph]() { cgraph.resize(boost::numeric_cast<decltype(cgraph.size())>(m_parts[0].size())); });
+        tg.run([this, &cgraph]() {
+            simple_timer st_vextra("cgraph prepare");
+            cgraph.resize(boost::numeric_cast<decltype(cgraph.size())>(m_parts[0].size()));
+        });
 
         tg.wait();
 
@@ -3918,20 +4179,24 @@ private:
             }
         }
 #endif
+#endif
 
         return cgraph;
     }
+
+    template <bool Ordered, typename It>
+    auto compute_cgraph_impl2(It) const;
 
 public:
     template <typename It>
     auto compute_cgraph_u(It it) const
     {
-        return compute_cgraph_impl<false>(it);
+        return compute_cgraph_impl2<false>(it);
     }
     template <typename It>
     auto compute_cgraph_o(It it) const
     {
-        return compute_cgraph_impl<true>(it);
+        return compute_cgraph_impl2<true>(it);
     }
 
 private:
@@ -4298,5 +4563,7 @@ template <typename F, mac MAC = mac::bh>
 using octree = tree<3, F, std::size_t, MAC>;
 
 } // namespace rakau
+
+#include <rakau/detail/tree_coll.hpp>
 
 #endif
