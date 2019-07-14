@@ -30,7 +30,6 @@
 #include <string>
 #include <tuple>
 #include <type_traits>
-#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -43,9 +42,7 @@
 #include <boost/numeric/conversion/cast.hpp>
 
 #include <tbb/blocked_range.h>
-#include <tbb/concurrent_unordered_set.h>
 #include <tbb/concurrent_vector.h>
-#include <tbb/enumerable_thread_specific.h>
 #include <tbb/parallel_for.h>
 #include <tbb/parallel_reduce.h>
 #include <tbb/parallel_sort.h>
