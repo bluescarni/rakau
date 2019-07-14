@@ -19,6 +19,7 @@
 #include <stdexcept>
 #include <string>
 #include <tuple>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -102,11 +103,11 @@ inline auto tree<NDim, F, UInt, MAC>::coll_leaves_permutation() const
 inline namespace detail
 {
 
-// Compute the coordinates and the codes of the vertices of an AABB of size aabb_size around
-// the point p_pos. When computing the codes, the coordinates of the AABB vertices will be clamped
+// Compute the codes of the vertices of an AABB of size aabb_size around
+// the point p_pos. The coordinates of the AABB vertices will be clamped
 // to the domain boundaries (via inv_box_size).
 template <typename UInt, typename F, std::size_t NDim>
-inline auto tree_coll_get_aabb(const std::array<F, NDim> &p_pos, F aabb_size, F inv_box_size)
+inline auto tree_coll_get_aabb_codes(const std::array<F, NDim> &p_pos, F aabb_size, F inv_box_size)
 {
     // p_pos must contain finite values.
     assert(std::all_of(p_pos.begin(), p_pos.end(), [](F x) { return std::isfinite(x); }));
@@ -142,11 +143,9 @@ inline auto tree_coll_get_aabb(const std::array<F, NDim> &p_pos, F aabb_size, F 
     }();
 
     // The return value.
-    std::pair<std::array<std::array<F, NDim>, n_points>, std::array<UInt, n_points>> retval;
-    auto &aabb_vertices = retval.first;
-    auto &aabb_codes = retval.second;
+    std::array<UInt, n_points> aabb_codes;
 
-    // Fill in aabb_vertices and aabb_codes. The idea here is that
+    // Fill in aabb_codes. The idea here is that
     // we need to generate all the 2**NDim possible combinations of min/max
     // aabb coordinates. We do it via the bit-level representation
     // of the numbers from 0 to 2**NDim - 1u. For instance, in 3 dimensions,
@@ -165,20 +164,15 @@ inline auto tree_coll_get_aabb(const std::array<F, NDim> &p_pos, F aabb_size, F 
     std::array<UInt, NDim> tmp_disc;
     morton_encoder<NDim, UInt> me;
     for (std::size_t i = 0; i < n_points; ++i) {
-        auto &cur_vertex = aabb_vertices[i];
-
         for (std::size_t j = 0; j < NDim; ++j) {
             const auto idx = (i >> j) & 1u;
-            const auto cur_c = aabb_minmax_coords[idx][j];
-
-            cur_vertex[j] = cur_c;
             // NOTE: discretize with clamping.
-            tmp_disc[j] = disc_single_coord<NDim, UInt, true>(cur_c, inv_box_size);
+            tmp_disc[j] = disc_single_coord<NDim, UInt, true>(aabb_minmax_coords[idx][j], inv_box_size);
         }
         aabb_codes[i] = me(tmp_disc.data());
     }
 
-    return retval;
+    return aabb_codes;
 }
 
 // Given a nodal code and its level, determine the
@@ -215,7 +209,7 @@ inline auto tree<NDim, F, UInt, MAC>::compute_cgraph_impl(It it) const
     // up to the number of particles.
     detail::it_diff_check<It>(m_parts[0].size());
 
-    // The vector of permutations over the leaf nodes.
+    // The vector for iterating over the leaf nodes.
     decltype(coll_leaves_permutation()) clp;
 
     // The vector of additional particles for each leaf node.
@@ -296,13 +290,10 @@ inline auto tree<NDim, F, UInt, MAC>::compute_cgraph_impl(It it) const
                     }
 
                     // Compute the clamped codes of the AABB vertices.
-                    // TODO: remove vertices.
-                    const auto tcga = detail::tree_coll_get_aabb<UInt>(p_pos, aabb_size, inv_box_size);
-                    const auto &aabb_codes = tcga.second;
+                    const auto aabb_codes = detail::tree_coll_get_aabb_codes<UInt>(p_pos, aabb_size, inv_box_size);
 
                     // Fetch the number of vertices.
-                    // TODO remove uncvref_t.
-                    constexpr auto n_vertices = std::tuple_size_v<uncvref_t<decltype(aabb_codes)>>;
+                    constexpr auto n_vertices = std::tuple_size_v<std::remove_const_t<decltype(aabb_codes)>>;
 
                     // Check if the particle straddles.
                     // NOTE: the idea here is that the codes for all positions in the current node share
@@ -379,7 +370,8 @@ inline auto tree<NDim, F, UInt, MAC>::compute_cgraph_impl(It it) const
                             // to its original node.
                             if (l_begin->code != lcode) {
                                 // NOTE: we checked earlier that c_begin's
-                                // diff type can represent v_add.size().
+                                // diff type can represent m_tree.size() and,
+                                // by extension, v_add.size().
                                 v_add[static_cast<decltype(v_add.size())>(l_begin - c_begin)].push_back(pidx);
                             }
                         }
