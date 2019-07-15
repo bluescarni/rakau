@@ -631,9 +631,13 @@ using f_vector = std::vector<F, di_aligned_allocator<F, XSIMD_DEFAULT_ALIGNMENT>
 //   can try to ensure that the TBB threads are scheduled with the same affinity as the affinity used to write initially
 //   into the particle data vectors. TBB has an affinity partitioner, but it's not clear to me if we can rely on that
 //   for efficient NUMA access. It's probably better to run some tests before embarking in this.
-// - we should probably also think about replacing the morton encoder with some generic solution. It does not
-//   need to be super high performance, as morton encoding is hardly a bottleneck here. It's more important for it
-//   to be generic (i.e., work on a general number of dimensions), correct and compact.
+// - we should think about replacing eventually the current morton encoder. We could try to move either
+//   to a fully generic solution (although it's not clear what the practical benefits would be) or to a
+//   higher-performance one focused on 2d/3d cases - particularly, towards vectorization:
+//   https://lemire.me/blog/2018/01/09/how-fast-can-you-bit-interleave-32-bit-integers-simd-edition/
+//   Currently morton encoding is not really a bottleneck, however there might be some performance gains
+//   when vectorizing, e.g., in the collision code where we end up encoding all the AABB vertices
+//   of each particle.
 // - double precision benchmarking/tuning.
 // - tuning for the potential computation (possibly not much improvement to be had there, but it should be investigated
 //   a bit at least).
@@ -643,10 +647,13 @@ using f_vector = std::vector<F, di_aligned_allocator<F, XSIMD_DEFAULT_ALIGNMENT>
 //   will fail often). It's probably best to start experimenting with such size as a free parameter, check the
 //   performance with various values and then try to understand if there's any heuristic we can deduce from that.
 // - quadrupole moments.
-// - radix sort.
+// - radix sort, or perhaps some type of sort which takes better advantage of almost-sorted data.
 // - would be interesting to see if we can do the permutations in-place efficiently. If that worked, it would probably
 //   help simplifying things on the GPU side. See for instance:
 //   https://stackoverflow.com/questions/7365814/in-place-array-reordering
+// - some vectorisation in the AABB overlap checks should be possible, especially when we are doing
+//   overlap checks on the original particles in a leaf node (whose coordinates we can easily load in
+//   SIMD batches).
 template <std::size_t NDim, typename F, typename UInt, mac MAC>
 class tree
 {
