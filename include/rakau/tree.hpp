@@ -3489,7 +3489,6 @@ public:
 
 private:
     auto coll_leaves_permutation() const;
-    UInt coll_size_to_level(F) const;
     template <bool Ordered, typename It>
     auto compute_cgraph_impl(It) const;
 

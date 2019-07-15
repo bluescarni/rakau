@@ -37,24 +37,30 @@
 namespace rakau
 {
 
-// Return the largest node level such that the node
-// size is larger than the value s. If s >= m_box_size,
+inline namespace detail
+{
+
+// Return the largest node level, in a domain of size box_size,
+// such that the node size is larger than the value s. If s >= box_size,
 // 0 will be returned.
-template <std::size_t NDim, typename F, typename UInt, mac MAC>
-inline UInt tree<NDim, F, UInt, MAC>::coll_size_to_level(F s) const
+template <typename UInt, std::size_t NDim, typename F>
+inline UInt coll_size_to_level(F s, F box_size)
 {
     assert(std::isfinite(s));
     // NOTE: we assume we never enter here
     // with a null node size.
     assert(s > F(0));
+    assert(std::isfinite(box_size));
+
+    constexpr auto cbits = cbits_v<UInt, NDim>;
 
     UInt retval = 0;
-    F cur_node_size = m_box_size;
+    auto cur_node_size = box_size;
 
     // Don't return a result larger than cbits
     // (the max level).
     for (; retval != cbits; ++retval) {
-        const auto next_node_size = cur_node_size * F(1) / F(2);
+        const auto next_node_size = cur_node_size * (F(1) / F(2));
         if (next_node_size <= s) {
             // The next node size is not larger
             // than the target. Break out and
@@ -66,40 +72,6 @@ inline UInt tree<NDim, F, UInt, MAC>::coll_size_to_level(F s) const
 
     return retval;
 }
-
-// Return a vector of indices into tree structure
-// representing the ordered set of leaf nodes
-// NOTE: need to understand if/when/how this should be parallelised.
-template <std::size_t NDim, typename F, typename UInt, mac MAC>
-inline auto tree<NDim, F, UInt, MAC>::coll_leaves_permutation() const
-{
-    // Prepare the output.
-    std::vector<size_type> retval;
-    const auto tsize = m_tree.size();
-    retval.reserve(static_cast<decltype(retval.size())>(tsize));
-
-    for (size_type i = 0; i < tsize; ++i) {
-        if (!m_tree[i].n_children) {
-            // Leaf node, add it.
-            retval.push_back(i);
-        }
-    }
-
-#if !defined(NDEBUG)
-    // Verify the output.
-    size_type tot_parts = 0;
-    for (auto idx : retval) {
-        assert(m_tree[idx].n_children == 0u);
-        tot_parts += m_tree[idx].end - m_tree[idx].begin;
-    }
-    assert(tot_parts == m_parts[0].size());
-#endif
-
-    return retval;
-}
-
-inline namespace detail
-{
 
 // Compute the codes of the vertices of an AABB of size aabb_size around
 // the point p_pos. The coordinates of the AABB vertices will be clamped
@@ -204,6 +176,37 @@ inline std::pair<UInt, UInt> tree_coll_node_range(UInt code, UInt level)
 
 } // namespace detail
 
+// Return a vector of indices into the tree structure
+// representing the ordered set of leaf nodes
+// NOTE: need to understand if/when/how this should be parallelised.
+template <std::size_t NDim, typename F, typename UInt, mac MAC>
+inline auto tree<NDim, F, UInt, MAC>::coll_leaves_permutation() const
+{
+    // Prepare the output.
+    std::vector<size_type> retval;
+    const auto tsize = m_tree.size();
+    retval.reserve(static_cast<decltype(retval.size())>(tsize));
+
+    for (size_type i = 0; i < tsize; ++i) {
+        if (!m_tree[i].n_children) {
+            // Leaf node, add it.
+            retval.push_back(i);
+        }
+    }
+
+#if !defined(NDEBUG)
+    // Verify the output.
+    size_type tot_parts = 0;
+    for (auto idx : retval) {
+        assert(m_tree[idx].n_children == 0u);
+        tot_parts += m_tree[idx].end - m_tree[idx].begin;
+    }
+    assert(tot_parts == m_parts[0].size());
+#endif
+
+    return retval;
+}
+
 template <std::size_t NDim, typename F, typename UInt, mac MAC>
 template <bool Ordered, typename It>
 inline auto tree<NDim, F, UInt, MAC>::compute_cgraph_impl(It it) const
@@ -278,9 +281,10 @@ inline auto tree<NDim, F, UInt, MAC>::compute_cgraph_impl(It it) const
                     const auto aabb_size = Ordered ? *(it + m_perm[pidx]) : *(it + pidx);
 
                     // Check it.
-                    if (rakau_unlikely(!std::isfinite(aabb_size))) {
-                        throw std::invalid_argument(
-                            "A non-finite AABB size was detected while computing the collision graph");
+                    if (rakau_unlikely(!std::isfinite(aabb_size) || aabb_size < F(0))) {
+                        throw std::invalid_argument("An invalid AABB size was detected while computing the collision "
+                                                    "graph: the AABB size must be finite and non-negative, but it is "
+                                                    + std::to_string(aabb_size) + " instead");
                     }
 
                     // Particles with a null AABB don't participate in collision
@@ -330,7 +334,7 @@ inline auto tree<NDim, F, UInt, MAC>::compute_cgraph_impl(It it) const
                     // overlap the enclosing node set.
 
                     // Convert the AABB size to a node level.
-                    const auto aabb_level = coll_size_to_level(aabb_size);
+                    const auto aabb_level = detail::coll_size_to_level<UInt, NDim>(aabb_size, m_box_size);
 
                     // Iterate over the AABB vertices.
                     for (std::size_t i = 0; i < n_vertices; ++i) {
@@ -475,6 +479,11 @@ inline auto tree<NDim, F, UInt, MAC>::compute_cgraph_impl(It it) const
             std::sort(va.begin(), va.end());
             const auto new_va_end = std::unique(va.begin(), va.end());
             node_indices.insert(node_indices.end(), va.begin(), new_va_end);
+            // We are done with va. Clear it and free any allocated
+            // storage. Like this, we are doing most of the work
+            // of the destructor of v_add in parallel.
+            va.clear();
+            va.shrink_to_fit();
 
             // Run the N**2 AABB overlap detection on all particles
             // in node_indices.
@@ -484,6 +493,8 @@ inline auto tree<NDim, F, UInt, MAC>::compute_cgraph_impl(It it) const
                 const auto idx1 = node_indices[i];
 
                 // Load the AABB size for particle idx1.
+                // NOTE: we checked while building v_add that all
+                // AABB sizes are finite and non-negative.
                 const auto aabb_size1 = Ordered ? *(it + m_perm[idx1]) : *(it + idx1);
 
                 if (aabb_size1 == F(0)) {
