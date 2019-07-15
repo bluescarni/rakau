@@ -12,6 +12,7 @@
 #include "catch.hpp"
 
 #include <algorithm>
+#include <atomic>
 #include <initializer_list>
 #include <iostream>
 #include <random>
@@ -20,6 +21,9 @@
 
 #include <boost/iterator/permutation_iterator.hpp>
 
+#include <tbb/blocked_range.h>
+#include <tbb/parallel_for.h>
+
 #include "test_utils.hpp"
 
 using namespace rakau;
@@ -27,6 +31,38 @@ using namespace rakau::kwargs;
 using namespace rakau_test;
 
 std::mt19937 rng;
+
+template <typename CGraph, typename Cmp>
+inline void compare_results(const CGraph &cgraph, Cmp &cmp)
+{
+    REQUIRE(cgraph.size() == cmp.size());
+
+    std::atomic<int> n_failures(0);
+    std::atomic<unsigned long long> n_coll(0);
+
+    tbb::parallel_for(tbb::blocked_range(decltype(cgraph.size())(0), cgraph.size()),
+                      [&n_failures, &cgraph, &cmp, &n_coll](const auto &r) {
+                          auto loc_n_coll = 0ull;
+
+                          for (auto i = r.begin(); i != r.end(); ++i) {
+                              if (cgraph[i].size() != cmp[i].size()) {
+                                  ++n_failures;
+                              }
+
+                              std::sort(cmp[i].begin(), cmp[i].end());
+                              if (!std::equal(cmp[i].begin(), cmp[i].end(), cgraph[i].begin())) {
+                                  ++n_failures;
+                              }
+
+                              loc_n_coll += cmp[i].size();
+                          }
+
+                          n_coll += loc_n_coll;
+                      });
+
+    REQUIRE(n_failures.load() == 0);
+    std::cout << "Total number of collisions detected: " << n_coll.load() / 2u << '\n';
+}
 
 TEST_CASE("compute_cgraph_2d")
 {
@@ -96,11 +132,7 @@ TEST_CASE("compute_cgraph_2d")
                     }
                 }
             }
-            for (auto i = 0u; i < s; ++i) {
-                REQUIRE(cgraph_u[i].size() == cmp[i].size());
-                REQUIRE(std::unordered_set<decltype(t)::size_type>(cgraph_u[i].begin(), cgraph_u[i].end())
-                        == std::unordered_set<decltype(t)::size_type>(cmp[i].begin(), cmp[i].end()));
-            }
+            compare_results(cgraph_u, cmp);
             // Clear cmp.
             for (auto &v : cmp) {
                 v.clear();
@@ -116,11 +148,7 @@ TEST_CASE("compute_cgraph_2d")
                     }
                 }
             }
-            for (auto i = 0u; i < s; ++i) {
-                REQUIRE(cgraph_o[i].size() == cmp[i].size());
-                REQUIRE(std::unordered_set<decltype(t)::size_type>(cgraph_o[i].begin(), cgraph_o[i].end())
-                        == std::unordered_set<decltype(t)::size_type>(cmp[i].begin(), cmp[i].end()));
-            }
+            compare_results(cgraph_o, cmp);
             // Clear cmp.
             for (auto &v : cmp) {
                 v.clear();
@@ -146,20 +174,7 @@ TEST_CASE("compute_cgraph_2d")
                     }
                 }
             }
-            for (auto i = 0u; i < s; ++i) {
-                REQUIRE(cgraph_u[i].size() == cmp[i].size());
-                // If the current particle is a point, it cannot
-                // collide with anything.
-                if (aabb_sizes_u[i] == 0) {
-                    REQUIRE(cgraph_u[i].empty());
-                }
-                // All the colliding particles must have nonzero size.
-                for (auto idx : cgraph_u[i]) {
-                    REQUIRE(aabb_sizes_u[idx] != 0);
-                }
-                REQUIRE(std::unordered_set<decltype(t)::size_type>(cgraph_u[i].begin(), cgraph_u[i].end())
-                        == std::unordered_set<decltype(t)::size_type>(cmp[i].begin(), cmp[i].end()));
-            }
+            compare_results(cgraph_u, cmp);
             // Clear cmp.
             for (auto &v : cmp) {
                 v.clear();
@@ -174,20 +189,7 @@ TEST_CASE("compute_cgraph_2d")
                     }
                 }
             }
-            for (auto i = 0u; i < s; ++i) {
-                REQUIRE(cgraph_o[i].size() == cmp[i].size());
-                // If the current particle is a point, it cannot
-                // collide with anything.
-                if (aabb_sizes[i] == 0) {
-                    REQUIRE(cgraph_o[i].empty());
-                }
-                // All the colliding particles must have nonzero size.
-                for (auto idx : cgraph_o[i]) {
-                    REQUIRE(aabb_sizes[idx] != 0);
-                }
-                REQUIRE(std::unordered_set<decltype(t)::size_type>(cgraph_o[i].begin(), cgraph_o[i].end())
-                        == std::unordered_set<decltype(t)::size_type>(cmp[i].begin(), cmp[i].end()));
-            }
+            compare_results(cgraph_o, cmp);
             // Clear cmp.
             for (auto &v : cmp) {
                 v.clear();
@@ -211,11 +213,7 @@ TEST_CASE("compute_cgraph_2d")
                     }
                 }
             }
-            for (auto i = 0u; i < s; ++i) {
-                REQUIRE(cgraph_u[i].size() == cmp[i].size());
-                REQUIRE(std::unordered_set<decltype(t)::size_type>(cgraph_u[i].begin(), cgraph_u[i].end())
-                        == std::unordered_set<decltype(t)::size_type>(cmp[i].begin(), cmp[i].end()));
-            }
+            compare_results(cgraph_u, cmp);
             // Clear cmp.
             for (auto &v : cmp) {
                 v.clear();
@@ -230,11 +228,7 @@ TEST_CASE("compute_cgraph_2d")
                     }
                 }
             }
-            for (auto i = 0u; i < s; ++i) {
-                REQUIRE(cgraph_o[i].size() == cmp[i].size());
-                REQUIRE(std::unordered_set<decltype(t)::size_type>(cgraph_o[i].begin(), cgraph_o[i].end())
-                        == std::unordered_set<decltype(t)::size_type>(cmp[i].begin(), cmp[i].end()));
-            }
+            compare_results(cgraph_o, cmp);
             // Clear cmp.
             for (auto &v : cmp) {
                 v.clear();
@@ -329,11 +323,7 @@ TEST_CASE("compute_cgraph_3d")
                     }
                 }
             }
-            for (auto i = 0u; i < s; ++i) {
-                REQUIRE(cgraph_u[i].size() == cmp[i].size());
-                REQUIRE(std::unordered_set<decltype(t)::size_type>(cgraph_u[i].begin(), cgraph_u[i].end())
-                        == std::unordered_set<decltype(t)::size_type>(cmp[i].begin(), cmp[i].end()));
-            }
+            compare_results(cgraph_u, cmp);
             // Clear cmp.
             for (auto &v : cmp) {
                 v.clear();
@@ -349,11 +339,7 @@ TEST_CASE("compute_cgraph_3d")
                     }
                 }
             }
-            for (auto i = 0u; i < s; ++i) {
-                REQUIRE(cgraph_o[i].size() == cmp[i].size());
-                REQUIRE(std::unordered_set<decltype(t)::size_type>(cgraph_o[i].begin(), cgraph_o[i].end())
-                        == std::unordered_set<decltype(t)::size_type>(cmp[i].begin(), cmp[i].end()));
-            }
+            compare_results(cgraph_o, cmp);
             // Clear cmp.
             for (auto &v : cmp) {
                 v.clear();
@@ -380,20 +366,7 @@ TEST_CASE("compute_cgraph_3d")
                     }
                 }
             }
-            for (auto i = 0u; i < s; ++i) {
-                REQUIRE(cgraph_u[i].size() == cmp[i].size());
-                // If the current particle is a point, it cannot
-                // collide with anything.
-                if (aabb_sizes_u[i] == 0) {
-                    REQUIRE(cgraph_u[i].empty());
-                }
-                // All the colliding particles must have nonzero size.
-                for (auto idx : cgraph_u[i]) {
-                    REQUIRE(aabb_sizes_u[idx] != 0);
-                }
-                REQUIRE(std::unordered_set<decltype(t)::size_type>(cgraph_u[i].begin(), cgraph_u[i].end())
-                        == std::unordered_set<decltype(t)::size_type>(cmp[i].begin(), cmp[i].end()));
-            }
+            compare_results(cgraph_u, cmp);
             // Clear cmp.
             for (auto &v : cmp) {
                 v.clear();
@@ -409,20 +382,7 @@ TEST_CASE("compute_cgraph_3d")
                     }
                 }
             }
-            for (auto i = 0u; i < s; ++i) {
-                REQUIRE(cgraph_o[i].size() == cmp[i].size());
-                // If the current particle is a point, it cannot
-                // collide with anything.
-                if (aabb_sizes[i] == 0) {
-                    REQUIRE(cgraph_o[i].empty());
-                }
-                // All the colliding particles must have nonzero size.
-                for (auto idx : cgraph_o[i]) {
-                    REQUIRE(aabb_sizes[idx] != 0);
-                }
-                REQUIRE(std::unordered_set<decltype(t)::size_type>(cgraph_o[i].begin(), cgraph_o[i].end())
-                        == std::unordered_set<decltype(t)::size_type>(cmp[i].begin(), cmp[i].end()));
-            }
+            compare_results(cgraph_o, cmp);
             // Clear cmp.
             for (auto &v : cmp) {
                 v.clear();
@@ -447,11 +407,7 @@ TEST_CASE("compute_cgraph_3d")
                     }
                 }
             }
-            for (auto i = 0u; i < s; ++i) {
-                REQUIRE(cgraph_u[i].size() == cmp[i].size());
-                REQUIRE(std::unordered_set<decltype(t)::size_type>(cgraph_u[i].begin(), cgraph_u[i].end())
-                        == std::unordered_set<decltype(t)::size_type>(cmp[i].begin(), cmp[i].end()));
-            }
+            compare_results(cgraph_u, cmp);
             // Clear cmp.
             for (auto &v : cmp) {
                 v.clear();
@@ -467,11 +423,7 @@ TEST_CASE("compute_cgraph_3d")
                     }
                 }
             }
-            for (auto i = 0u; i < s; ++i) {
-                REQUIRE(cgraph_o[i].size() == cmp[i].size());
-                REQUIRE(std::unordered_set<decltype(t)::size_type>(cgraph_o[i].begin(), cgraph_o[i].end())
-                        == std::unordered_set<decltype(t)::size_type>(cmp[i].begin(), cmp[i].end()));
-            }
+            compare_results(cgraph_o, cmp);
             // Clear cmp.
             for (auto &v : cmp) {
                 v.clear();

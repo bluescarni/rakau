@@ -13,7 +13,9 @@ function(ADD_RAKAU_TESTCASE arg1)
   endif()
 
   add_executable(${arg1} ${arg1}.cpp)
-  target_link_libraries(${arg1} rakau)
+  # NOTE: explicitly link to tbb as we are using
+  # it to parallelise some tests.
+  target_link_libraries(${arg1} rakau TBB::tbb)
   target_compile_options(${arg1} PRIVATE "$<$<CONFIG:DEBUG>:${RAKAU_CXX_FLAGS_DEBUG}>" "$<$<CONFIG:RELEASE>:${RAKAU_CXX_FLAGS_RELEASE}>")
   set_target_properties(${arg1} PROPERTIES CXX_VISIBILITY_PRESET hidden)
   set_target_properties(${arg1} PROPERTIES VISIBILITY_INLINES_HIDDEN TRUE)
