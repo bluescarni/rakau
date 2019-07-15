@@ -383,7 +383,7 @@ inline auto tree<NDim, F, UInt, MAC>::compute_cgraph_impl(It it) const
                             // code range precedes s_code_range, or the first one whose code
                             // range has some overlap with s_code range.
                             l_begin = std::lower_bound(c_begin, c_end, s_code_range, [](const auto &n, const auto &p) {
-                                const auto [n_min, n_max] = detail::tree_coll_node_range<NDim>(n.code, n.level);
+                                const auto n_max = detail::tree_coll_node_range<NDim>(n.code, n.level).second;
                                 return n_max < p.first;
                             });
 
@@ -393,7 +393,7 @@ inline auto tree<NDim, F, UInt, MAC>::compute_cgraph_impl(It it) const
                             // NOTE: start the search from l_begin, determined above, as we know
                             // that l_end must be l_begin or an iterator following it.
                             l_end = std::upper_bound(l_begin, c_end, s_code_range, [](const auto &p, const auto &n) {
-                                const auto [n_min, n_max] = detail::tree_coll_node_range<NDim>(n.code, n.level);
+                                const auto n_min = detail::tree_coll_node_range<NDim>(n.code, n.level).first;
                                 return p.second < n_min;
                             });
 

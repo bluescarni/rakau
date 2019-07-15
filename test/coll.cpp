@@ -13,6 +13,7 @@
 
 #include <algorithm>
 #include <initializer_list>
+#include <iostream>
 #include <random>
 #include <unordered_set>
 #include <vector>
@@ -62,6 +63,8 @@ TEST_CASE("compute_cgraph_2d")
         // Test with a variety of aabb sizes, starting from
         // very small until encompassing the whole domain.
         for (long k = 15; k >= -1; --k) {
+            std::cout << "Testing mln=" << mln << ", k=" << k << '\n';
+
             // Fill with random data.
             auto parts = get_uniform_particles<2>(s, bsize, rng);
 
@@ -72,6 +75,7 @@ TEST_CASE("compute_cgraph_2d")
                                  nparts = s,      box_size = bsize, max_leaf_n = mln};
 
             const auto [xc_u, yc_u, m_u] = t.p_its_u();
+            detail::ignore(m_u);
 
             // Collision graph that will be computed with the N**2 algorithm.
             std::vector<std::vector<decltype(t)::size_type>> cmp;
@@ -291,6 +295,8 @@ TEST_CASE("compute_cgraph_3d")
         // Test with a variety of aabb sizes, starting from
         // very small until encompassing the whole domain.
         for (long k = 15; k >= -1; --k) {
+            std::cout << "Testing mln=" << mln << ", k=" << k << '\n';
+
             // Fill with random data.
             auto parts = get_uniform_particles<3>(s, bsize, rng);
 
@@ -302,6 +308,7 @@ TEST_CASE("compute_cgraph_3d")
                                nparts = s,      box_size = bsize, max_leaf_n = mln};
 
             const auto [xc_u, yc_u, zc_u, m_u] = t.p_its_u();
+            detail::ignore(m_u);
 
             // Collision graph that will be computed with the N**2 algorithm.
             std::vector<std::vector<decltype(t)::size_type>> cmp;
