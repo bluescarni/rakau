@@ -334,39 +334,86 @@ inline auto tree<NDim, F, UInt, MAC>::compute_cgraph_impl(It it) const
 
                     // Iterate over the AABB vertices.
                     for (std::size_t i = 0; i < n_vertices; ++i) {
-                        // Compute the code of the node at level aabb_level
-                        // that encloses the vertex.
-                        const auto s_code
-                            = (aabb_codes[i] >> ((cbits - aabb_level) * NDim)) + (UInt(1) << (aabb_level * NDim));
+                        // NOTE: within this loop, we will be determining
+                        // a node N at level aabb_level which contains a straddling
+                        // vertex of pidx's AABB. We will then establish a range of leaf nodes
+                        // [l_begin, l_end) that have an overlap with N.
+                        //
+                        // It might be that [l_begin, l_end) turns out to
+                        // be an empty range because the particle straddles into
+                        // an 'empty' area which is not associated to any leaf node (because
+                        // it does not contain the centre of any particle). In such a situation,
+                        // we will end up *not* detecting AABB collisions occurring
+                        // in the empty area. In order to avoid this, if [l_begin, l_end)
+                        // is an empty range we will lower the aabb_level (that is, move
+                        // to the parent node) and repeat the search, until it yields
+                        // a non-empty [l_begin, l_end) range. That is, we are "zooming
+                        // out" until the empty area becomes part of some node N_bigger, which
+                        // is guaranteed to eventually happen, and we will add pidx to
+                        // all leaf nodes overlapping N_bigger.
 
-                        if (aabb_level >= llevel && s_code >> ((aabb_level - llevel) * NDim) == lcode) {
-                            // The s_code node fits within the current leaf node,
-                            // no need for further checks (i.e., s_code does not overlap
-                            // with any leaf node other than the original one).
-                            continue;
+                        // Init the range iterators.
+                        decltype(c_begin) l_begin, l_end;
+
+                        // In the loop below we may end up determining a node
+                        // which fits wholly in the original leaf node. In such a case,
+                        // we will want to skip the rest of the loop and move to the
+                        // next vertex, because there's no need to add pidx as an
+                        // additional particle to its original node.
+                        bool fits = false;
+
+                        for (auto al_copy(aabb_level);; --al_copy) {
+                            // Compute the code of the node at level al_copy
+                            // that encloses the vertex.
+                            const auto s_code
+                                = (aabb_codes[i] >> ((cbits - al_copy) * NDim)) + (UInt(1) << (al_copy * NDim));
+
+                            if (al_copy >= llevel && s_code >> ((al_copy - llevel) * NDim) == lcode) {
+                                // The s_code node fits within the current leaf node,
+                                // no need for further checks (i.e., s_code does not overlap
+                                // with any leaf node other than the original one).
+                                fits = true;
+                                break;
+                            }
+
+                            // Determine the code range encompassed by s_code.
+                            const auto s_code_range = detail::tree_coll_node_range<NDim>(s_code, al_copy);
+
+                            // In the set of leaf nodes, determine either the last node whose
+                            // code range precedes s_code_range, or the first one whose code
+                            // range has some overlap with s_code range.
+                            l_begin = std::lower_bound(c_begin, c_end, s_code_range, [](const auto &n, const auto &p) {
+                                const auto [n_min, n_max] = detail::tree_coll_node_range<NDim>(n.code, n.level);
+                                return n_max < p.first;
+                            });
+
+                            // Now determine the first node whose code range follows s_code_range.
+                            // NOTE: in upper_bound(), the comparator parameter types are flipped around
+                            // wrt lower_bound().
+                            // NOTE: start the search from l_begin, determined above, as we know
+                            // that l_end must be l_begin or an iterator following it.
+                            l_end = std::upper_bound(l_begin, c_end, s_code_range, [](const auto &p, const auto &n) {
+                                const auto [n_min, n_max] = detail::tree_coll_node_range<NDim>(n.code, n.level);
+                                return p.second < n_min;
+                            });
+
+                            if (l_begin != l_end) {
+                                // A non-empty leaf node range was found, break out
+                                // and add pidx to all the leaf nodes in the range.
+                                break;
+                            }
+
+                            // An empty leaf node range was found. Enlarge the search.
+                            // NOTE: the current al_copy level cannot be zero, because in that case we
+                            // would be at the root node and we would've found something already.
+                            assert(al_copy > 0u);
                         }
 
-                        // Determine the code range encompassed by s_code.
-                        const auto s_code_range = detail::tree_coll_node_range<NDim>(s_code, aabb_level);
-
-                        // In the set of leaf nodes, determine either the last node whose
-                        // code range precedes s_code_range, or the first one whose code
-                        // range has some overlap with s_code range.
-                        auto l_begin = std::lower_bound(c_begin, c_end, s_code_range, [](const auto &n, const auto &p) {
-                            const auto [n_min, n_max] = detail::tree_coll_node_range<NDim>(n.code, n.level);
-                            return n_max < p.first;
-                        });
-
-                        // Now determine the first node whose code range follows s_code_range.
-                        // NOTE: in upper_bound(), the comparator parameter types are flipped around
-                        // wrt lower_bound().
-                        // NOTE: start the search from l_begin, determined above, as we know
-                        // that l_end must be l_begin or an iterator following it.
-                        const auto l_end
-                            = std::upper_bound(l_begin, c_end, s_code_range, [](const auto &p, const auto &n) {
-                                  const auto [n_min, n_max] = detail::tree_coll_node_range<NDim>(n.code, n.level);
-                                  return p.second < n_min;
-                              });
+                        if (fits) {
+                            // The vertex-enclosing node fits wholly in the original leaf node.
+                            // Move to the next vertex.
+                            continue;
+                        }
 
                         // Iterate over the leaf node range, and add pidx as extra particle
                         // to each leaf node.

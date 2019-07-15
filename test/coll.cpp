@@ -57,27 +57,29 @@ TEST_CASE("compute_cgraph_2d")
     REQUIRE(t.compute_cgraph_o(aabb_sizes.data()).empty());
     REQUIRE(t.compute_cgraph_u(aabb_sizes.data()).empty());
 
-    // Fill with random data.
-    auto parts = get_uniform_particles<2>(s, bsize, rng);
-
-    const auto xc_o = parts.begin() + s;
-    const auto yc_o = parts.begin() + 2u * s;
-
+    // Test with various leaf node sizes.
     for (auto mln : {1, 4, 8, 16, 400}) {
-        t = quadtree<double>{x_coords = xc_o, y_coords = yc_o,  masses = parts.begin(),
-                             nparts = s,      box_size = bsize, max_leaf_n = mln};
-
-        const auto [xc_u, yc_u, m_u] = t.p_its_u();
-
         // Test with a variety of aabb sizes, starting from
         // very small until encompassing the whole domain.
-        for (long k = 16; k >= 0; --k) {
+        for (long k = 15; k >= -1; --k) {
+            // Fill with random data.
+            auto parts = get_uniform_particles<2>(s, bsize, rng);
+
+            const auto xc_o = parts.begin() + s;
+            const auto yc_o = parts.begin() + 2u * s;
+
+            t = quadtree<double>{x_coords = xc_o, y_coords = yc_o,  masses = parts.begin(),
+                                 nparts = s,      box_size = bsize, max_leaf_n = mln};
+
+            const auto [xc_u, yc_u, m_u] = t.p_its_u();
+
             // Collision graph that will be computed with the N**2 algorithm.
             std::vector<std::vector<decltype(t)::size_type>> cmp;
             cmp.resize(s);
 
             // All aabbs same (nonzero) size.
-            const auto aabb_size = 1. / static_cast<double>(1l << k);
+            // NOTE: for k == -1, pick an AABB size much larger than the domain.
+            const auto aabb_size = k >= 0 ? 1. / static_cast<double>(1l << k) : 10.;
             std::fill(aabb_sizes.begin(), aabb_sizes.end(), aabb_size);
 
             // Unordered testing.
@@ -284,28 +286,30 @@ TEST_CASE("compute_cgraph_3d")
     REQUIRE(t.compute_cgraph_o(aabb_sizes.data()).empty());
     REQUIRE(t.compute_cgraph_u(aabb_sizes.data()).empty());
 
-    // Fill with random data.
-    auto parts = get_uniform_particles<3>(s, bsize, rng);
-
-    const auto xc_o = parts.begin() + s;
-    const auto yc_o = parts.begin() + 2u * s;
-    const auto zc_o = parts.begin() + 3u * s;
-
+    // Test with various leaf node sizes.
     for (auto mln : {1, 4, 8, 16, 400}) {
-        t = octree<double>{x_coords = xc_o, y_coords = yc_o,  z_coords = zc_o, masses = parts.begin(),
-                           nparts = s,      box_size = bsize, max_leaf_n = mln};
-
-        const auto [xc_u, yc_u, zc_u, m_u] = t.p_its_u();
-
         // Test with a variety of aabb sizes, starting from
         // very small until encompassing the whole domain.
-        for (long k = 16; k >= 0; --k) {
+        for (long k = 15; k >= -1; --k) {
+            // Fill with random data.
+            auto parts = get_uniform_particles<3>(s, bsize, rng);
+
+            const auto xc_o = parts.begin() + s;
+            const auto yc_o = parts.begin() + 2u * s;
+            const auto zc_o = parts.begin() + 3u * s;
+
+            t = octree<double>{x_coords = xc_o, y_coords = yc_o,  z_coords = zc_o, masses = parts.begin(),
+                               nparts = s,      box_size = bsize, max_leaf_n = mln};
+
+            const auto [xc_u, yc_u, zc_u, m_u] = t.p_its_u();
+
             // Collision graph that will be computed with the N**2 algorithm.
             std::vector<std::vector<decltype(t)::size_type>> cmp;
             cmp.resize(s);
 
             // All aabbs same (nonzero) size.
-            const auto aabb_size = 1. / static_cast<double>(1l << k);
+            // NOTE: for k == -1, pick an AABB size much larger than the domain.
+            const auto aabb_size = k >= 0 ? 1. / static_cast<double>(1l << k) : 10.;
             std::fill(aabb_sizes.begin(), aabb_sizes.end(), aabb_size);
 
             // Unordered testing.
