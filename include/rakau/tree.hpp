@@ -374,6 +374,10 @@ struct morton_decoder<2, std::uint32_t> {
 // Discretize a coordinate in a square domain of size 1/inv_box_size.
 // If Clamp is true, then the coordinate will be clamped within
 // the domain.
+// NOTE: for the eventual vectorisation of this function, it looks
+// unlikely we can do it on AVX/AVX2 due to the lack of functions
+// manipulating/converting 64bit integers. AVX-512 looks much more
+// promising in this sense.
 template <std::size_t NDim, typename UInt, bool Clamp = false, typename F>
 inline UInt disc_single_coord(const F &x, const F &inv_box_size)
 {
@@ -385,6 +389,9 @@ inline UInt disc_single_coord(const F &x, const F &inv_box_size)
     // and box_size/2 becomes 1.
     auto tmp = fma_wrap(x, inv_box_size, F(1) / F(2));
     // Rescale by factor.
+    // NOTE: in theory we could avoid this extra multiplication
+    // by having the user pass in factor * inv_box_size, rather
+    // than just inv_box_size.
     tmp *= F(factor);
 
     // Check: don't end up with a nonfinite value.
