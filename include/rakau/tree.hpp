@@ -377,6 +377,8 @@ struct morton_decoder<2, std::uint32_t> {
 template <std::size_t NDim, typename UInt, bool Clamp = false, typename F>
 inline UInt disc_single_coord(const F &x, const F &inv_box_size)
 {
+    // NOTE: this factor is the total number of available discretised
+    // positions across a single dimension.
     constexpr UInt factor = UInt(1) << cbits_v<UInt, NDim>;
 
     // Translate and rescale the coordinate so that -box_size/2 becomes zero
@@ -3490,18 +3492,32 @@ public:
 private:
     auto coll_leaves_permutation() const;
     template <bool Ordered, typename It>
-    auto compute_cgraph_impl(It) const;
+    void compute_cgraph_impl(std::vector<tbb::concurrent_vector<size_type>> &out, It) const;
 
 public:
     template <typename It>
-    auto compute_cgraph_u(It it) const
+    std::vector<tbb::concurrent_vector<size_type>> compute_cgraph_u(It it) const
     {
-        return compute_cgraph_impl<false>(it);
+        std::vector<tbb::concurrent_vector<size_type>> retval;
+        compute_cgraph_impl<false>(retval, it);
+        return retval;
     }
     template <typename It>
-    auto compute_cgraph_o(It it) const
+    std::vector<tbb::concurrent_vector<size_type>> compute_cgraph_o(It it) const
     {
-        return compute_cgraph_impl<true>(it);
+        std::vector<tbb::concurrent_vector<size_type>> retval;
+        compute_cgraph_impl<true>(retval, it);
+        return retval;
+    }
+    template <typename It>
+    void compute_cgraph_u(std::vector<tbb::concurrent_vector<size_type>> &out, It it) const
+    {
+        compute_cgraph_impl<false>(out, it);
+    }
+    template <typename It>
+    void compute_cgraph_o(std::vector<tbb::concurrent_vector<size_type>> &out, It it) const
+    {
+        compute_cgraph_impl<true>(out, it);
     }
 
 private:

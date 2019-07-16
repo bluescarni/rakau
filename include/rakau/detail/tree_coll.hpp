@@ -209,7 +209,8 @@ inline auto tree<NDim, F, UInt, MAC>::coll_leaves_permutation() const
 
 template <std::size_t NDim, typename F, typename UInt, mac MAC>
 template <bool Ordered, typename It>
-inline auto tree<NDim, F, UInt, MAC>::compute_cgraph_impl(It it) const
+inline void tree<NDim, F, UInt, MAC>::compute_cgraph_impl(std::vector<tbb::concurrent_vector<size_type>> &cgraph,
+                                                          It it) const
 {
     simple_timer st("overall cgraph computation");
 
@@ -225,16 +226,28 @@ inline auto tree<NDim, F, UInt, MAC>::compute_cgraph_impl(It it) const
     // The vector of additional particles for each leaf node.
     std::vector<tbb::concurrent_vector<size_type>> v_add;
 
-    // The return value.
-    std::vector<tbb::concurrent_vector<size_type>> cgraph;
-
     // Prepare storage for cgraph in parallel
     // with the v_add computation.
     tbb::task_group tg;
 
     tg.run([this, &cgraph]() {
         simple_timer st("cgraph prepare");
+
+        // Check if the return value is empty.
+        const auto empty = cgraph.empty();
+
         cgraph.resize(boost::numeric_cast<decltype(cgraph.size())>(m_parts[0].size()));
+
+        if (!empty) {
+            // If the return value was not originally empty,
+            // we must make sure that all its vectors are cleared
+            // up before we write into them.
+            tbb::parallel_for(tbb::blocked_range(cgraph.begin(), cgraph.end()), [](const auto &r) {
+                for (auto &v : r) {
+                    v.clear();
+                }
+            });
+        }
     });
 
     tg.run([this, &clp, &v_add, it, &c_begin, &c_end]() {
@@ -586,8 +599,6 @@ inline auto tree<NDim, F, UInt, MAC>::compute_cgraph_impl(It it) const
         }
     });
 #endif
-
-    return cgraph;
 }
 
 } // namespace rakau

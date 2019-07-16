@@ -164,8 +164,8 @@ TEST_CASE("compute_cgraph_2d")
                 aabb_sizes_u[i] = aabb_sizes[t.perm()[i]];
             }
 
-            // Redo the testing.
-            cgraph_u = t.compute_cgraph_u(aabb_sizes_u.data());
+            // Redo the testing, this time with retvals passed in.
+            t.compute_cgraph_u(cgraph_u, aabb_sizes_u.data());
             for (auto i = 0u; i < s; ++i) {
                 for (auto j = i + 1u; j < s; ++j) {
                     if (aabb_overlap(xc_u[i], yc_u[i], aabb_sizes_u[i], xc_u[j], yc_u[j], aabb_sizes_u[j])) {
@@ -180,7 +180,7 @@ TEST_CASE("compute_cgraph_2d")
                 v.clear();
             }
 
-            cgraph_o = t.compute_cgraph_o(aabb_sizes.data());
+            t.compute_cgraph_o(cgraph_o, aabb_sizes.data());
             for (auto i = 0u; i < s; ++i) {
                 for (auto j = i + 1u; j < s; ++j) {
                     if (aabb_overlap(xc_o[i], yc_o[i], aabb_sizes[i], xc_o[j], yc_o[j], aabb_sizes[j])) {
@@ -237,12 +237,12 @@ TEST_CASE("compute_cgraph_2d")
             // All zero aabb sizes.
             std::fill(aabb_sizes.begin(), aabb_sizes.end(), 0.);
 
-            cgraph_u = t.compute_cgraph_u(aabb_sizes.data());
+            t.compute_cgraph_u(cgraph_u, aabb_sizes.data());
             for (const auto &c : cgraph_u) {
                 REQUIRE(c.empty());
             }
 
-            cgraph_o = t.compute_cgraph_o(aabb_sizes.data());
+            t.compute_cgraph_o(cgraph_o, aabb_sizes.data());
             for (const auto &c : cgraph_o) {
                 REQUIRE(c.empty());
             }
@@ -356,7 +356,7 @@ TEST_CASE("compute_cgraph_3d")
             }
 
             // Redo the testing.
-            cgraph_u = t.compute_cgraph_u(aabb_sizes_u.data());
+            t.compute_cgraph_u(cgraph_u, aabb_sizes_u.data());
             for (auto i = 0u; i < s; ++i) {
                 for (auto j = i + 1u; j < s; ++j) {
                     if (aabb_overlap(xc_u[i], yc_u[i], zc_u[i], aabb_sizes_u[i], xc_u[j], yc_u[j], zc_u[j],
@@ -372,7 +372,7 @@ TEST_CASE("compute_cgraph_3d")
                 v.clear();
             }
 
-            cgraph_o = t.compute_cgraph_o(aabb_sizes.data());
+            t.compute_cgraph_o(cgraph_o, aabb_sizes.data());
             for (auto i = 0u; i < s; ++i) {
                 for (auto j = i + 1u; j < s; ++j) {
                     if (aabb_overlap(xc_o[i], yc_o[i], zc_o[i], aabb_sizes[i], xc_o[j], yc_o[j], zc_o[j],
@@ -432,12 +432,12 @@ TEST_CASE("compute_cgraph_3d")
             // All zero aabb sizes.
             std::fill(aabb_sizes.begin(), aabb_sizes.end(), 0.);
 
-            cgraph_u = t.compute_cgraph_u(aabb_sizes.data());
+            t.compute_cgraph_u(cgraph_u, aabb_sizes.data());
             for (const auto &c : cgraph_u) {
                 REQUIRE(c.empty());
             }
 
-            cgraph_o = t.compute_cgraph_o(aabb_sizes.data());
+            t.compute_cgraph_o(cgraph_o, aabb_sizes.data());
             for (const auto &c : cgraph_o) {
                 REQUIRE(c.empty());
             }
