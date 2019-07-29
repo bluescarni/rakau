@@ -540,8 +540,8 @@ inline void tree<NDim, F, UInt, MAC>::compute_cgraph_impl(std::vector<tbb::concu
                     // Check for AABB overlap.
                     bool overlap = true;
                     for (std::size_t k = 0; k < NDim; ++k) {
-                        const auto min2 = m_parts[k][idx2] - aabb_size2 * (F(1) / F(2));
-                        const auto max2 = m_parts[k][idx2] + aabb_size2 * (F(1) / F(2));
+                        const auto min2 = detail::fma_wrap(aabb_size2, -F(1) / F(2), m_parts[k][idx2]);
+                        const auto max2 = detail::fma_wrap(aabb_size2, F(1) / F(2), m_parts[k][idx2]);
 
                         // NOTE: we regard the AABBs as closed ranges, that is,
                         // a single point in common in two segments is enough
