@@ -44,7 +44,7 @@ inline namespace detail
 // such that the node size is larger than the value s. If s >= box_size,
 // 0 will be returned.
 template <typename UInt, std::size_t NDim, typename F>
-inline UInt coll_size_to_level(F s, F box_size)
+inline UInt tree_coll_size_to_level(F s, F box_size)
 {
     assert(std::isfinite(s));
     // NOTE: we assume we never enter here
@@ -347,7 +347,7 @@ inline void tree<NDim, F, UInt, MAC>::compute_cgraph_impl(std::vector<tbb::concu
                     // overlap the enclosing node set.
 
                     // Convert the AABB size to a node level.
-                    const auto aabb_level = detail::coll_size_to_level<UInt, NDim>(aabb_size, m_box_size);
+                    const auto aabb_level = detail::tree_coll_size_to_level<UInt, NDim>(aabb_size, m_box_size);
 
                     // Iterate over the AABB vertices.
                     for (std::size_t i = 0; i < n_vertices; ++i) {
@@ -518,8 +518,8 @@ inline void tree<NDim, F, UInt, MAC>::compute_cgraph_impl(std::vector<tbb::concu
 
                 // Determine the min/max aabb coordinates for the particle idx1.
                 for (std::size_t k = 0; k < NDim; ++k) {
-                    min_aabb[k] = m_parts[k][idx1] - aabb_size1 * (F(1) / F(2));
-                    max_aabb[k] = m_parts[k][idx1] + aabb_size1 * (F(1) / F(2));
+                    min_aabb[k] = detail::fma_wrap(aabb_size1, -F(1) / F(2), m_parts[k][idx1]);
+                    max_aabb[k] = detail::fma_wrap(aabb_size1, F(1) / F(2), m_parts[k][idx1]);
                 }
 
                 for (auto j = i + 1u; j < tot_n; ++j) {
