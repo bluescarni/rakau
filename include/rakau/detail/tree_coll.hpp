@@ -29,7 +29,7 @@
 #include <tbb/blocked_range.h>
 #include <tbb/concurrent_vector.h>
 #include <tbb/parallel_for.h>
-#include <tbb/task_group.h>
+#include <tbb/parallel_invoke.h>
 
 #include <rakau/detail/simple_timer.hpp>
 #include <rakau/detail/tree_fwd.hpp>
@@ -228,229 +228,228 @@ inline void tree<NDim, F, UInt, MAC>::compute_cgraph_impl(std::vector<tbb::concu
 
     // Prepare storage for cgraph in parallel
     // with the v_add computation.
-    tbb::task_group tg;
+    tbb::parallel_invoke(
+        [this, &cgraph]() {
+            simple_timer st("cgraph prepare");
 
-    tg.run([this, &cgraph]() {
-        simple_timer st("cgraph prepare");
+            // Check if the return value is empty.
+            const auto was_empty = cgraph.empty();
 
-        // Check if the return value is empty.
-        const auto empty = cgraph.empty();
+            cgraph.resize(boost::numeric_cast<decltype(cgraph.size())>(m_parts[0].size()));
 
-        cgraph.resize(boost::numeric_cast<decltype(cgraph.size())>(m_parts[0].size()));
-
-        if (!empty) {
-            // If the return value was not originally empty,
-            // we must make sure that all its vectors are cleared
-            // up before we write into them.
-            tbb::parallel_for(tbb::blocked_range(cgraph.begin(), cgraph.end()), [](const auto &r) {
-                for (auto &v : r) {
-                    v.clear();
-                }
-            });
-        }
-    });
-
-    tg.run([this, &clp, &v_add, it, &c_begin, &c_end]() {
-        {
-            simple_timer st("leaves permutation");
-            clp = coll_leaves_permutation();
-        }
-
-        {
-            simple_timer st("v_add prepare");
-            v_add.resize(boost::numeric_cast<decltype(v_add.size())>(clp.size()));
-        }
-
-        simple_timer st("v_add computation");
-
-        // Create the iterators for accessing the leaf nodes.
-        // NOTE: make sure we don't overflow when indexing.
-        detail::it_diff_check<decltype(m_tree.begin())>(m_tree.size());
-        c_begin = boost::make_permutation_iterator(m_tree.begin(), clp.begin());
-        c_end = boost::make_permutation_iterator(m_tree.end(), clp.end());
-
-        // Pre-compute the inverse of the domain size.
-        const auto inv_box_size = F(1) / m_box_size;
-
-        // Determine the additional particles for each node.
-        tbb::parallel_for(tbb::blocked_range(c_begin, c_end), [this, &v_add, inv_box_size, it, c_begin,
-                                                               c_end](const auto &r) {
-            // Temporary vector for the particle position.
-            std::array<F, NDim> p_pos;
-
-            // Iteration over the leaf nodes.
-            for (const auto &lnode : r) {
-                // Fetch/cache some properties of the leaf node.
-                const auto lcode = lnode.code;
-                const auto llevel = lnode.level;
-
-                // Iterate over the particles of the leaf node.
-                const auto e = lnode.end;
-                for (auto pidx = lnode.begin; pidx != e; ++pidx) {
-                    // Load the particle's AABB size.
-                    // NOTE: if Ordered, we must transform the original
-                    // pidx, as 'it' points to a vector of aabb sizes sorted
-                    // in the original order.
-                    const auto aabb_size = Ordered ? *(it + m_perm[pidx]) : *(it + pidx);
-
-                    // Check it.
-                    if (rakau_unlikely(!std::isfinite(aabb_size) || aabb_size < F(0))) {
-                        throw std::invalid_argument("An invalid AABB size was detected while computing the collision "
-                                                    "graph: the AABB size must be finite and non-negative, but it is "
-                                                    + std::to_string(aabb_size) + " instead");
+            if (!was_empty) {
+                // If the return value was not originally empty,
+                // we must make sure that all its vectors are cleared
+                // up before we write into them.
+                tbb::parallel_for(tbb::blocked_range(cgraph.begin(), cgraph.end()), [](const auto &r) {
+                    for (auto &v : r) {
+                        v.clear();
                     }
+                });
+            }
+        },
+        [this, &clp, &v_add, it, &c_begin, &c_end]() {
+            {
+                simple_timer st("leaves permutation");
+                clp = coll_leaves_permutation();
+            }
 
-                    // Particles with a null AABB don't participate in collision
-                    // detection and cannot straddle into other nodes.
-                    if (aabb_size == F(0)) {
-                        continue;
-                    }
+            {
+                simple_timer st("v_add prepare");
+                v_add.resize(boost::numeric_cast<decltype(v_add.size())>(clp.size()));
+            }
 
-                    // Fill in the particle position.
-                    for (std::size_t j = 0; j < NDim; ++j) {
-                        p_pos[j] = m_parts[j][pidx];
-                    }
+            simple_timer st("v_add computation");
 
-                    // Compute the clamped codes of the AABB vertices.
-                    const auto aabb_codes = detail::tree_coll_get_aabb_codes<UInt>(p_pos, aabb_size, inv_box_size);
+            // Create the iterators for accessing the leaf nodes.
+            // NOTE: make sure we don't overflow when indexing.
+            detail::it_diff_check<decltype(m_tree.begin())>(m_tree.size());
+            c_begin = boost::make_permutation_iterator(m_tree.begin(), clp.begin());
+            c_end = boost::make_permutation_iterator(m_tree.end(), clp.end());
 
-                    // Fetch the number of vertices.
-                    constexpr auto n_vertices = std::tuple_size_v<std::remove_const_t<decltype(aabb_codes)>>;
+            // Pre-compute the inverse of the domain size.
+            const auto inv_box_size = F(1) / m_box_size;
 
-                    // Check if the particle straddles.
-                    // NOTE: the idea here is that the codes for all positions in the current node share
-                    // the same initial llevel*NDim digits, which we can determine from the particle code.
-                    const auto straddles = [llevel, &aabb_codes, pcode = m_codes[pidx]]() {
-                        const auto shift_amount = (cbits - llevel) * NDim;
-                        const auto common_prefix = pcode >> shift_amount;
+            // Determine the additional particles for each node.
+            tbb::parallel_for(tbb::blocked_range(c_begin, c_end), [this, &v_add, inv_box_size, it, c_begin,
+                                                                   c_end](const auto &r) {
+                // Temporary vector for the particle position.
+                std::array<F, NDim> p_pos;
 
-                        for (std::size_t i = 0; i < n_vertices; ++i) {
-                            if (aabb_codes[i] >> shift_amount != common_prefix) {
-                                return true;
-                            }
+                // Iteration over the leaf nodes.
+                for (const auto &lnode : r) {
+                    // Fetch/cache some properties of the leaf node.
+                    const auto lcode = lnode.code;
+                    const auto llevel = lnode.level;
+
+                    // Iterate over the particles of the leaf node.
+                    const auto e = lnode.end;
+                    for (auto pidx = lnode.begin; pidx != e; ++pidx) {
+                        // Load the particle's AABB size.
+                        // NOTE: if Ordered, we must transform the original
+                        // pidx, as 'it' points to a vector of aabb sizes sorted
+                        // in the original order.
+                        const auto aabb_size = Ordered ? *(it + m_perm[pidx]) : *(it + pidx);
+
+                        // Check it.
+                        if (rakau_unlikely(!std::isfinite(aabb_size) || aabb_size < F(0))) {
+                            throw std::invalid_argument(
+                                "An invalid AABB size was detected while computing the collision "
+                                "graph: the AABB size must be finite and non-negative, but it is "
+                                + std::to_string(aabb_size) + " instead");
                         }
 
-                        return false;
-                    }();
-
-                    if (!straddles) {
-                        // The particle does not straddle, move on.
-                        continue;
-                    }
-
-                    // The particle straddles. To know into which leaf nodes it straddles,
-                    // the first step is to construct a set of adjacent nodes which are guaranteed
-                    // to contain the AABB of pidx. We can do that by establishing for each AABB
-                    // vertex the smallest node of size greater than aabb_size that contains
-                    // the vertex. The set of equal-sized nodes thus determined will completely
-                    // enclose the AABB of pidx. We will then figure out which leaf nodes
-                    // overlap the enclosing node set.
-
-                    // Convert the AABB size to a node level.
-                    const auto aabb_level = detail::tree_coll_size_to_level<UInt, NDim>(aabb_size, m_box_size);
-
-                    // Iterate over the AABB vertices.
-                    for (std::size_t i = 0; i < n_vertices; ++i) {
-                        // NOTE: within this loop, we will be determining
-                        // a node N at level aabb_level which contains a straddling
-                        // vertex of pidx's AABB. We will then establish a range of leaf nodes
-                        // [l_begin, l_end) that have an overlap with N.
-                        //
-                        // It might be that [l_begin, l_end) turns out to
-                        // be an empty range because the particle straddles into
-                        // an 'empty' area which is not associated to any leaf node (because
-                        // it does not contain the centre of any particle). In such a situation,
-                        // we will end up *not* detecting AABB collisions occurring
-                        // in the empty area. In order to avoid this, if [l_begin, l_end)
-                        // is an empty range we will lower the aabb_level (that is, move
-                        // to the parent node) and repeat the search, until it yields
-                        // a non-empty [l_begin, l_end) range. That is, we are "zooming
-                        // out" until the empty area becomes part of some node N_bigger, which
-                        // is guaranteed to eventually happen, and we will add pidx to
-                        // all leaf nodes overlapping N_bigger.
-
-                        // Init the range iterators.
-                        decltype(c_begin) l_begin, l_end;
-
-                        // In the loop below we may end up determining a node
-                        // which fits wholly in the original leaf node. In such a case,
-                        // we will want to skip the rest of the loop and move to the
-                        // next vertex, because there's no need to add pidx as an
-                        // additional particle to its original node.
-                        bool fits = false;
-
-                        for (auto al_copy(aabb_level);; --al_copy) {
-                            // Compute the code of the node at level al_copy
-                            // that encloses the vertex.
-                            const auto s_code
-                                = (aabb_codes[i] >> ((cbits - al_copy) * NDim)) + (UInt(1) << (al_copy * NDim));
-
-                            if (al_copy >= llevel && s_code >> ((al_copy - llevel) * NDim) == lcode) {
-                                // The s_code node fits within the current leaf node,
-                                // no need for further checks (i.e., s_code does not overlap
-                                // with any leaf node other than the original one).
-                                fits = true;
-                                break;
-                            }
-
-                            // Determine the code range encompassed by s_code.
-                            const auto s_code_range = detail::tree_coll_node_range<NDim>(s_code, al_copy);
-
-                            // In the set of leaf nodes, determine either the last node whose
-                            // code range precedes s_code_range, or the first one whose code
-                            // range has some overlap with s_code range.
-                            l_begin = std::lower_bound(c_begin, c_end, s_code_range, [](const auto &n, const auto &p) {
-                                const auto n_max = detail::tree_coll_node_range<NDim>(n.code, n.level).second;
-                                return n_max < p.first;
-                            });
-
-                            // Now determine the first node whose code range follows s_code_range.
-                            // NOTE: in upper_bound(), the comparator parameter types are flipped around
-                            // wrt lower_bound().
-                            // NOTE: start the search from l_begin, determined above, as we know
-                            // that l_end must be l_begin or an iterator following it.
-                            l_end = std::upper_bound(l_begin, c_end, s_code_range, [](const auto &p, const auto &n) {
-                                const auto n_min = detail::tree_coll_node_range<NDim>(n.code, n.level).first;
-                                return p.second < n_min;
-                            });
-
-                            if (l_begin != l_end) {
-                                // A non-empty leaf node range was found, break out
-                                // and add pidx to all the leaf nodes in the range.
-                                break;
-                            }
-
-                            // An empty leaf node range was found. Enlarge the search.
-                            // NOTE: the current al_copy level cannot be zero, because in that case we
-                            // would be at the root node and we would've found something already.
-                            assert(al_copy > 0u);
-                        }
-
-                        if (fits) {
-                            // The vertex-enclosing node fits wholly in the original leaf node.
-                            // Move to the next vertex.
+                        // Particles with a null AABB don't participate in collision
+                        // detection and cannot straddle into other nodes.
+                        if (aabb_size == F(0)) {
                             continue;
                         }
 
-                        // Iterate over the leaf node range, and add pidx as extra particle
-                        // to each leaf node.
-                        for (; l_begin != l_end; ++l_begin) {
-                            // NOTE: don't add pidx as an extra particle
-                            // to its original node.
-                            if (l_begin->code != lcode) {
-                                // NOTE: we checked earlier that c_begin's
-                                // diff type can represent m_tree.size() and,
-                                // by extension, v_add.size().
-                                v_add[static_cast<decltype(v_add.size())>(l_begin - c_begin)].push_back(pidx);
+                        // Fill in the particle position.
+                        for (std::size_t j = 0; j < NDim; ++j) {
+                            p_pos[j] = m_parts[j][pidx];
+                        }
+
+                        // Compute the clamped codes of the AABB vertices.
+                        const auto aabb_codes = detail::tree_coll_get_aabb_codes<UInt>(p_pos, aabb_size, inv_box_size);
+
+                        // Fetch the number of vertices.
+                        constexpr auto n_vertices = std::tuple_size_v<std::remove_const_t<decltype(aabb_codes)>>;
+
+                        // Check if the particle straddles.
+                        // NOTE: the idea here is that the codes for all positions in the current node share
+                        // the same initial llevel*NDim digits, which we can determine from the particle code.
+                        const auto straddles = [llevel, &aabb_codes, pcode = m_codes[pidx]]() {
+                            const auto shift_amount = (cbits - llevel) * NDim;
+                            const auto common_prefix = pcode >> shift_amount;
+
+                            for (std::size_t i = 0; i < n_vertices; ++i) {
+                                if (aabb_codes[i] >> shift_amount != common_prefix) {
+                                    return true;
+                                }
+                            }
+
+                            return false;
+                        }();
+
+                        if (!straddles) {
+                            // The particle does not straddle, move on.
+                            continue;
+                        }
+
+                        // The particle straddles. To know into which leaf nodes it straddles,
+                        // the first step is to construct a set of adjacent nodes which are guaranteed
+                        // to contain the AABB of pidx. We can do that by establishing for each AABB
+                        // vertex the smallest node of size greater than aabb_size that contains
+                        // the vertex. The set of equal-sized nodes thus determined will completely
+                        // enclose the AABB of pidx. We will then figure out which leaf nodes
+                        // overlap the enclosing node set.
+
+                        // Convert the AABB size to a node level.
+                        const auto aabb_level = detail::tree_coll_size_to_level<UInt, NDim>(aabb_size, m_box_size);
+
+                        // Iterate over the AABB vertices.
+                        for (std::size_t i = 0; i < n_vertices; ++i) {
+                            // NOTE: within this loop, we will be determining
+                            // a node N at level aabb_level which contains a straddling
+                            // vertex of pidx's AABB. We will then establish a range of leaf nodes
+                            // [l_begin, l_end) that have an overlap with N.
+                            //
+                            // It might be that [l_begin, l_end) turns out to
+                            // be an empty range because the particle straddles into
+                            // an 'empty' area which is not associated to any leaf node (because
+                            // it does not contain the centre of any particle). In such a situation,
+                            // we will end up *not* detecting AABB collisions occurring
+                            // in the empty area. In order to avoid this, if [l_begin, l_end)
+                            // is an empty range we will lower the aabb_level (that is, move
+                            // to the parent node) and repeat the search, until it yields
+                            // a non-empty [l_begin, l_end) range. That is, we are "zooming
+                            // out" until the empty area becomes part of some node N_bigger, which
+                            // is guaranteed to eventually happen, and we will add pidx to
+                            // all leaf nodes overlapping N_bigger.
+
+                            // Init the range iterators.
+                            decltype(c_begin) l_begin, l_end;
+
+                            // In the loop below we may end up determining a node
+                            // which fits wholly in the original leaf node. In such a case,
+                            // we will want to skip the rest of the loop and move to the
+                            // next vertex, because there's no need to add pidx as an
+                            // additional particle to its original node.
+                            bool fits = false;
+
+                            for (auto al_copy(aabb_level);; --al_copy) {
+                                // Compute the code of the node at level al_copy
+                                // that encloses the vertex.
+                                const auto s_code
+                                    = (aabb_codes[i] >> ((cbits - al_copy) * NDim)) + (UInt(1) << (al_copy * NDim));
+
+                                if (al_copy >= llevel && s_code >> ((al_copy - llevel) * NDim) == lcode) {
+                                    // The s_code node fits within the current leaf node,
+                                    // no need for further checks (i.e., s_code does not overlap
+                                    // with any leaf node other than the original one).
+                                    fits = true;
+                                    break;
+                                }
+
+                                // Determine the code range encompassed by s_code.
+                                const auto s_code_range = detail::tree_coll_node_range<NDim>(s_code, al_copy);
+
+                                // In the set of leaf nodes, determine either the last node whose
+                                // code range precedes s_code_range, or the first one whose code
+                                // range has some overlap with s_code range.
+                                l_begin
+                                    = std::lower_bound(c_begin, c_end, s_code_range, [](const auto &n, const auto &p) {
+                                          const auto n_max = detail::tree_coll_node_range<NDim>(n.code, n.level).second;
+                                          return n_max < p.first;
+                                      });
+
+                                // Now determine the first node whose code range follows s_code_range.
+                                // NOTE: in upper_bound(), the comparator parameter types are flipped around
+                                // wrt lower_bound().
+                                // NOTE: start the search from l_begin, determined above, as we know
+                                // that l_end must be l_begin or an iterator following it.
+                                l_end
+                                    = std::upper_bound(l_begin, c_end, s_code_range, [](const auto &p, const auto &n) {
+                                          const auto n_min = detail::tree_coll_node_range<NDim>(n.code, n.level).first;
+                                          return p.second < n_min;
+                                      });
+
+                                if (l_begin != l_end) {
+                                    // A non-empty leaf node range was found, break out
+                                    // and add pidx to all the leaf nodes in the range.
+                                    break;
+                                }
+
+                                // An empty leaf node range was found. Enlarge the search.
+                                // NOTE: the current al_copy level cannot be zero, because in that case we
+                                // would be at the root node and we would've found something already.
+                                assert(al_copy > 0u);
+                            }
+
+                            if (fits) {
+                                // The vertex-enclosing node fits wholly in the original leaf node.
+                                // Move to the next vertex.
+                                continue;
+                            }
+
+                            // Iterate over the leaf node range, and add pidx as extra particle
+                            // to each leaf node.
+                            for (; l_begin != l_end; ++l_begin) {
+                                // NOTE: don't add pidx as an extra particle
+                                // to its original node.
+                                if (l_begin->code != lcode) {
+                                    // NOTE: we checked earlier that c_begin's
+                                    // diff type can represent m_tree.size() and,
+                                    // by extension, v_add.size().
+                                    v_add[static_cast<decltype(v_add.size())>(l_begin - c_begin)].push_back(pidx);
+                                }
                             }
                         }
                     }
                 }
-            }
+            });
         });
-    });
-
-    tg.wait();
 
 #if !defined(NDEBUG)
     // Verify v_add.
@@ -468,9 +467,9 @@ inline void tree<NDim, F, UInt, MAC>::compute_cgraph_impl(std::vector<tbb::concu
 
     // Build the collision graph.
     tbb::parallel_for(tbb::blocked_range(c_begin, c_end), [this, &v_add, &cgraph, c_begin, it](const auto &r) {
-        // A thread local vector to store all the particle indices
+        // A local vector to store all the particle indices
         // of a node, including the extra particles.
-        static thread_local std::vector<size_type> node_indices;
+        std::vector<size_type> node_indices;
 
         // Vectors to hold the min/max aabb coordinates
         // for a particle.
