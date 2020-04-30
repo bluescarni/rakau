@@ -14,9 +14,6 @@
 #include <atomic>
 #include <bitset>
 #include <cassert>
-#if defined(RAKAU_WITH_TIMER)
-#include <chrono>
-#endif
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -35,6 +32,10 @@
 #include <type_traits>
 #include <utility>
 #include <vector>
+
+#if defined(RAKAU_WITH_TIMER)
+#include <chrono>
+#endif
 
 #include <boost/iterator/permutation_iterator.hpp>
 #include <boost/iterator/transform_iterator.hpp>
@@ -371,15 +372,26 @@ struct morton_decoder<2, std::uint32_t> {
 };
 
 // Discretize a coordinate in a square domain of size 1/inv_box_size.
-template <std::size_t NDim, typename UInt, typename F>
+// If Clamp is true, then the coordinate will be clamped within
+// the domain.
+// NOTE: for the eventual vectorisation of this function, it looks
+// unlikely we can do it on AVX/AVX2 due to the lack of functions
+// manipulating/converting 64bit integers. AVX-512 looks much more
+// promising in this sense.
+template <std::size_t NDim, typename UInt, bool Clamp = false, typename F>
 inline UInt disc_single_coord(const F &x, const F &inv_box_size)
 {
+    // NOTE: this factor is the total number of available discretised
+    // positions across a single dimension.
     constexpr UInt factor = UInt(1) << cbits_v<UInt, NDim>;
 
     // Translate and rescale the coordinate so that -box_size/2 becomes zero
     // and box_size/2 becomes 1.
     auto tmp = fma_wrap(x, inv_box_size, F(1) / F(2));
     // Rescale by factor.
+    // NOTE: in theory we could avoid this extra multiplication
+    // by having the user pass in factor * inv_box_size, rather
+    // than just inv_box_size.
     tmp *= F(factor);
 
     // Check: don't end up with a nonfinite value.
@@ -388,12 +400,18 @@ inline UInt disc_single_coord(const F &x, const F &inv_box_size)
                                     + " in a box of size " + std::to_string(F(1) / inv_box_size)
                                     + ", the non-finite value " + std::to_string(tmp) + " was generated");
     }
-    // Check: don't end up outside the [0, factor) range.
-    if (rakau_unlikely(tmp < F(0) || tmp >= F(factor))) {
-        throw std::invalid_argument("The discretisation of the input coordinate " + std::to_string(x)
-                                    + " in a box of size " + std::to_string(F(1) / inv_box_size)
-                                    + " produced the floating-point value " + std::to_string(tmp)
-                                    + ", which is outside the allowed bounds");
+
+    if constexpr (Clamp) {
+        // If requested, clamp the coordinate to [0, factor).
+        tmp = std::clamp(tmp, F(0), std::nextafter(F(factor), F(-1)));
+    } else {
+        // Check: don't end up outside the [0, factor) range.
+        if (rakau_unlikely(tmp < F(0) || tmp >= F(factor))) {
+            throw std::invalid_argument("The discretisation of the input coordinate " + std::to_string(x)
+                                        + " in a box of size " + std::to_string(F(1) / inv_box_size)
+                                        + " produced the floating-point value " + std::to_string(tmp)
+                                        + ", which is outside the allowed bounds");
+        }
     }
 
     // Cast to UInt.
@@ -575,6 +593,7 @@ inline constexpr unsigned default_ncrit =
     128
 #endif
     ;
+
 } // namespace detail
 
 namespace kwargs
@@ -621,9 +640,13 @@ using f_vector = std::vector<F, di_aligned_allocator<F, XSIMD_DEFAULT_ALIGNMENT>
 //   can try to ensure that the TBB threads are scheduled with the same affinity as the affinity used to write initially
 //   into the particle data vectors. TBB has an affinity partitioner, but it's not clear to me if we can rely on that
 //   for efficient NUMA access. It's probably better to run some tests before embarking in this.
-// - we should probably also think about replacing the morton encoder with some generic solution. It does not
-//   need to be super high performance, as morton encoding is hardly a bottleneck here. It's more important for it
-//   to be generic (i.e., work on a general number of dimensions), correct and compact.
+// - we should think about replacing eventually the current morton encoder. We could try to move either
+//   to a fully generic solution (although it's not clear what the practical benefits would be) or to a
+//   higher-performance one focused on 2d/3d cases - particularly, towards vectorization:
+//   https://lemire.me/blog/2018/01/09/how-fast-can-you-bit-interleave-32-bit-integers-simd-edition/
+//   Currently morton encoding is not really a bottleneck, however there might be some performance gains
+//   when vectorizing, e.g., in the collision code where we end up encoding all the AABB vertices
+//   of each particle.
 // - double precision benchmarking/tuning.
 // - tuning for the potential computation (possibly not much improvement to be had there, but it should be investigated
 //   a bit at least).
@@ -633,10 +656,13 @@ using f_vector = std::vector<F, di_aligned_allocator<F, XSIMD_DEFAULT_ALIGNMENT>
 //   will fail often). It's probably best to start experimenting with such size as a free parameter, check the
 //   performance with various values and then try to understand if there's any heuristic we can deduce from that.
 // - quadrupole moments.
-// - radix sort.
+// - radix sort, or perhaps some type of sort which takes better advantage of almost-sorted data.
 // - would be interesting to see if we can do the permutations in-place efficiently. If that worked, it would probably
 //   help simplifying things on the GPU side. See for instance:
 //   https://stackoverflow.com/questions/7365814/in-place-array-reordering
+// - some vectorisation in the AABB overlap checks should be possible, especially when we are doing
+//   overlap checks on the original particles in a leaf node (whose coordinates we can easily load in
+//   SIMD batches).
 template <std::size_t NDim, typename F, typename UInt, mac MAC>
 class tree
 {
@@ -3471,6 +3497,37 @@ public:
     }
 
 private:
+    auto coll_leaves_permutation() const;
+    template <bool Ordered, typename It>
+    void compute_cgraph_impl(std::vector<tbb::concurrent_vector<size_type>> &out, It) const;
+
+public:
+    template <typename It>
+    std::vector<tbb::concurrent_vector<size_type>> compute_cgraph_u(It it) const
+    {
+        std::vector<tbb::concurrent_vector<size_type>> retval;
+        compute_cgraph_impl<false>(retval, it);
+        return retval;
+    }
+    template <typename It>
+    std::vector<tbb::concurrent_vector<size_type>> compute_cgraph_o(It it) const
+    {
+        std::vector<tbb::concurrent_vector<size_type>> retval;
+        compute_cgraph_impl<true>(retval, it);
+        return retval;
+    }
+    template <typename It>
+    void compute_cgraph_u(std::vector<tbb::concurrent_vector<size_type>> &out, It it) const
+    {
+        compute_cgraph_impl<false>(out, it);
+    }
+    template <typename It>
+    void compute_cgraph_o(std::vector<tbb::concurrent_vector<size_type>> &out, It it) const
+    {
+        compute_cgraph_impl<true>(out, it);
+    }
+
+private:
     template <bool Ordered, unsigned Q>
     auto exact_acc_pot_impl(size_type orig_idx, F G, F eps) const
     {
@@ -3834,5 +3891,7 @@ template <typename F, mac MAC = mac::bh>
 using octree = tree<3, F, std::size_t, MAC>;
 
 } // namespace rakau
+
+#include <rakau/detail/tree_coll.hpp>
 
 #endif

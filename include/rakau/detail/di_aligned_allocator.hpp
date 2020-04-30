@@ -11,6 +11,7 @@
 
 #include <cstddef>
 #include <cstdlib>
+#include <limits>
 #include <new>
 #include <type_traits>
 #include <utility>
@@ -47,11 +48,20 @@ struct di_aligned_allocator {
     // https://en.cppreference.com/w/cpp/memory/allocator
     using is_always_equal = std::true_type;
     using propagate_on_container_move_assignment = std::true_type;
+    // Max number of allocatable objects.
+    size_type max_size() const
+    {
+        // For allocating N value_types, we might need up to
+        // N*sizeof(value_type) + Alignment - 1 bytes. This number
+        // must be representable by size_type.
+        // NOTE: drop the -1 from the computation to simplify.
+        return (std::numeric_limits<size_type>::max() - Alignment) / sizeof(value_type);
+    }
     // Allocation.
     T *allocate(size_type n) const
     {
         // Total size in bytes. This is prevented from being too large
-        // by the default implementation of max_size().
+        // by max_size().
         const auto size = n * sizeof(T);
         void *retval;
         if (Alignment == 0u) {
@@ -64,6 +74,8 @@ struct di_aligned_allocator {
             // we will set retval to nullptr to signal that the allocation failed
             // (so that we can handle the allocation failure in the same codepath
             // as aligned_alloc()).
+            // NOTE: unlike aligned_alloc(), posix_memalign() does not have any
+            // constraint on the allocation size.
             if (::posix_memalign(&retval, Alignment, size)) {
                 retval = nullptr;
             }
@@ -75,7 +87,13 @@ struct di_aligned_allocator {
             // NOTE: some early versions of GCC put aligned_alloc in the root namespace rather
             // than std, so let's try to workaround.
             using namespace std;
-            retval = aligned_alloc(Alignment, size);
+
+            const auto rem = size % Alignment;
+            if (rem) {
+                retval = aligned_alloc(Alignment, size + (Alignment - rem));
+            } else {
+                retval = aligned_alloc(Alignment, size);
+            }
 #endif
         }
         if (!retval) {

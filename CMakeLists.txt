@@ -1,18 +1,20 @@
 cmake_minimum_required(VERSION 3.3.0)
 
+# Set default build type to "Release".
+# NOTE: this should be done before the project command since the latter can set
+# CMAKE_BUILD_TYPE itself (it does so for nmake).
+if(NOT CMAKE_BUILD_TYPE)
+	set(CMAKE_BUILD_TYPE Release CACHE STRING
+		"Choose the type of build, options are: None Debug Release RelWithDebInfo MinSizeRel."
+	FORCE)
+endif()
+
 project(rakau VERSION 0.1 LANGUAGES CXX C)
 
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake" "${CMAKE_CURRENT_SOURCE_DIR}/cmake/yacma")
 
 message(STATUS "System name: ${CMAKE_SYSTEM_NAME}")
 message(STATUS "rakau version: ${rakau_VERSION}")
-
-# Set default build type to "Release".
-if(NOT CMAKE_BUILD_TYPE)
-	set(CMAKE_BUILD_TYPE Release CACHE STRING
-		"Choose the type of build, options are: None Debug Release RelWithDebInfo MinSizeRel."
-	FORCE)
-endif()
 
 # The build options.
 option(RAKAU_BUILD_TESTS "Build unit tests." OFF)
@@ -104,6 +106,28 @@ find_package(TBB REQUIRED)
 # Threading setup.
 include(RakauFindThreads)
 
+# NOTE: on Unix systems, the correct library installation path
+# could be something other than just "lib", such as "lib64",
+# "lib32", etc., depending on platform/configuration. Apparently,
+# CMake provides this information via the GNUInstallDirs module.
+# Let's enable this for now on all Unixes except OSX.
+# NOTE: potentially, this could be applicable to Cygwin as well.
+#
+# https://cmake.org/cmake/help/v3.15/module/GNUInstallDirs.html
+# https://cmake.org/pipermail/cmake/2013-July/055375.html
+if(UNIX AND NOT APPLE)
+    include(GNUInstallDirs)
+    set(_RAKAU_INSTALL_LIBDIR_DEFAULT "${CMAKE_INSTALL_LIBDIR}")
+else()
+    set(_RAKAU_INSTALL_LIBDIR_DEFAULT "lib")
+endif()
+if(NOT RAKAU_INSTALL_LIBDIR)
+    set(RAKAU_INSTALL_LIBDIR "${_RAKAU_INSTALL_LIBDIR_DEFAULT}" CACHE STRING
+        "Library installation directory." FORCE)
+endif()
+mark_as_advanced(RAKAU_INSTALL_LIBDIR)
+message(STATUS "Library installation directory: ${RAKAU_INSTALL_LIBDIR}")
+
 # Initial setup of the rakau library.
 if(RAKAU_WITH_ROCM)
   add_library(rakau SHARED "${CMAKE_CURRENT_SOURCE_DIR}/src/rakau_rocm.cpp")
@@ -185,20 +209,20 @@ configure_file("${CMAKE_CURRENT_SOURCE_DIR}/config.hpp.in" "${CMAKE_CURRENT_BINA
 set(_RAKAU_CONFIG_OPTIONAL_DEPS)
 configure_file("${CMAKE_CURRENT_SOURCE_DIR}/rakau-config.cmake.in" "${CMAKE_CURRENT_BINARY_DIR}/rakau-config.cmake" @ONLY)
 if(RAKAU_WITH_ROCM OR RAKAU_WITH_CUDA)
-  install(TARGETS rakau EXPORT rakau_export LIBRARY DESTINATION "lib")
+  install(TARGETS rakau EXPORT rakau_export LIBRARY DESTINATION "${RAKAU_INSTALL_LIBDIR}")
 else()
   install(TARGETS rakau EXPORT rakau_export)
 endif()
-install(FILES "${CMAKE_CURRENT_BINARY_DIR}/rakau-config.cmake" DESTINATION "lib/cmake/rakau")
-install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RakauFindBoost.cmake" DESTINATION "lib/cmake/rakau")
-install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/cmake/FindTBB.cmake" DESTINATION "lib/cmake/rakau")
-install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RakauFindThreads.cmake" DESTINATION "lib/cmake/rakau")
-install(EXPORT rakau_export NAMESPACE rakau:: DESTINATION lib/cmake/rakau)
+install(FILES "${CMAKE_CURRENT_BINARY_DIR}/rakau-config.cmake" DESTINATION "${RAKAU_INSTALL_LIBDIR}/cmake/rakau")
+install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RakauFindBoost.cmake" DESTINATION "${RAKAU_INSTALL_LIBDIR}/cmake/rakau")
+install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/cmake/FindTBB.cmake" DESTINATION "${RAKAU_INSTALL_LIBDIR}/cmake/rakau")
+install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RakauFindThreads.cmake" DESTINATION "${RAKAU_INSTALL_LIBDIR}/cmake/rakau")
+install(EXPORT rakau_export NAMESPACE rakau:: DESTINATION ${RAKAU_INSTALL_LIBDIR}/cmake/rakau)
 # Take care of versioning.
 include(CMakePackageConfigHelpers)
 write_basic_package_version_file("${CMAKE_CURRENT_BINARY_DIR}/rakau-config-version.cmake" VERSION ${rakau_VERSION}
 	COMPATIBILITY SameMajorVersion)
-install(FILES "${CMAKE_CURRENT_BINARY_DIR}/rakau-config-version.cmake" DESTINATION "lib/cmake/rakau")
+install(FILES "${CMAKE_CURRENT_BINARY_DIR}/rakau-config-version.cmake" DESTINATION "${RAKAU_INSTALL_LIBDIR}/cmake/rakau")
 unset(_RAKAU_CONFIG_OPTIONAL_DEPS)
 
 # Installation of the header files.
